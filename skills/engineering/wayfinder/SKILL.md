@@ -62,7 +62,7 @@ Each ticket is a **child issue** of the map; the tracker's issue id is its ident
 <the decision or investigation this ticket resolves>
 ```
 
-Each ticket carries a `wayfinder:<type>` label — one of `research`, `prototype`, `grilling`, `task` (see [Ticket Types](#ticket-types)).
+Each ticket carries a `wayfinder:<type>` label — one of `prototype`, `grilling`, `task` (see [Ticket Types](#ticket-types)). Research is deliberately _not_ a ticket type: it's AFK fuel a session runs inline, never a stop on the route (see [Research runs inline, not as a ticket](#research-runs-inline-not-as-a-ticket)).
 
 A session **claims** a ticket by assigning it to the dev driving the map, **first**, before any work, so concurrent sessions skip it. That assignee _is_ the claim: an open, unassigned ticket is unclaimed.
 
@@ -72,12 +72,23 @@ The answer isn't part of the body — it's recorded on resolution (see [Work thr
 
 ## Ticket Types
 
-Every ticket is either **HITL** — human in the loop, worked *with* a human who speaks for themselves — or **AFK**, driven by the agent alone. A HITL ticket only resolves through that live exchange; the agent never stands in for the human's side of it (a grilling agent that answers its own questions has broken this).
+A ticket exists because someone has to sit with it — so every ticket is either **HITL** (human in the loop, worked *with* a human who speaks for themselves) or a **task** the agent must drive by hand. A HITL ticket only resolves through that live exchange; the agent never stands in for the human's side of it (a grilling agent that answers its own questions has broken this).
 
-- **Research** (AFK): Reading documentation, third-party APIs, or local resources like knowledge bases. Creates a markdown summary as a linked asset. Use when knowledge outside the current working directory is required.
 - **Prototype** (HITL): Raise the fidelity of the discussion by making a cheap, rough, concrete artifact to react to — an outline, a rough take, a stub, or UI/logic code via the /prototype skill. Links the prototype as an asset. Use when "how should it look" or "how should it behave" is the key question.
 - **Grilling** (HITL): Conversation via the /grilling and /domain-modeling skills, one question at a time. The default case.
 - **Task** (HITL or AFK): Manual work that must happen before a *decision* can be made — nothing to decide, prototype, or research, but the discussion is blocked until it's done. Signing up for a service so its API can be judged, provisioning access, moving data so its shape can be seen. This is the one type that *does* rather than decides — and it earns its place by unblocking a decision, not by delivering the destination. The agent drives it alone where it can (AFK); otherwise it hands the human a precise checklist (HITL). Resolved when the work is done; the answer records what was done and any resulting facts (credentials location, new URLs, row counts) later tickets depend on.
+
+## Research runs inline, not as a ticket
+
+Research — reading docs, third-party APIs, source, or local knowledge bases to gather facts — is **fully AFK**: no human gates it, and it produces a *fact*, not a decision. That combination is exactly why it must **not** be its own ticket. A ticket earns its place as a session boundary: a self-contained unit some *later* session claims and works. Research needs no such boundary — any session, charting or resolving, can spin up a research **subagent** (`/research`) the moment it hits a knowledge gap, keep working while it reads, and fold the findings straight into the decision it's making. Parking research as a ticket only forces a second session to open it, do the AFK read, and close it — a session boundary bought for nothing.
+
+So there is no research ticket and no research assignee. When a decision needs external knowledge:
+
+1. **Launch a research subagent inline** via `/research`, scoped to the specific question. Charting can do this to sharpen the destination or the frontier; resolving can do it to answer the ticket in hand.
+2. **Capture the findings as a primary source**, the way `/prototype` captures a prototype: commit the research Markdown to a **throwaway branch** out of main (`research/<name>`), so main stays clean but the reading stays findable.
+3. **Leave a context pointer** to that branch — on the ticket whose decision the research informs, or, if it informs the whole effort rather than one ticket, in the map's **Notes**. The pointer is a link, never a paste; the map stays an index.
+
+A blocked ticket that used to wait on a "research ticket" now simply carries, in its own body, the note that resolving it starts with a research subagent — the read happens inside that ticket's session, not as a prerequisite ticket before it.
 
 ## Fog of war
 
@@ -109,7 +120,7 @@ Two modes. Either way, **never resolve more than one ticket per session.**
 User invokes with a loose idea.
 
 1. **Name the destination.** Run a `/grilling` and `/domain-modeling` session to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so it's settled first.
-2. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surfacing the open decisions and the first steps takeable now. **If this surfaces no fog** — the way to the destination is already clear, the whole journey small enough for one session — you don't need a map. Stop and ask the user how they'd like to proceed.
+2. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surfacing the open decisions and the first steps takeable now. Where a gap is a knowledge gap, resolve it with an inline `/research` subagent rather than charting a ticket for it (see [Research runs inline, not as a ticket](#research-runs-inline-not-as-a-ticket)). **If this surfaces no fog** — the way to the destination is already clear, the whole journey small enough for one session — you don't need a map. Stop and ask the user how they'd like to proceed.
 3. **Create the map** (label `wayfinder:map`): Destination and Notes filled in, Decisions-so-far empty, the fog sketched into **Not yet specified**.
 4. **Create the tickets you can specify now** as child issues of the map — then wire blocking edges in a **second pass** (issues need ids before they can reference each other). Wiring sorts them into the frontier and the blocked; everything you can't yet specify stays in the fog — the **Not yet specified** section.
 5. Stop — charting the map is one session's work; do not also resolve tickets.
@@ -120,7 +131,7 @@ User invokes with a map (URL or number). A ticket is **optional** — without on
 
 1. Load the **map** — the low-res view, not every ticket body.
 2. Choose the ticket. If the user named one, use it. Otherwise take the first frontier ticket in order. **Claim it**: assign it to yourself before any work.
-3. Resolve it — **zoom as needed**: fetch the full body of any related or closed ticket on demand; invoke the skills the `## Notes` block names. If in doubt, use `/grilling` and `/domain-modeling`.
+3. Resolve it — **zoom as needed**: fetch the full body of any related or closed ticket on demand; invoke the skills the `## Notes` block names. If the ticket needs external knowledge, spin up a `/research` subagent inline and fold its findings in (see [Research runs inline, not as a ticket](#research-runs-inline-not-as-a-ticket)) — don't hand the reading off to a separate session. If in doubt, use `/grilling` and `/domain-modeling`.
 4. Record the resolution: post the answer as a **resolution comment**, **close** the issue, and **append a context pointer** to the map's Decisions-so-far.
 5. Add newly-surfaced tickets (create-then-wire); graduate any fog the answer has made specifiable, clearing each graduated patch from **Not yet specified** so it lives only as its new ticket. If the answer reveals a ticket — this one or another — sits beyond the destination, **rule it out of scope** rather than resolving it on the route. If the decision invalidates other parts of the map, update or delete those tickets.
 
