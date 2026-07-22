@@ -1,6 +1,6 @@
 interface:
   display_name: "Implement"
   short_description: "Deliver one contract through red-green cycles"
-  default_prompt: "Implement one ready delivery contract with red-before-green evidence and explicit amendment decisions."
+  default_prompt: "Implement one ready delivery contract with red-before-green evidence, configured verification, three-axis review, and explicit amendment decisions."
 policy:
   allow_implicit_invocation: false

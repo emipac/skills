@@ -75,3 +75,18 @@ OpenSPDD's Java/Spring vocabulary, exhaustive class and method inventories, immu
   constrain outcomes while leaving private implementation learning to TDD.
 - Added explicit contract amendments for accepted intent changes; incidental
   implementation details remain code truth and do not synchronize upstream.
+
+### Phase 5 — verification and review
+
+- Added Minic-owned `verify-change` with Laravel, Livewire, React/TypeScript,
+  and Svelte/TypeScript profiles, deterministic capability discovery, and an
+  impact-based evidence ladder using exact configured commands.
+- Evolved `.agent-framework.yaml` to schema version 2 so verification profile,
+  capabilities, and commands have explicit ownership.
+- Extended upstream `code-review` from two axes to independent Standards,
+  Contract, and Evidence passes. Contract review adds OpenSPDD-inspired
+  safeguard, scope, implicit-decision, and intent-drift checks without adopting
+  batch generation or exhaustive Operations.
+- Added selective synchronization rules for SRS behavior, glossary terms, ADR
+  rationale, ticket evidence, and history while keeping private implementation
+  details as code truth.

@@ -32,7 +32,7 @@ The route most work travels. You have an idea and want it built.
    - **Yes** → **`/to-spec`** extracts one `ready-for-tickets` feature contract with SRS traceability, safeguards, risks, and public seams. **`/to-tickets`** then creates ready tracer-bullet delivery contracts and an acyclic blocker graph. Start **`/implement`** once per frontier ticket, **clearing context between each one**.
    - **No** → establish an explicitly approved minimal delivery contract, then run **`/implement`** in this context.
 
-   Either way, **`/implement`** enforces readiness, drives **`/tdd`** one vertical red-green behavior at a time, records evidence, pauses for explicit contract amendments when learning changes durable intent, and closes with configured verification plus **`/code-review`**. It commits or pushes only when explicitly requested. Reach for **`/tdd`** alone for a concrete ad-hoc behavior and **`/code-review`** alone to review a fixed diff.
+   Either way, **`/implement`** enforces readiness, drives **`/tdd`** one vertical red-green behavior at a time, records evidence, pauses for explicit contract amendments when learning changes durable intent, then runs **`/verify-change`** and the three-axis **`/code-review`** before selectively synchronizing durable knowledge. It commits or pushes only when explicitly requested. Reach for **`/tdd`** alone for a concrete ad-hoc behavior, **`/verify-change`** alone for an evidence ladder, and **`/code-review`** alone to review a fixed diff.
 
 ### Context hygiene
 
@@ -73,6 +73,9 @@ Two model-invoked references that run *beneath* the other skills — each the si
   requirements, safeguards, risks, questions, and acceptance coverage. Reach
   for it to create, refine, or audit the configured SRS.
 - **`/codebase-design`** — the deep-module vocabulary (module, interface, depth, seam, adapter, leverage, locality) for designing a module's *shape*: a lot of behaviour behind a small interface at a clean seam. `/tdd` and `/improve-codebase-architecture` both speak it.
+- **`/verify-change`** — plan and audit impact-based Laravel and frontend
+  evidence from focused checks through broad suites using only configured
+  capabilities and exact commands.
 
 ## Crossing sessions
 

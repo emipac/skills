@@ -4,7 +4,7 @@ AI Skills Framework is Minic's installable development lifecycle for Laravel bac
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** Phase 4 development: the SRS lifecycle is published as `v0.3.0`, and traceable feature contracts, ready delivery contracts, and the implementation orchestrator are being prepared for `0.4.0`.
+> **Status:** Phase 5 development: planning and delivery contracts are published as `v0.4.0`; deterministic verification and three-axis review are being prepared for `0.5.0`.
 
 ## Install with the universal skills CLI
 
@@ -74,7 +74,8 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 - **[tdd](./skills/tdd/SKILL.md)** — Deliver one behavior at a time through public seams.
 - **[domain-modeling](./skills/domain-modeling/SKILL.md)** — Maintain precise domain terminology and durable decisions.
 - **[codebase-design](./skills/codebase-design/SKILL.md)** — Design deep modules at clean seams.
-- **[code-review](./skills/code-review/SKILL.md)** — Review repository standards and originating specifications independently.
+- **[verify-change](./skills/verify-change/SKILL.md)** — Plan and audit configured Laravel and frontend evidence from focused checks through broad suites.
+- **[code-review](./skills/code-review/SKILL.md)** — Review Standards, Contract, and Evidence independently.
 - **[resolving-merge-conflicts](./skills/resolving-merge-conflicts/SKILL.md)** — Resolve merge and rebase conflicts from source intent.
 - **[grilling](./skills/grilling/SKILL.md)** — Provide the reusable decision interview loop.
 

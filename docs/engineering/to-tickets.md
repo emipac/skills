@@ -16,7 +16,8 @@ Every ready contract includes:
 - canonical domain concepts and architecture boundary;
 - an agreed public seam and describable first red test;
 - safeguards, invariants, prohibited behavior, and non-goals;
-- acceptance criteria and a configured verification matrix;
+- acceptance criteria and a verification matrix using configured capabilities
+  or exact commands, including user-facing and frontend evidence;
 - explicit blockers and unresolved assumptions;
 - a checked `ready-for-agent` gate.
 
@@ -25,7 +26,8 @@ use expand–migrate–contract rather than artificial user-facing slices.
 
 Local Markdown contracts can be checked with the bundled auditor, which
 detects missing fields, references outside the feature contract, unresolved
-start-blocking assumptions, unknown blockers, self-blockers, and cycles. Real
+start-blocking assumptions, malformed verification rows, unknown blockers,
+self-blockers, and cycles. Real
 trackers use the same body gate plus native blocker relationships.
 
 ```text

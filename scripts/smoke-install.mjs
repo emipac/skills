@@ -14,6 +14,8 @@ const smokeSkills = [
   'to-spec',
   'to-tickets',
   'implement',
+  'verify-change',
+  'code-review',
 ];
 
 try {
@@ -144,6 +146,34 @@ try {
       'references',
       'contract-amendment.md',
     );
+    const durableSynchronization = path.join(
+      temporaryRoot,
+      installedRoot,
+      'implement',
+      'references',
+      'durable-synchronization.md',
+    );
+    const verificationPlanner = path.join(
+      temporaryRoot,
+      installedRoot,
+      'verify-change',
+      'scripts',
+      'verification-plan.mjs',
+    );
+    const verificationProfile = path.join(
+      temporaryRoot,
+      installedRoot,
+      'verify-change',
+      'references',
+      'typescript-frontends.md',
+    );
+    const reviewAxes = path.join(
+      temporaryRoot,
+      installedRoot,
+      'code-review',
+      'references',
+      'review-report.md',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);
@@ -199,6 +229,22 @@ try {
 
     if (!(await readFile(implementationAmendment, 'utf8')).includes('Proposed contract amendment')) {
       throw new Error(`${agent}: contract amendment reference was not installed`);
+    }
+
+    if (!(await readFile(durableSynchronization, 'utf8')).includes('Private implementation')) {
+      throw new Error(`${agent}: durable synchronization reference was not installed`);
+    }
+
+    if (!(await readFile(verificationPlanner, 'utf8')).includes('planVerification')) {
+      throw new Error(`${agent}: verification planner was not installed`);
+    }
+
+    if (!(await readFile(verificationProfile, 'utf8')).includes('React and Svelte')) {
+      throw new Error(`${agent}: TypeScript verification profile was not installed`);
+    }
+
+    if (!(await readFile(reviewAxes, 'utf8')).includes('## Evidence')) {
+      throw new Error(`${agent}: three-axis review reference was not installed`);
     }
   }
 

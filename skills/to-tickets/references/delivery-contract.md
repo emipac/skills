@@ -16,6 +16,8 @@ implementation choices to the red-green loop.
 - explicit invariants, prohibited behavior, and non-goals;
 - acceptance criteria observable at that seam;
 - a verification matrix using configured commands or capabilities;
+- smoke or browser evidence for user-facing behavior;
+- a configured production build for affected frontend code;
 - existing, acyclic blocker edges;
 - no unresolved assumption marked as blocking the start.
 
@@ -65,7 +67,7 @@ implementation choices to the red-green loop.
 
 | Layer | Evidence | Command or capability | Required |
 | --- | --- | --- | --- |
-| <Targeted/static/smoke/browser/broad> | <What it proves> | <Configured command> | <Yes/No with reason> |
+| <Targeted/static/affected/smoke/build/browser/broad> | <AC/SG IDs and what the row proves> | <Exact configured command or named capability> | <Yes/No with reason> |
 
 ## Blocked By
 
@@ -90,6 +92,7 @@ None.
 - [ ] Blocking edges exist and are acyclic.
 - [ ] No unresolved assumption blocks the start.
 - [ ] The ticket fits one fresh implementation context.
+- [ ] User-facing and frontend evidence requirements are covered or explicitly inapplicable.
 ```
 
 Set status to `ready-for-agent` and check every readiness item only after the

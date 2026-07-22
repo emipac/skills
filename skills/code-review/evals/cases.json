@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "standards-clean-contract-drift",
+      "prompt": "Review a cleanly written diff that changes an error response protected by SG-API-001 without an amendment.",
+      "assertions": [
+        "Standards can pass independently",
+        "Contract reports safeguard intent drift",
+        "Evidence evaluates the changed failure path separately",
+        "Findings cite the changed hunk and safeguard"
+      ]
+    },
+    {
+      "id": "contract-complete-evidence-missing",
+      "prompt": "Review an implementation matching its ticket when the required browser command was skipped.",
+      "assertions": [
+        "Contract can pass independently",
+        "Evidence reports the missing required browser result",
+        "No cross-axis score hides the finding",
+        "The required skip remains a blocker"
+      ]
+    },
+    {
+      "id": "no-formal-contract",
+      "prompt": "Review a small refactor against main when no originating delivery contract exists.",
+      "assertions": [
+        "Reports unavailable contract sources",
+        "Still runs Standards",
+        "Assesses available tests without inventing acceptance criteria",
+        "Keeps all three axis summaries separate"
+      ]
+    }
+  ]
+}

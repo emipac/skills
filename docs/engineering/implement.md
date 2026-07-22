@@ -25,6 +25,8 @@ pauses and proposes a contract amendment. Work resumes only after an explicit
 accepted, rejected, or deferred decision; incidental private implementation
 details remain code truth.
 
-After all cycles, it runs the ticket verification matrix and `code-review`,
-reports exact evidence and skipped layers, and updates required history. It
-commits or pushes only when explicitly requested.
+After all cycles, it delegates the impact-based evidence ladder to
+`verify-change`, then runs independent Standards, Contract, and Evidence review
+passes. Accepted durable learning updates only its owning SRS, glossary, ADR,
+tracker issue, or history artifact; private implementation remains code truth.
+It commits or pushes only when explicitly requested.

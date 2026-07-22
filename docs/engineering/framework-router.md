@@ -9,7 +9,8 @@ npx skills add emipac/skills --skill framework-router
 `framework-router` maps a request onto the preserved lifecycle: discovery and
 grilling, a durable SRS baseline, a traceable feature contract, ready vertical
 delivery contracts, red-green implementation evidence, explicit contract
-amendments, verification, and review.
+amendments, an impact-based evidence ladder, three-axis review, and selective
+durable synchronization.
 It also routes incoming issues through triage, difficult failures through bug
 diagnosis, and multi-session uncertainty through wayfinder.
 

@@ -177,6 +177,9 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
     }
 
     const acceptanceLines = sections.get(normalize('Acceptance Criteria'))?.lines ?? [];
+    const ticketAcceptanceIds = uniqueSorted(
+      traceIds(acceptanceLines.join('\n')).filter((id) => id.startsWith('AC-')),
+    );
 
     if (!acceptanceLines.some((line) => /^\s*- \[[ xX]\].*\bAC-[A-Z0-9]+-\d{3}\b/.test(line))) {
       addError(
@@ -187,9 +190,62 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
     }
 
     const verificationTable = parseFirstTable(sections.get(normalize('Verification Matrix')));
+    const verifiedAcceptanceIds = new Set(traceIds(
+      sections.get(normalize('Verification Matrix'))?.lines.join('\n') ?? '',
+    ).filter((id) => id.startsWith('AC-')));
+
+    for (const acceptanceId of ticketAcceptanceIds) {
+      if (!verifiedAcceptanceIds.has(acceptanceId)) {
+        addError(
+          errors,
+          'unverified-acceptance',
+          `${ticket.id} verification matrix does not map ${acceptanceId}`,
+        );
+      }
+    }
 
     if (!verificationTable || verificationTable.rows.length === 0) {
       addError(errors, 'missing-verification', `${ticket.id} has no verification matrix`);
+    } else {
+      const verificationColumns = [
+        'Layer',
+        'Evidence',
+        'Command or capability',
+        'Required',
+      ];
+      const missingColumns = verificationColumns.filter(
+        (column) => columnIndex(verificationTable, column) === -1,
+      );
+
+      if (missingColumns.length > 0) {
+        addError(
+          errors,
+          'invalid-verification-matrix',
+          `${ticket.id} verification matrix is missing ${missingColumns.join(', ')}`,
+        );
+      } else {
+        const commandColumn = columnIndex(verificationTable, 'Command or capability');
+        const evidenceColumn = columnIndex(verificationTable, 'Evidence');
+        const requiredColumn = columnIndex(verificationTable, 'Required');
+
+        for (const row of verificationTable.rows) {
+          if (!row[commandColumn]?.trim() || !row[evidenceColumn]?.trim()) {
+            addError(
+              errors,
+              'incomplete-verification-row',
+              `${ticket.id} has a verification row without evidence or command`,
+            );
+          }
+
+          if (!/^(?:yes|no)(?:\b|\s)/i.test(row[requiredColumn] ?? '')) {
+            addError(
+              errors,
+              'invalid-verification-requirement',
+              `${ticket.id} verification rows must state Yes or No with a reason`,
+            );
+          }
+        }
+      }
     }
 
     const blockerText = sections.get(normalize('Blocked By'))?.lines.join('\n') ?? '';

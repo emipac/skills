@@ -6,8 +6,8 @@ description: Implement one ready delivery contract through vertical red-green cy
 # Implement
 
 Implement one delivery contract in one fresh context. This is the framework's
-single implementation orchestrator; `/tdd` supplies the red-green discipline
-and `/code-review` supplies the final review.
+single implementation orchestrator; `/tdd` supplies the red-green discipline,
+`/verify-change` supplies final evidence, and `/code-review` supplies review.
 
 ## 1. Load the contract
 
@@ -84,11 +84,19 @@ user or authorized decision owner. Resume only after an explicit decision:
 
 Never canonize incidental private implementation details in durable artifacts.
 
-## 6. Verify, review, and hand off
+## 6. Verify, review, synchronize, and hand off
 
-Run every required row in the ticket verification matrix using the exact
-configured commands. Run `/code-review` against repository standards and the
-contract. Fix in-scope findings and rerun affected evidence.
+Run `/verify-change` to plan and execute every required row in the ticket
+Verification Matrix from focused checks through broad suites. Preserve its
+exact command evidence and capability gaps. Run `/code-review` against the
+fixed diff through Standards, Contract, and Evidence. Fix in-scope findings and
+rerun every affected evidence step.
+
+After review is clean, apply
+[durable synchronization](references/durable-synchronization.md). Update the
+SRS, glossary, or ADR only through an accepted decision; update ticket evidence
+and configured history when their policies require it. Keep private
+implementation as code truth.
 
 Report:
 
@@ -98,11 +106,12 @@ Report:
 - safeguards and non-goals preserved;
 - accepted contract amendments;
 - intentionally skipped evidence with reasons;
+- durable artifacts updated and the decision authorizing each update;
 - remaining findings or blockers.
 
-Update ticket evidence and project history when required. Commit or push only
-when the user explicitly requests it.
+Commit or push only when the user explicitly requests it.
 
-Completion criterion: every acceptance criterion is green, every required
-verification row passes, review has no unresolved in-scope finding, and the
-working tree contains only contract-scoped changes.
+Completion criterion: every acceptance criterion is green, the verification
+evidence audit passes, all three review axes have no unresolved in-scope
+finding, required durable synchronization is complete, and the working tree
+contains only contract-scoped changes.

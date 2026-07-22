@@ -23,7 +23,8 @@ Treat existing repository instructions as authoritative. `AGENTS.md` is a
 protected input: read it, record it, and preserve its exact bytes.
 
 Completion criterion: backend, frontend, SRS candidates, guideline paths,
-protected files, and detected verification commands are visible.
+protected files, and the detected verification profile, capabilities, and
+exact commands are visible.
 
 ### 2. Confirm the branches
 

@@ -23,8 +23,9 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    no product decisions to begin.
 
 2. **Explore delivery boundaries.** Inspect the current codebase, existing
-   public seams, configured verification commands, glossary, and ADRs. Identify
-   optional prefactoring that makes the feature easy without changing behavior.
+   public seams, configured verification profile, capabilities and commands,
+   glossary, and ADRs. Identify optional prefactoring that makes the feature
+   easy without changing behavior.
 
 3. **Draft tracer bullets.** Each ticket cuts a narrow but complete path through
    every affected layer, is independently demoable or verifiable, and fits one
@@ -36,7 +37,9 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    [the template](references/delivery-contract.md#template). Every contract
    carries its SRS/AC/SG IDs, outcome, domain concepts, approach and tradeoffs,
    architecture boundary, public seam, safeguards, prohibited behavior,
-   verification matrix, assumptions, and blockers.
+   verification matrix, assumptions, and blockers. Use exact configured
+   commands where available and a named capability only when the final selector
+   depends on the slice.
 
 5. **Wire the graph.** Add only genuine start-blocking edges. Create all tracker
    issues first when native identifiers are needed, then wire native blocking
@@ -54,7 +57,8 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    `ready-for-agent` only when it is vertical, traceable, independently
    verifiable, sized for one context, has an agreed first red seam, has an
    explicit verification matrix, and has no unresolved start-blocking
-   assumption.
+   assumption. User-facing work requires smoke or browser evidence; frontend
+   work requires a production build when that capability is configured.
 
 7. **Confirm and publish.** Present titles, outcomes, blockers, and public seams
    as a numbered list. Ask the user to approve granularity and edges. Publish

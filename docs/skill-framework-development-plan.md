@@ -1,6 +1,6 @@
 # AI Skills Framework — Development Plan
 
-**Status:** Proposed
+**Status:** In progress — Phase 5
 **Created:** 2026-07-22
 **Product name:** AI Skills Framework
 **Machine identifier:** `ai-skills-framework`
@@ -245,7 +245,7 @@ It should record:
 - Project guideline and convention paths.
 - Backend and frontend profiles.
 - Issue-tracker adapter.
-- Verification commands.
+- Verification profile, capabilities, and exact commands.
 - Documentation/history policy.
 
 Framework defaults must yield to applicable project instructions and conventions.
@@ -380,7 +380,7 @@ Completed and published as `v0.3.0`:
 
 #### Current status — 2026-07-22
 
-Implemented locally for `0.4.0`:
+Completed and published as `v0.4.0`:
 
 - Replaced the loose PRD with a feature contract that traces SRS requirements, acceptance criteria, safeguards, risks, questions, public seams, non-goals, and analysis gaps.
 - Added deterministic feature-contract auditing for missing sections, unknown SRS references, incomplete acceptance detail, blocking gaps, placeholders, and readiness.
@@ -389,10 +389,8 @@ Implemented locally for `0.4.0`:
 - Expanded `implement` into the only implementation orchestrator with readiness refusal, vertical red-green evidence, explicit contract amendments, configured verification, review, and explicit commit/push authorization.
 - Added creation and failure-mode evaluations for feature synthesis, ticket decomposition, wide refactors, readiness refusal, red-green delivery, and implementation learning.
 - Completed 26 unit and contract tests, repository validation for 23 released skills and 95 Markdown files, official validation of all 23 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
-
-Remaining before publication:
-
-- Review, commit, and push Phase 4 only when explicitly authorized.
+- Merged [Phase 4 pull request #4](https://github.com/emipac/skills/pull/4), then merged [version pull request #5](https://github.com/emipac/skills/pull/5).
+- Published [release `v0.4.0`](https://github.com/emipac/skills/releases/tag/v0.4.0); Validate and Release workflows passed.
 
 ### Phase 5 — Verification and review
 
@@ -410,6 +408,23 @@ Remaining before publication:
 - User-facing changes receive smoke or browser coverage.
 - Code review reports Standards, Contract, and Evidence findings separately.
 - Incidental implementation details do not pollute durable documentation.
+
+#### Current status — 2026-07-22
+
+Implemented locally for `0.5.0`:
+
+- Evolved `.agent-framework.yaml` to schema version 2 with stack-specific verification profiles, explicit capabilities, and lockfile-selected package-manager commands.
+- Added model-invoked `verify-change` with deterministic impact classification, focused-to-broad evidence ordering, required smoke or browser coverage for user-facing work, and exact-command evidence auditing.
+- Added Laravel, Livewire, React/TypeScript, and Svelte/TypeScript verification guidance without creating separate lifecycle skills.
+- Extended delivery-contract verification matrices with required columns, explicit applicability, user-facing evidence, and frontend build expectations.
+- Extended `code-review` from two axes to independent Standards, Contract, and Evidence passes covering safeguards, scope, implicit decisions, intent drift, and verification sufficiency.
+- Added selective synchronization ownership for SRS behavior, glossary terms, ADR rationale, tracker evidence, and history while excluding private implementation details.
+- Added verification and review evaluations, deterministic planner tests, setup schema tests, and cross-client installation coverage.
+- Completed 39 unit and contract tests, repository validation for 24 released skills and 104 Markdown files, official validation of all 24 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
+
+Remaining before publication:
+
+- Review, commit, and push Phase 5 only when explicitly authorized.
 
 ### Phase 6 — Compatibility and pilot release
 
