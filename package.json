@@ -1,6 +1,6 @@
 {
   "name": "ai-skills-framework",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Minic's deterministic Laravel and TypeScript agent skill framework",
   "author": "Minic",

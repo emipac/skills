@@ -1,5 +1,15 @@
 # ai-skills-framework
 
+## 0.3.0
+
+### Minor Changes
+
+- [#2](https://github.com/emipac/skills/pull/2) [`0e42a80`](https://github.com/emipac/skills/commit/0e42a806262d62c010782ffde7394162122e9ae4) Thanks [@emipac](https://github.com/emipac)! - Add the Phase 3 SRS lifecycle: `srs-modeling`, a reusable durable-requirements
+  template and contract, stable requirement and acceptance identifiers,
+  OpenSPDD-inspired safeguards, deterministic traceability auditing, and creation,
+  refinement, and audit evaluations. Integrate SRS maintenance with
+  `grill-with-docs`, `wayfinder`, and `framework-router`.
+
 ## 0.2.0
 
 ### Minor Changes
