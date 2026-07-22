@@ -4,7 +4,7 @@ AI Skills Framework is Minic's installable development lifecycle for Laravel bac
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** Phase 3 development: the Phase 2 setup and routing backbone is published as `v0.2.0`, and the SRS lifecycle is being prepared for `0.3.0`.
+> **Status:** Phase 4 development: the SRS lifecycle is published as `v0.3.0`, and traceable feature contracts, ready delivery contracts, and the implementation orchestrator are being prepared for `0.4.0`.
 
 ## Install with the universal skills CLI
 
@@ -57,9 +57,9 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 - **[srs-modeling](./skills/srs-modeling/SKILL.md)** — Create, surgically refine, and audit the durable requirements baseline.
 - **[triage](./skills/triage/SKILL.md)** — Move issues through configured triage roles.
 - **[improve-codebase-architecture](./skills/improve-codebase-architecture/SKILL.md)** — Find deep-module opportunities and guide the selected improvement.
-- **[to-spec](./skills/to-spec/SKILL.md)** — Synthesize a feature specification.
-- **[to-tickets](./skills/to-tickets/SKILL.md)** — Produce vertical tracer-bullet tickets with blocking edges.
-- **[implement](./skills/implement/SKILL.md)** — Implement agreed work through TDD and review.
+- **[to-spec](./skills/to-spec/SKILL.md)** — Extract one traceable, safeguard-aware feature contract from the SRS.
+- **[to-tickets](./skills/to-tickets/SKILL.md)** — Produce ready vertical delivery contracts with an acyclic blocker graph.
+- **[implement](./skills/implement/SKILL.md)** — Orchestrate one ready contract through red-green evidence, explicit amendments, verification, and review.
 - **[wayfinder](./skills/wayfinder/SKILL.md)** — Resolve multi-session planning uncertainty through a decision map.
 - **[grill-me](./skills/grill-me/SKILL.md)** — Interview a plan or design until its decision branches are resolved.
 - **[handoff](./skills/handoff/SKILL.md)** — Create a compact continuation artifact.

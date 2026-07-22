@@ -1,104 +1,77 @@
 ---
 name: to-tickets
-description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker — edges as text in one file per ticket locally, or native blocking links on a real tracker.
+description: Break a ready feature contract into independently verifiable tracer-bullet delivery contracts with explicit blocking edges and readiness gates, then publish them to the configured tracker.
 ---
 
 # To Tickets
 
-Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
+Transform one `ready-for-tickets` feature contract into a blocker graph of
+vertical delivery contracts. Read `.agent-framework.yaml`, its tracker adapter,
+the configured SRS, glossary, and relevant ADRs. Run `/framework-setup` when
+configuration is missing.
 
-Read `.agent-framework.yaml` and its configured tracker document. Run `/framework-setup` if the configuration is missing.
+Read [the delivery contract](references/delivery-contract.md) before drafting.
 
 ## Process
 
-### 1. Gather context
+1. **Validate the parent.** Read the full feature contract and its source issue
+   comments. Confirm status `ready-for-tickets`, resolve every SRS reference,
+   and refuse decomposition while a blocking gap, undecided seam, or scope
+   addition remains.
 
-Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
+   Completion criterion: the parent is a closed decision surface; tickets need
+   no product decisions to begin.
 
-### 2. Explore the codebase (optional)
+2. **Explore delivery boundaries.** Inspect the current codebase, existing
+   public seams, configured verification commands, glossary, and ADRs. Identify
+   optional prefactoring that makes the feature easy without changing behavior.
 
-If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+3. **Draft tracer bullets.** Each ticket cuts a narrow but complete path through
+   every affected layer, is independently demoable or verifiable, and fits one
+   fresh context. Preserve the upstream wide-refactor exception: use
+   expand–migrate–contract when a mechanical blast radius cannot land as green
+   vertical slices.
 
-Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
+4. **Write delivery contracts.** Assign temporary draft keys `TB-NNN` and use
+   [the template](references/delivery-contract.md#template). Every contract
+   carries its SRS/AC/SG IDs, outcome, domain concepts, approach and tradeoffs,
+   architecture boundary, public seam, safeguards, prohibited behavior,
+   verification matrix, assumptions, and blockers.
 
-### 3. Draft vertical slices
+5. **Wire the graph.** Add only genuine start-blocking edges. Create all tracker
+   issues first when native identifiers are needed, then wire native blocking
+   relationships in a second pass. The graph must be acyclic; its frontier is
+   every open contract with all blockers complete.
 
-Break the work into **tracer bullet** tickets.
+6. **Run the readiness gate.** For local Markdown contracts run:
 
-<vertical-slice-rules>
+   ```bash
+   node <skill-directory>/scripts/audit-ticket-contracts.mjs \
+     <ticket-directory> --spec <feature-spec-path>
+   ```
 
-- Each slice cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests) — vertical, NOT a horizontal slice of one layer
-- A completed slice is demoable or verifiable on its own
-- Each slice is sized to fit in a single fresh context window
-- Any prefactoring should be done first
+   Apply the same gate to tracker-native contracts. A ticket is
+   `ready-for-agent` only when it is vertical, traceable, independently
+   verifiable, sized for one context, has an agreed first red seam, has an
+   explicit verification matrix, and has no unresolved start-blocking
+   assumption.
 
-</vertical-slice-rules>
+7. **Confirm and publish.** Present titles, outcomes, blockers, and public seams
+   as a numbered list. Ask the user to approve granularity and edges. Publish
+   through the configured adapter in dependency order. After publication, the
+   tracker issue ID is canonical; retain `TB-NNN` only as a readable mapping to
+   the approved draft graph. Apply `ready-for-agent` only after the gate passes.
+   Never modify or close the parent feature contract.
 
-Give each ticket its **blocking edges** — the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
+Completion criterion: every in-scope parent acceptance ID is covered by at
+least one ready ticket, every ticket passes independently, and the graph has no
+unknown edge or cycle.
 
-**Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
+## Guardrails
 
-### 4. Quiz the user
-
-Present the proposed breakdown as a numbered list. For each ticket, show:
-
-- **Title**: short descriptive name
-- **Blocked by**: which other tickets (if any) must complete first
-- **What it delivers**: the end-to-end behaviour this ticket makes work
-
-Ask the user:
-
-- Does the granularity feel right? (too coarse / too fine)
-- Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
-- Should any tickets be merged or split further?
-
-Iterate until the user approves the breakdown.
-
-### 5. Publish the tickets to the configured tracker
-
-Publish the approved tickets. **How** depends on the tracker adapter selected in `.agent-framework.yaml` — the tickets are the same either way, only the shape of the blocking edges changes:
-
-- **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below — one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise — the tickets are agent-grabbable by construction.
-
-Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
-
-Do NOT close or modify any parent issue.
-
-<local-ticket-template>
-
-# <NN> — <Ticket title>
-
-**What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective — not a layer-by-layer implementation list.
-
-**Blocked by:** the numbers/titles of the tickets that gate this one, or "None — can start immediately".
-
-**Status:** ready-for-agent
-
-- [ ] Acceptance criterion 1
-- [ ] Acceptance criterion 2
-
-</local-ticket-template>
-
-<issue-template>
-
-## Parent
-
-A reference to the parent issue on the tracker (if the source was an existing issue, otherwise omit this section).
-
-## What to build
-
-The end-to-end behaviour this ticket makes work, from the user's perspective — not layer-by-layer implementation.
-
-## Acceptance criteria
-
-- [ ] Criterion 1
-- [ ] Criterion 2
-
-## Blocked by
-
-- A reference to each blocking ticket, or "None — can start immediately".
-
-</issue-template>
-
-In either form, avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
+- Prefer vertical behavior over component-oriented Operations sequences.
+- Keep file, class, method, annotation, and exhaustive schema inventories out
+  of contracts; a decision-rich prototype excerpt is the narrow exception.
+- Treat ticket contracts as constraints with room for TDD learning, not
+  immutable generation scripts.
+- Preserve every existing `AGENTS.md` exactly.

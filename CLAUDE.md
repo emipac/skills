@@ -49,6 +49,12 @@ traceability, or readiness rules must retain audit tests for duplicate IDs,
 unknown references, acceptance coverage, open questions, and read-only CLI
 behavior.
 
+`to-spec` and `to-tickets` own the feature and delivery contract gates.
+`implement` consumes those gates and must retain red-before-green evidence,
+explicit amendment decisions, and explicit commit/push authorization. Contract
+changes require unit coverage for traceability, blockers, cycles, assumptions,
+and readiness.
+
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog
 history.

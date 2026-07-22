@@ -59,3 +59,19 @@ OpenSPDD's Java/Spring vocabulary, exhaustive class and method inventories, immu
   constraints without adopting REASONS Operations or batch generation.
 - Integrated normative SRS maintenance with `grill-with-docs`, `wayfinder`, and
   the lifecycle router while preserving upstream glossary and ADR ownership.
+
+### Phase 4 — planning and delivery contracts
+
+- Extended upstream `to-spec` with SRS traceability, concept/risk/gap analysis,
+  safeguards, prohibited behavior, public evidence seams, and a deterministic
+  `ready-for-tickets` gate.
+- Extended upstream `to-tickets` while preserving tracer bullets, blocker
+  edges, prefactoring, and the expand-migrate-contract exception. Each ticket
+  now carries a lightweight delivery contract and deterministic readiness gate.
+- Expanded upstream `implement` into the single implementation orchestrator:
+  contract readiness, vertical red-before-green evidence, configured checks,
+  review, and explicit authorization before commits or pushes.
+- Replaced OpenSPDD REASONS Operations and batch generation with contracts that
+  constrain outcomes while leaving private implementation learning to TDD.
+- Added explicit contract amendments for accepted intent changes; incidental
+  implementation details remain code truth and do not synchronize upstream.

@@ -29,10 +29,10 @@ The route most work travels. You have an idea and want it built.
    - **`/prototype`** to answer the question with throwaway code,
    - **`/handoff`** back what you learned, and reference it from the original idea thread.
 4. **Branch — is this a multi-session build?**
-   - **Yes** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into tracer-bullet tickets, each declaring its **blocking edges**. On a local tracker that's one file per ticket under `.scratch/<feature>/issues/`, worked blockers-first by hand; on a real tracker the edges become native blocking links, so any ticket whose blockers are done can be grabbed — kick off **`/implement`** per ticket, **clearing context between each one**.
-   - **No** → **`/implement`** right here, in the same context window.
+   - **Yes** → **`/to-spec`** extracts one `ready-for-tickets` feature contract with SRS traceability, safeguards, risks, and public seams. **`/to-tickets`** then creates ready tracer-bullet delivery contracts and an acyclic blocker graph. Start **`/implement`** once per frontier ticket, **clearing context between each one**.
+   - **No** → establish an explicitly approved minimal delivery contract, then run **`/implement`** in this context.
 
-   Either way, **`/implement`** builds each issue by driving **`/tdd`** internally — one red-green slice at a time — then closes out by running **`/code-review`**, a two-axis review (Standards + Spec) of the diff, before committing. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
+   Either way, **`/implement`** enforces readiness, drives **`/tdd`** one vertical red-green behavior at a time, records evidence, pauses for explicit contract amendments when learning changes durable intent, and closes with configured verification plus **`/code-review`**. It commits or pushes only when explicitly requested. Reach for **`/tdd`** alone for a concrete ad-hoc behavior and **`/code-review`** alone to review a fixed diff.
 
 ### Context hygiene
 

@@ -349,7 +349,7 @@ Completed and published as `v0.2.0`:
 
 #### Current status — 2026-07-22
 
-Implemented locally for `0.3.0`:
+Completed and published as `v0.3.0`:
 
 - Extracted a generic SRS contract and template from Oldwood's useful product, scope, requirement, role, scenario, non-functional, risk, question, and acceptance structure.
 - Excluded Oldwood-specific physical schema, Filament menu, file, class, and method inventories from the generic baseline.
@@ -358,10 +358,8 @@ Implemented locally for `0.3.0`:
 - Added a read-only deterministic SRS auditor, 9 SRS lifecycle tests, and creation/refinement/audit evaluation cases.
 - Integrated SRS maintenance with `grill-with-docs`, `wayfinder`, and `framework-router`.
 - Completed 17 unit tests, repository validation for 23 released skills and 89 Markdown files, official validation of all 23 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
-
-Remaining before publication:
-
-- Push Phase 3 only when explicitly authorized, then merge its generated version pull request to publish `0.3.0`.
+- Merged [Phase 3 pull request #2](https://github.com/emipac/skills/pull/2), then merged [version pull request #3](https://github.com/emipac/skills/pull/3).
+- Published [release `v0.3.0`](https://github.com/emipac/skills/releases/tag/v0.3.0).
 
 ### Phase 4 — Planning and delivery contracts
 
@@ -379,6 +377,22 @@ Remaining before publication:
 - Tickets are vertical, independently verifiable, and sized for one context.
 - No ticket begins with unresolved blocking assumptions.
 - Implementation produces red-before-green evidence at the agreed seam.
+
+#### Current status — 2026-07-22
+
+Implemented locally for `0.4.0`:
+
+- Replaced the loose PRD with a feature contract that traces SRS requirements, acceptance criteria, safeguards, risks, questions, public seams, non-goals, and analysis gaps.
+- Added deterministic feature-contract auditing for missing sections, unknown SRS references, incomplete acceptance detail, blocking gaps, placeholders, and readiness.
+- Extended tracer-bullet tickets into delivery contracts carrying outcomes, domain concepts, tradeoffs, boundaries, seams, safeguards, prohibited behavior, acceptance evidence, verification, blockers, and assumptions; temporary `TB-NNN` draft keys map to canonical tracker IDs after publication.
+- Added deterministic delivery-contract and blocker-graph auditing for unknown references, missing evidence, unresolved start-blocking assumptions, unknown/self blockers, and cycles.
+- Expanded `implement` into the only implementation orchestrator with readiness refusal, vertical red-green evidence, explicit contract amendments, configured verification, review, and explicit commit/push authorization.
+- Added creation and failure-mode evaluations for feature synthesis, ticket decomposition, wide refactors, readiness refusal, red-green delivery, and implementation learning.
+- Completed 26 unit and contract tests, repository validation for 23 released skills and 95 Markdown files, official validation of all 23 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
+
+Remaining before publication:
+
+- Review, commit, and push Phase 4 only when explicitly authorized.
 
 ### Phase 5 — Verification and review
 
