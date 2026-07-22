@@ -31,8 +31,9 @@ Present detected values and ask only about unresolved or consequential choices:
 
 1. **Tracker:** recommend the detected GitHub remote when present; otherwise
    local Markdown. Offer `local-markdown`, `github`, `jira`, and `linear`.
-2. **SRS:** recommend the strongest discovered SRS candidate, or `null` when the
-   project has none yet.
+2. **SRS:** recommend the strongest discovered SRS candidate, or reserve
+   `docs/specifications/srs.md` for `/srs-modeling` when none exists. Use `null`
+   only when the user explicitly excludes an SRS.
 3. **Profiles:** confirm Laravel and one frontend profile: `livewire`,
    `react-typescript`, `svelte-typescript`, or `none`.
 4. **History:** retain an existing history convention; otherwise recommend

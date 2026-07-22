@@ -350,7 +350,7 @@ export const configureProject = async ({ projectRoot, selections }) => {
       srs: selectedValue(
         selections,
         'srsPath',
-        discovery.srsCandidates[0] ?? null,
+        discovery.srsCandidates[0] ?? 'docs/specifications/srs.md',
       ),
       glossary: selectedValue(
         selections,
