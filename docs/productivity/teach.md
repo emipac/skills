@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=teach
 npx skills update teach
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/productivity/teach)
+[Source](https://github.com/emipac/skills/tree/main/skills/teach)
 
 ## What it does
 

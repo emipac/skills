@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=grill-with-docs
 npx skills update grill-with-docs
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs)
+[Source](https://github.com/emipac/skills/tree/main/skills/grill-with-docs)
 
 ## What it does
 

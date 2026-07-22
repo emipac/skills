@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=grilling
 npx skills update grilling
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling)
+[Source](https://github.com/emipac/skills/tree/main/skills/grilling)
 
 ## What it does
 

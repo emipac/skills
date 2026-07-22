@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=domain-modeling
 npx skills update domain-modeling
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/domain-modeling)
+[Source](https://github.com/emipac/skills/tree/main/skills/domain-modeling)
 
 ## What it does
 

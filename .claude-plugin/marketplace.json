@@ -1,22 +1,22 @@
 {
-  "name": "mattpocock",
+  "name": "minic",
   "owner": {
-    "name": "Matt Pocock",
-    "url": "https://www.aihero.dev"
+    "name": "Minic",
+    "url": "https://github.com/emipac/skills"
   },
-  "description": "Matt Pocock's skills for real engineering, as an installable Claude Code plugin.",
+  "description": "Minic's AI Skills Framework marketplace.",
   "plugins": [
     {
-      "name": "mattpocock-skills",
+      "name": "ai-skills-framework",
       "source": "./",
-      "description": "Matt Pocock's agent skills for real engineering — grilling, spec/ticket flows, TDD, code review, domain modelling and more.",
+      "description": "A deterministic Laravel and TypeScript development lifecycle with SRS planning, tracer-bullet tickets, TDD, verification, and review.",
       "category": "engineering",
       "keywords": [
-        "engineering",
+        "laravel",
+        "typescript",
         "skills",
         "tdd",
-        "code-review",
-        "grilling"
+        "code-review"
       ]
     }
   ]

@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=tdd
 npx skills update tdd
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/tdd)
+[Source](https://github.com/emipac/skills/tree/main/skills/tdd)
 
 ## What it does
 

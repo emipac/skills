@@ -1,24 +1,48 @@
-Skills are organized into bucket folders under `skills/`:
+# AI Skills Framework repository guidance
 
-- `engineering/` — daily code work
-- `productivity/` — daily non-code workflow tools
-- `misc/` — kept around but rarely used, not promoted
-- `personal/` — tied to my own setup, not promoted
-- `in-progress/` — drafts not yet ready to ship
-- `deprecated/` — no longer used
+This repository is the Minic-maintained AI Skills Framework. It is derived from
+Matt Pocock's skills and is evolving toward a deterministic, TDD-oriented
+Laravel lifecycle with adaptable Livewire, React/TypeScript, and
+Svelte/TypeScript frontend support.
 
-Every skill in `engineering/` or `productivity/` (the **promoted** buckets) must have a reference in the top-level `README.md` and an entry in `.claude-plugin/plugin.json`'s `skills` array (the Claude Code plugin ships exactly the promoted set). Skills in `misc/`, `personal/`, `in-progress/`, and `deprecated/` must not appear in either.
+## Repository structure
 
-The repo is also its own single-plugin Claude Code marketplace: `.claude-plugin/marketplace.json` lists the one `mattpocock-skills` plugin. When bumping the release version, keep `.claude-plugin/plugin.json`'s `version` in sync with `package.json`'s — Claude uses the plugin `version` to decide when installed users see an update. Run `claude plugin validate . --strict` after touching either manifest. Why a Claude plugin but not (yet) a Codex one lives in [.agents/adr/0002-ship-as-a-claude-code-plugin.md](./.agents/adr/0002-ship-as-a-claude-code-plugin.md).
+- `skills/<skill-name>/SKILL.md` contains released, installable skills.
+- `experimental/` contains drafts that are not shipped.
+- `deprecated/` contains retired skills that are not shipped.
+- `docs/` contains human-facing documentation and the lifecycle plan.
+- `.claude-plugin/` and `.codex-plugin/` expose the same released skill set.
+- `.agents/plugins/marketplace.json` exposes the root Codex plugin.
 
-Each skill entry in the top-level `README.md` must link the skill name to its `SKILL.md`.
+Released skills must stay flat under `skills/`. Every released skill must be
+listed in the top-level `README.md`; the Claude manifest must list the exact
+same set. Experimental and deprecated skills must never be referenced by a
+release manifest.
 
-Each bucket folder has a `README.md` that lists every skill in the bucket with a one-line description, with the skill name linked to its `SKILL.md`. The promoted buckets' `README.md`s and the top-level `README.md` group entries into **User-invoked** and **Model-invoked**; non-promoted bucket `README.md`s (`misc/`, `personal/`) use a flat list.
+## Versioning and verification
 
-Skills in `engineering/` and `productivity/` also have a human-facing docs page at `docs/<bucket>/<skill-name>.md` (the docs tree mirrors those two bucket folders under `skills/`). The published URL is `https://aihero.dev/skills-<skill-name>` regardless of bucket — the docs path is repo organisation only. When you add, rename, or change the behaviour of a skill in `engineering/` or `productivity/`, create or re-sync its docs page following [.agents/writing-docs.md](./.agents/writing-docs.md). Skills in the non-promoted buckets (`misc/`, `personal/`, `in-progress/`, `deprecated/`) get **no** docs page.
+`package.json` is the authoritative version. Run `npm run sync-version` after
+changing it. Before handing off repository changes, run:
 
-Every `SKILL.md` is either user-invoked (`disable-model-invocation: true` plus `policy.allow_implicit_invocation: false` in `agents/openai.yaml`, reachable only by the human) or model-invoked (model- or user-reachable). See [.agents/invocation.md](./.agents/invocation.md).
+```bash
+npm run validate
+npm run test:install
+```
 
-[`ask-matt`](./skills/engineering/ask-matt/SKILL.md) is the router that maps every user-reachable skill and how they relate. The same trigger that re-syncs a docs page applies to it: whenever you add, rename, remove, or change how a user-reachable skill fits the flows, re-read `ask-matt`'s `SKILL.md` and update it so the map stays accurate — a new skill it never mentions, or a stale one it still routes to, is a router that lies.
+Also run `claude plugin validate . --strict` when the Claude manifest changes,
+when that CLI is available. The repository validator enforces the shared
+manifest versions, flat released-skill layout, skill metadata, released-skill
+parity, marketplace source, and relative Markdown links.
 
-To (re)link every skill into the local harness skill directories (`~/.claude/skills`, `~/.agents/skills`), run `scripts/link-skills.sh`. Each entry is a symlink into this repo, so a `git pull` keeps installed skills current; re-run the script after adding, removing, or renaming a skill.
+Invocation policy is client-specific. Codex skills that require explicit
+invocation use `policy.allow_implicit_invocation: false` in
+`agents/openai.yaml`; portable `SKILL.md` frontmatter stays within the shared
+Agent Skills schema. See [.agents/invocation.md](./.agents/invocation.md).
+
+The inherited `ask-matt` and `setup-matt-pocock-skills` names remain only for
+the 0.1 foundation baseline. Rename and adapt them coherently in Phase 2,
+including skill references, docs, routing, manifests, and migration notes.
+
+Do not automatically commit or push changes. Preserve upstream attribution in
+`UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog
+history.

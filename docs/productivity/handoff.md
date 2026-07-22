@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=handoff
 npx skills update handoff
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff)
+[Source](https://github.com/emipac/skills/tree/main/skills/handoff)
 
 ## What it does
 

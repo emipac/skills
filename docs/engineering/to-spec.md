@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=to-spec
 npx skills update to-spec
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/to-spec)
+[Source](https://github.com/emipac/skills/tree/main/skills/to-spec)
 
 ## What it does
 

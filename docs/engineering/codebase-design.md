@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=codebase-design
 npx skills update codebase-design
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/codebase-design)
+[Source](https://github.com/emipac/skills/tree/main/skills/codebase-design)
 
 ## What it does
 

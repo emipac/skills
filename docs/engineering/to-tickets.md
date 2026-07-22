@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=to-tickets
 npx skills update to-tickets
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/to-tickets)
+[Source](https://github.com/emipac/skills/tree/main/skills/to-tickets)
 
 ## What it does
 

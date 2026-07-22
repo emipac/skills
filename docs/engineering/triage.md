@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=triage
 npx skills update triage
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/triage)
+[Source](https://github.com/emipac/skills/tree/main/skills/triage)
 
 ## What it does
 

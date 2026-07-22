@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=code-review
 npx skills update code-review
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/code-review)
+[Source](https://github.com/emipac/skills/tree/main/skills/code-review)
 
 ## What it does
 

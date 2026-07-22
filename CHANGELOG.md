@@ -1,4 +1,16 @@
-# mattpocock-skills
+# ai-skills-framework
+
+## 0.1.0
+
+### Foundation
+
+- Fork Matt Pocock's composable skill set under the Minic-maintained AI Skills Framework identity.
+- Flatten released skills under `skills/` while separating experimental and deprecated work from installable releases.
+- Add universal `npx skills`, Claude Code plugin, and Codex plugin distribution metadata.
+- Make `package.json` the authoritative version and add deterministic repository and installation validation.
+- Record upstream provenance, third-party licensing, lifecycle phases, release cadence, and 1.0 acceptance criteria.
+
+## Upstream history
 
 ## 1.1.0
 

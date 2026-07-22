@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=setup-matt-pocock-skills
 npx skills update setup-matt-pocock-skills
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/setup-matt-pocock-skills)
+[Source](https://github.com/emipac/skills/tree/main/skills/setup-matt-pocock-skills)
 
 ## What it does
 

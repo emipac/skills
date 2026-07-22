@@ -1,11 +1,11 @@
-# Matt Pocock Skills
+# AI Skills Framework
 
-A collection of agent skills (slash commands and behaviors) loaded by Claude Code. Skills are organized into buckets and consumed by per-repo configuration emitted by `/setup-matt-pocock-skills`.
+A Minic-maintained collection of agent skills for a deterministic, TDD-oriented Laravel development lifecycle with adaptable TypeScript frontends. Released skills are flat under `skills/` and are distributed through universal, Claude Code, and Codex installers. The inherited `/setup-matt-pocock-skills` name remains temporarily during the 0.1 foundation phase.
 
 ## Language
 
 **Issue tracker**:
-The tool that hosts a repo's issues — GitHub Issues, Linear, a local `.scratch/` markdown convention, or similar. Skills like `to-tickets`, `to-spec`, `triage`, and `qa` read from and write to it.
+The tool that hosts a repo's issues — GitHub Issues, Jira, Linear, or a local Markdown convention. Skills like `to-tickets`, `to-spec`, and `triage` read from and write to it through tracker-specific instructions.
 _Avoid_: backlog manager, backlog backend, issue host
 
 **Issue**:

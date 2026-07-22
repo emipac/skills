@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=implement
 npx skills update implement
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/implement)
+[Source](https://github.com/emipac/skills/tree/main/skills/implement)
 
 ## What it does
 

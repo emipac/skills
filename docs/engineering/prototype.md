@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=prototype
 npx skills update prototype
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/prototype)
+[Source](https://github.com/emipac/skills/tree/main/skills/prototype)
 
 ## What it does
 

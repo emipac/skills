@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=research
 npx skills update research
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/research)
+[Source](https://github.com/emipac/skills/tree/main/skills/research)
 
 ## What it does
 

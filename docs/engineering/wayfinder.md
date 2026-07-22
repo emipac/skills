@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=wayfinder
 npx skills update wayfinder
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/wayfinder)
+[Source](https://github.com/emipac/skills/tree/main/skills/wayfinder)
 
 ## What it does
 

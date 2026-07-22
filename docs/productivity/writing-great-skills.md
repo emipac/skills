@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=writing-great-skills
 npx skills update writing-great-skills
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-great-skills)
+[Source](https://github.com/emipac/skills/tree/main/skills/writing-great-skills)
 
 ## What it does
 

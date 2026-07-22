@@ -8,7 +8,7 @@ npx skills add mattpocock/skills --skill=improve-codebase-architecture
 npx skills update improve-codebase-architecture
 ```
 
-[Source](https://github.com/mattpocock/skills/tree/main/skills/engineering/improve-codebase-architecture)
+[Source](https://github.com/emipac/skills/tree/main/skills/improve-codebase-architecture)
 
 ## What it does
 
