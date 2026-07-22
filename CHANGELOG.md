@@ -1,5 +1,14 @@
 # ai-skills-framework
 
+## 0.5.0
+
+### Minor Changes
+
+- [#6](https://github.com/emipac/skills/pull/6) [`583206d`](https://github.com/emipac/skills/commit/583206d4ebfcffd9ef9ed14bc163476e265ad7f5) Thanks [@emipac](https://github.com/emipac)! - Add deterministic Laravel and TypeScript verification profiles, the
+  `verify-change` evidence ladder, independent Standards/Contract/Evidence code
+  review, and selective durable synchronization. Existing schema version 1
+  projects must rerun `framework-setup` to generate schema version 2.
+
 ## 0.4.0
 
 ### Minor Changes
