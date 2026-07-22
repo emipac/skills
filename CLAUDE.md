@@ -55,6 +55,13 @@ explicit amendment decisions, and explicit commit/push authorization. Contract
 changes require unit coverage for traceability, blockers, cycles, assumptions,
 and readiness.
 
+`framework-setup` schema version 2 owns verification profiles, capabilities,
+and exact commands. `verify-change` must retain deterministic impact ordering,
+exact command evidence, justified skips, and mandatory smoke or browser
+coverage for user-facing work. `code-review` must keep Standards, Contract, and
+Evidence findings independent. Durable synchronization requires an explicit
+owning artifact and decision gate.
+
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog
 history.

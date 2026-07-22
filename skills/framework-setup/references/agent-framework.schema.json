@@ -16,7 +16,7 @@
     "protected_files"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "backend": { "enum": ["laravel", "unknown"] },
     "frontend": {
       "enum": [
@@ -47,7 +47,24 @@
     },
     "verification": {
       "type": "object",
-      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+      "additionalProperties": false,
+      "required": ["profile", "capabilities", "commands"],
+      "properties": {
+        "profile": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
+        }
+      }
     },
     "history": {
       "type": "object",

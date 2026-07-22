@@ -59,6 +59,25 @@ implementation learning would change observable behavior, safeguards,
 acceptance evidence, non-goals, public interfaces, or durable architecture.
 Private implementation choices do not require one.
 
+**Verification profile**:
+The configured Laravel/frontend evidence contract containing proved
+capabilities and exact commands. It is selected by project stack and consumed
+by `verify-change`.
+
+**Evidence ladder**:
+An impact-based verification order progressing from focused behavior through
+formatting, static analysis, affected tests, smoke, build, browser, and broad
+tests. Each required step records its exact command and outcome.
+
+**Three-axis review**:
+Independent Standards, Contract, and Evidence review passes over one fixed
+diff. Findings remain separate so correctness on one axis cannot hide failure
+on another.
+
+**Durable synchronization**:
+The selective update of the SRS, glossary, ADRs, tracker evidence, or history
+after an explicit owning decision. Private implementation remains code truth.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
@@ -70,6 +89,9 @@ Private implementation choices do not require one.
 - A **Feature contract** decomposes into many **Delivery contracts**
 - A **Delivery contract** is the normative body of one implementation **Issue**
 - A **Readiness gate** controls progression from SRS to feature contract, delivery contract, and implementation
+- A **Verification profile** produces an **Evidence ladder** for one **Delivery contract**
+- A **Three-axis review** evaluates the implementation after its **Evidence ladder** passes
+- **Durable synchronization** records only accepted long-lived learning
 
 ## Flagged ambiguities
 

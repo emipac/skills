@@ -84,16 +84,29 @@ test('discovers Laravel, frontend, and existing project guidance', async (contex
   ]);
   assert.deepEqual(discovery.srsCandidates, ['docs/specifications/srs.md']);
   assert.deepEqual(discovery.verification, {
-    format: ['vendor/bin/pint --dirty --format agent'],
-    static_analysis: [
-      'vendor/bin/phpstan analyse',
-      'npm run lint',
-      'npm run typecheck',
+    profile: 'laravel-react-typescript',
+    capabilities: [
+      'frontend-build',
+      'frontend-e2e',
+      'frontend-lint',
+      'frontend-tests',
+      'laravel-format',
+      'laravel-static-analysis',
+      'laravel-tests',
+      'typescript',
     ],
-    test: ['php artisan test --compact', 'npm run test'],
-    smoke: [],
-    build: ['npm run build'],
-    e2e: ['npm run e2e'],
+    commands: {
+      format: ['vendor/bin/pint --dirty --format agent'],
+      static_analysis: [
+        'vendor/bin/phpstan analyse',
+        'npm run lint',
+        'npm run typecheck',
+      ],
+      test: ['php artisan test --compact', 'npm run test'],
+      smoke: [],
+      build: ['npm run build'],
+      e2e: ['npm run e2e'],
+    },
   });
 });
 
@@ -138,8 +151,10 @@ test('configuration is idempotent and preserves AGENTS.md byte-for-byte', async 
     await readFile(path.join(projectRoot, 'packages', 'module', 'AGENTS.md')),
     moduleAgentsBefore,
   );
-  assert.match(firstConfiguration, /^  smoke: \[\]$/m);
-  assert.match(firstConfiguration, /^schema_version: 1$/m);
+  assert.match(firstConfiguration, /^    smoke: \[\]$/m);
+  assert.match(firstConfiguration, /^schema_version: 2$/m);
+  assert.match(firstConfiguration, /^  profile: laravel-react-typescript$/m);
+  assert.match(firstConfiguration, /^    - laravel-tests$/m);
   assert.match(firstConfiguration, /^tracker: linear$/m);
   assert.match(firstConfiguration, /^backend: laravel$/m);
   assert.match(firstConfiguration, /^frontend: react-typescript$/m);

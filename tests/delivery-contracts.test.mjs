@@ -143,7 +143,7 @@ No password reset or social login.
 
 | Layer | Evidence | Command or capability | Required |
 | --- | --- | --- | --- |
-| Feature | Authentication behavior | php artisan test --compact --filter=SignIn | Yes |
+| Feature | AC-AUTH-001 and AC-AUTH-002 authentication behavior | php artisan test --compact --filter=SignIn | Yes |
 | Static | Type correctness | vendor/bin/phpstan analyse | Yes |
 
 ## Blocked By
@@ -257,6 +257,23 @@ test('rejects a ready ticket with an unresolved blocking assumption', () => {
 
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.code === 'blocking-assumption'));
+});
+
+test('rejects acceptance criteria missing from the verification matrix', () => {
+  const invalidTicket = ticket({ id: 'TB-001' }).replace(
+    'AC-AUTH-001 and AC-AUTH-002 authentication behavior',
+    'AC-AUTH-001 authentication behavior',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: invalidTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => (
+    error.code === 'unverified-acceptance'
+    && error.message.includes('AC-AUTH-002')
+  )));
 });
 
 test('declares feature, ticket, and implementation lifecycle evaluations', async () => {

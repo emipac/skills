@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "laravel-react-user-workflow",
+      "prompt": "Verify a Laravel endpoint and React form change using the ready delivery contract.",
+      "assertions": [
+        "Uses configured commands only",
+        "Orders focused evidence before broad suites",
+        "Requires build and smoke or browser evidence",
+        "Reports exact outcomes and acceptance IDs"
+      ]
+    },
+    {
+      "id": "backend-only-impact",
+      "prompt": "Verify an internal Laravel model change with no browser-visible behavior.",
+      "assertions": [
+        "Runs Laravel checks",
+        "Skips frontend build and E2E with reasons",
+        "Reports exact command outcomes",
+        "Runs broad tests after narrow checks"
+      ]
+    },
+    {
+      "id": "missing-browser-capability",
+      "prompt": "Verify a user-facing Livewire workflow when no smoke or browser command is configured.",
+      "assertions": [
+        "Reports a required capability gap",
+        "Does not invent a command",
+        "Does not declare verification complete",
+        "Routes the gap back to setup or contract amendment"
+      ]
+    }
+  ]
+}

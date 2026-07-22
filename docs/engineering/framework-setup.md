@@ -8,7 +8,9 @@ npx skills add emipac/skills --skill framework-setup
 
 `framework-setup` deterministically discovers Laravel and frontend profiles,
 SRS and domain artifacts, repository guidelines, history policy, protected
-instruction files, and verification commands. After confirmation it writes
+instruction files, and verification profiles. Schema version 2 records proved
+capabilities and package-manager-correct commands for Laravel, Livewire,
+React/TypeScript, or Svelte/TypeScript. After confirmation it writes
 `.agent-framework.yaml` and the selected tracker reference.
 
 When no SRS exists, setup reserves `docs/specifications/srs.md` for

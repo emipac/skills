@@ -92,7 +92,35 @@ const walkFiles = async (directory, projectRoot, files = []) => {
 
 const sortUnique = (values) => [...new Set(values)].sort();
 
-const discoverVerification = async (projectRoot, packageManifest) => {
+const detectPackageManager = async (projectRoot) => {
+  for (const [lockfile, packageManager] of [
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['bun.lock', 'bun'],
+    ['bun.lockb', 'bun'],
+    ['package-lock.json', 'npm'],
+  ]) {
+    if (await exists(path.join(projectRoot, lockfile))) {
+      return packageManager;
+    }
+  }
+
+  return 'npm';
+};
+
+const packageScriptCommand = (packageManager, script) => {
+  if (packageManager === 'yarn') {
+    return `yarn ${script}`;
+  }
+
+  return `${packageManager} run ${script}`;
+};
+
+export const discoverVerification = async (
+  projectRoot,
+  packageManifest,
+  { backend, frontend },
+) => {
   const commands = {
     format: [],
     static_analysis: [],
@@ -101,37 +129,57 @@ const discoverVerification = async (projectRoot, packageManifest) => {
     build: [],
     e2e: [],
   };
+  const capabilities = new Set();
   const detectedFiles = [
-    ['vendor/bin/pint', 'format', 'vendor/bin/pint --dirty --format agent'],
-    ['vendor/bin/phpstan', 'static_analysis', 'vendor/bin/phpstan analyse'],
-    ['artisan', 'test', 'php artisan test --compact'],
+    [
+      'vendor/bin/pint',
+      'format',
+      'vendor/bin/pint --dirty --format agent',
+      'laravel-format',
+    ],
+    [
+      'vendor/bin/phpstan',
+      'static_analysis',
+      'vendor/bin/phpstan analyse',
+      'laravel-static-analysis',
+    ],
+    ['artisan', 'test', 'php artisan test --compact', 'laravel-tests'],
   ];
 
-  for (const [relativePath, category, command] of detectedFiles) {
+  for (const [relativePath, category, command, capability] of detectedFiles) {
     if (await exists(path.join(projectRoot, relativePath))) {
       commands[category].push(command);
+      capabilities.add(capability);
     }
   }
 
   const scriptCategories = {
-    format: 'format',
-    lint: 'static_analysis',
-    typecheck: 'static_analysis',
-    'type-check': 'static_analysis',
-    test: 'test',
-    smoke: 'smoke',
-    build: 'build',
-    e2e: 'e2e',
-    'test:e2e': 'e2e',
+    format: ['format', 'frontend-format'],
+    lint: ['static_analysis', 'frontend-lint'],
+    typecheck: ['static_analysis', 'typescript'],
+    'type-check': ['static_analysis', 'typescript'],
+    test: ['test', 'frontend-tests'],
+    smoke: ['smoke', 'smoke-tests'],
+    build: ['build', 'frontend-build'],
+    e2e: ['e2e', 'frontend-e2e'],
+    'test:e2e': ['e2e', 'frontend-e2e'],
   };
+  const packageManager = await detectPackageManager(projectRoot);
 
-  for (const [script, category] of Object.entries(scriptCategories)) {
+  for (const [script, [category, capability]] of Object.entries(scriptCategories)) {
     if (packageManifest.scripts?.[script]) {
-      commands[category].push(`npm run ${script}`);
+      commands[category].push(packageScriptCommand(packageManager, script));
+      capabilities.add(capability);
     }
   }
 
-  return commands;
+  const profile = frontend === 'none' ? backend : `${backend}-${frontend}`;
+
+  return {
+    profile,
+    capabilities: sortUnique(capabilities),
+    commands,
+  };
 };
 
 const discoverFrontend = (composerPackages, nodePackages) => {
@@ -181,11 +229,13 @@ export const discoverProject = async (projectRoot) => {
     ].includes(basename) || filePath.startsWith(`docs${path.sep}conventions${path.sep}`);
   });
   const markdownFiles = allFiles.filter((filePath) => filePath.endsWith('.md'));
+  const backend = composerPackages['laravel/framework'] ? 'laravel' : 'unknown';
+  const frontend = discoverFrontend(composerPackages, nodePackages);
 
   return {
     projectRoot: resolvedRoot,
-    backend: composerPackages['laravel/framework'] ? 'laravel' : 'unknown',
-    frontend: discoverFrontend(composerPackages, nodePackages),
+    backend,
+    frontend,
     gitRemotes,
     recommendedTracker: gitRemotes.some((remote) => /github\.com[:/]/i.test(remote.url))
       ? 'github'
@@ -208,7 +258,11 @@ export const discoverProject = async (projectRoot) => {
         .filter((filePath) => /(?:^|\/)history\//i.test(filePath))
         .map((filePath) => path.dirname(filePath)),
     ),
-    verification: await discoverVerification(resolvedRoot, packageManifest),
+    verification: await discoverVerification(
+      resolvedRoot,
+      packageManifest,
+      { backend, frontend },
+    ),
   };
 };
 
@@ -255,10 +309,15 @@ const renderConfiguration = (configuration) => {
   ];
 
   appendYamlList(lines, 'guidelines', configuration.guidelines);
-  lines.push('verification:');
+  lines.push(
+    'verification:',
+    `  profile: ${yamlScalar(configuration.verification.profile)}`,
+  );
+  appendYamlList(lines, 'capabilities', configuration.verification.capabilities, 2);
+  lines.push('  commands:');
 
-  for (const [category, commands] of Object.entries(configuration.verification)) {
-    appendYamlList(lines, category, commands, 2);
+  for (const [category, commands] of Object.entries(configuration.verification.commands)) {
+    appendYamlList(lines, category, commands, 4);
   }
 
   lines.push(
@@ -342,7 +401,7 @@ export const configureProject = async ({ projectRoot, selections }) => {
     discovery.protectedFiles,
   );
   const configuration = {
-    schema_version: 1,
+    schema_version: 2,
     backend,
     frontend,
     tracker,

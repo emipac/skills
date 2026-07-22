@@ -1,89 +1,86 @@
 ---
 name: code-review
-description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+description: Review a branch, pull request, or fixed diff through three independent axes — Standards, Contract, and Evidence — with traceable findings for conventions, intent drift, safeguards, scope, and verification sufficiency.
 ---
 
-Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+# Code Review
 
-- **Standards** — does the code conform to this repo's documented coding standards?
-- **Spec** — does the code faithfully implement the originating issue / PRD / spec?
+Review one fixed diff through three independent lenses. Do not let a clean axis
+cancel findings from another.
 
-Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+## 1. Pin the review surface
 
-Read `.agent-framework.yaml` and its configured tracker document. Run `/framework-setup` if the configuration is missing.
+Resolve the user-supplied fixed point and capture these commands once:
 
-## Process
+```bash
+git rev-parse <fixed-point>
+git diff <fixed-point>...HEAD
+git log <fixed-point>..HEAD --oneline
+```
 
-### 1. Pin the fixed point
+Ask for the fixed point only when the user did not supply one. Stop on a bad
+reference or empty diff.
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+Completion criterion: one immutable merge-base diff and commit list define the
+entire review.
 
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+## 2. Load normative sources
 
-Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
+Read `.agent-framework.yaml`, every configured guideline, the originating
+delivery contract and comments, parent feature contract, linked SRS
+requirements and safeguards, accepted contract amendments, red-green evidence,
+and the final verification report. Resolve tracker references through the
+configured adapter.
 
-### 2. Identify the spec source
+When no delivery contract exists, use the best available issue or spec and
+mark missing contract/evidence sources rather than inventing them.
 
-Look for the originating spec, in this order:
+Completion criterion: every available standard, requirement, safeguard,
+non-goal, acceptance ID, and evidence source is indexed before review begins.
 
-1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.
-2. A path the user passed as an argument.
-3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+## 3. Run three independent review passes
 
-### 3. Identify the standards sources
+Use isolated subagents in parallel when the client supports them and the user
+has authorized delegation. Otherwise run three separate sequential passes,
+discarding provisional conclusions between passes. Each pass reads the same
+diff but only its own sources:
 
-Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+- **Standards** — apply configured repository rules and
+  [the standards baseline](references/standards-baseline.md). Report documented
+  violations separately from judgement-call smells. Repository rules override
+  the baseline.
+- **Contract** — compare the diff with SRS, feature, and delivery intent. Find
+  missing or partial behavior, scope additions, safeguard or non-goal
+  violations, incorrect behavior, implicit decisions, and intent drift not
+  covered by an accepted amendment.
+- **Evidence** — map every acceptance ID and affected safeguard to red-green
+  evidence and final verification. Find missing tests, stale passes, command
+  substitutions, unjustified skips, insufficient assertions, and user-facing
+  changes without smoke or browser evidence.
 
-On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+Every finding cites the changed file/hunk and its normative source or missing
+evidence row. Use `P0` through `P3` severity within each axis.
 
-- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
-- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — and, like any standard here, skip anything tooling already enforces.
+Completion criterion: all three passes cover the complete diff without seeing
+or adapting to another pass's findings.
 
-Each smell reads *what it is* → *how to fix*; match it against the diff:
+## 4. Reconcile without blending
 
-- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
-- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
-- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.
-- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
-- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
-- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
-- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
-- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
-- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
-- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
-- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
-- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+Deduplicate only identical findings within the same axis. Keep the three axes
+under separate headings and never produce one cross-axis score. An item that
+appears in multiple axes remains in each because its consequence differs.
 
-### 4. Spawn both sub-agents in parallel
+Use [the review report](references/review-report.md). Report zero findings
+explicitly for a clean axis and name unavailable sources or skipped evidence.
 
-Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+Completion criterion: each axis has its own findings, worst severity, and
+source-completeness statement.
 
-**Standards sub-agent prompt** — include:
+## 5. Propose the next action
 
-- The full diff command and commit list.
-- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
-- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+Return actionable fixes for in-scope findings. Contract or durable knowledge
+changes require an explicit contract-amendment decision before implementation;
+review never silently rewrites the SRS, glossary, ADRs, ticket, or history.
 
-**Spec sub-agent prompt** — include:
-
-- The diff command and commit list.
-- The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
-
-If the spec is missing, skip the Spec sub-agent and note this in the final report.
-
-### 5. Aggregate
-
-Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
-
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
-
-## Why two axes
-
-A change can pass one axis and fail the other:
-
-- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
-- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
-
-Reporting them separately stops one axis from masking the other.
+Completion criterion: every finding is fixed, accepted as a contract amendment,
+deferred with an owner, or left as an explicit blocker.
