@@ -1,5 +1,16 @@
 # ai-skills-framework
 
+## 0.2.0
+
+### Minor Changes
+
+- [`84019d7`](https://github.com/emipac/skills/commit/84019d754c38478c0334d3b579ffc1302fcf7962) Thanks [@tzsoltt](https://github.com/tzsoltt)! - Add the Phase 2 framework backbone: deterministic `framework-setup`, the
+  `.agent-framework.yaml` contract, Laravel and TypeScript frontend discovery,
+  idempotent protected-file handling, local/GitHub/Jira/Linear tracker adapters,
+  and the renamed `framework-router`. Preserve Matt Pocock's language-agnostic
+  vocabulary and tracer-bullet lifecycle while moving project configuration onto
+  a portable cross-client seam.
+
 ## 0.1.0
 
 ### Foundation
