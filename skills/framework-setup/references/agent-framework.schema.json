@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/emipac/skills/blob/main/skills/framework-setup/references/agent-framework.schema.json",
+  "title": "AI Skills Framework configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "backend",
+    "frontend",
+    "tracker",
+    "artifacts",
+    "guidelines",
+    "verification",
+    "history",
+    "protected_files"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "backend": { "enum": ["laravel", "unknown"] },
+    "frontend": {
+      "enum": [
+        "livewire",
+        "react-typescript",
+        "svelte-typescript",
+        "none",
+        "unknown"
+      ]
+    },
+    "tracker": {
+      "enum": ["local-markdown", "github", "jira", "linear"]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["srs", "glossary", "adrs"],
+      "properties": {
+        "srs": { "type": ["string", "null"] },
+        "glossary": { "type": ["string", "null"] },
+        "adrs": { "type": ["string", "null"] }
+      }
+    },
+    "guidelines": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "required"],
+      "properties": {
+        "path": { "type": ["string", "null"] },
+        "required": { "type": "boolean" }
+      }
+    },
+    "protected_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    }
+  }
+}

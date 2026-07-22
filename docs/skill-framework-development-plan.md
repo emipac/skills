@@ -156,7 +156,7 @@ After successful implementation and review:
 
 ## Proposed core skills
 
-### User-invoked
+### Explicitly invoked
 
 - `framework-setup`
 - `framework-router`
@@ -282,7 +282,7 @@ Framework defaults must yield to applicable project instructions and conventions
 
 #### Current status — 2026-07-22
 
-Implemented and verified locally:
+Completed and published as `v0.1.0`:
 
 - Created and cloned the public `emipac/skills` fork with `origin` and `upstream` remotes.
 - Recorded Matt's baseline commit `ed37663cc5fbef691ddfecd080dff42f7e7e350d` and OpenSPDD's analysis baseline in `UPSTREAM.md`.
@@ -293,14 +293,8 @@ Implemented and verified locally:
 - Added repository validation for skill metadata, links, manifests, layout, marketplace source, and version parity.
 - Added CI validation and isolated universal installation smoke tests for Codex, Claude Code, and Cursor.
 - Validated all 22 released skills and the native Codex plugin with the official bundled validators.
-- Confirmed the universal skills CLI discovers exactly 22 released skills and installs a representative skill for all three primary clients.
-
-Remaining before Phase 1 is published:
-
-- Review and commit the local foundation changes.
-- Push them to `emipac/skills`.
-- Repeat the universal installation smoke test against the remote `emipac/skills` source rather than the local checkout.
-- Run the Claude plugin validator once outside the current lean-context command allowlist.
+- Confirmed the universal skills CLI discovers exactly 22 released skills and installs a representative skill for all three primary clients from the published GitHub source.
+- Published commit `cd72a4487af12c15ffbcd2ff8f6ec4d00a2d14fc` and release tag `v0.1.0`; GitHub Validate and Release workflows passed.
 
 ### Phase 2 — Preserve Matt's backbone
 
@@ -319,6 +313,24 @@ Remaining before Phase 1 is published:
 - Setup is idempotent.
 - Existing repository instructions are discovered and respected.
 - An automated test proves `AGENTS.md` remains byte-for-byte unchanged.
+
+#### Current status — 2026-07-22
+
+Implemented locally for `0.2.0`:
+
+- Preserved the 20 unchanged supporting skills and their language-agnostic vocabulary.
+- Renamed `ask-matt` to `framework-router` while retaining its main flow, on-ramps, wayfinder branch, tracer bullets, TDD, and review sequence.
+- Replaced prompt-only `setup-matt-pocock-skills` with deterministic `framework-setup` and `.agent-framework.yaml` schema version 1.
+- Added discovery for Laravel, Livewire, React with TypeScript, Svelte with TypeScript, SRS/glossary/ADR paths, project instructions, history policy, and existing verification commands.
+- Added local Markdown, GitHub Issues, Jira, and Linear tracker adapters.
+- Added unit tests proving setup idempotency, explicit unresolved values, all four adapters, and byte-for-byte protection of every discovered `AGENTS.md`.
+- Recorded every material divergence from Matt's baseline in `UPSTREAM.md`.
+- Completed repository validation, all released-skill validators, unit tests, dependency audit, native Codex plugin validation, and isolated Codex, Claude Code, and Cursor installation smoke tests.
+
+Remaining before publication:
+
+- Review, commit, and push the Phase 2 changes when explicitly authorized.
+- Merge the Changesets version pull request to publish `0.2.0` at the agreed release point.
 
 ### Phase 3 — SRS lifecycle
 

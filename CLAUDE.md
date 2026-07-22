@@ -26,6 +26,7 @@ changing it. Before handing off repository changes, run:
 
 ```bash
 npm run validate
+npm run test:unit
 npm run test:install
 ```
 
@@ -39,9 +40,9 @@ invocation use `policy.allow_implicit_invocation: false` in
 `agents/openai.yaml`; portable `SKILL.md` frontmatter stays within the shared
 Agent Skills schema. See [.agents/invocation.md](./.agents/invocation.md).
 
-The inherited `ask-matt` and `setup-matt-pocock-skills` names remain only for
-the 0.1 foundation baseline. Rename and adapt them coherently in Phase 2,
-including skill references, docs, routing, manifests, and migration notes.
+`framework-setup` owns deterministic project discovery and configuration.
+Changes to it must retain unit coverage proving repeat runs are byte-identical
+and every discovered `AGENTS.md` remains byte-for-byte unchanged.
 
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog

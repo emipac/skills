@@ -1,6 +1,6 @@
 # AI Skills Framework
 
-A Minic-maintained collection of agent skills for a deterministic, TDD-oriented Laravel development lifecycle with adaptable TypeScript frontends. Released skills are flat under `skills/` and are distributed through universal, Claude Code, and Codex installers. The inherited `/setup-matt-pocock-skills` name remains temporarily during the 0.1 foundation phase.
+A Minic-maintained collection of agent skills for a deterministic, TDD-oriented Laravel development lifecycle with adaptable TypeScript frontends. Released skills are flat under `skills/` and are distributed through universal, Claude Code, and Codex installers. `/framework-setup` records repository-local conventions in `.agent-framework.yaml`; `/framework-router` selects the lifecycle route.
 
 ## Language
 

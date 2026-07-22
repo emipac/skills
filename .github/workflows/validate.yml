@@ -25,5 +25,8 @@ jobs:
       - name: Validate repository
         run: npm run validate
 
+      - name: Run unit tests
+        run: npm run test:unit
+
       - name: Smoke-test universal installation
         run: npm run test:install

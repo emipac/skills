@@ -27,9 +27,9 @@ Reach for it whenever you're authoring a new skill or editing an existing one an
 The concept the whole reference turns on is **cognitive load** — and its counterpart, **context load**. Every skill spends one or the other:
 
 - A **model-invoked** skill keeps a description in the window every turn, so it costs **context load** but fires on its own.
-- A **user-invoked** skill strips that description; it costs zero context load, but now *you* are the index that has to remember it exists — that's **cognitive load**.
+- An **explicitly invoked** skill keeps a concise portable description and uses client policy to suppress implicit invocation where supported; the human remains the index, which spends **cognitive load**.
 
-Most of these skills are user-invoked, which is why cognitive load is the pressure the whole system is built to manage: when user-invoked skills multiply past what you can hold in your head, the cure is a **router skill** that names the others and when to reach for each. Once you're thinking in these two loads, most authoring decisions — split or don't, inline or disclose, model- or user-invoked — become the same trade made in different places.
+Most lifecycle workflows are explicitly invoked, which is why cognitive load is the pressure the system manages: when workflows multiply past what you can hold in your head, a **router skill** names the routes and when to reach each one. Once you're thinking in these two loads, most authoring decisions become the same trade made in different places.
 
 ## The other levers
 
@@ -42,4 +42,4 @@ The rest of the reference is the toolkit for spending those loads well:
 
 ## Where it fits
 
-This is a reach-for-it-anytime standalone reference — the meta-skill you consult while building the rest of the set, not a step in a chain. Its natural neighbour is any router you maintain, because a router is the direct cure for the cognitive load that user-invoked skills pile up; when you're unsure which skill or flow fits a task, [ask-matt](https://aihero.dev/skills-ask-matt) routes you over the whole set.
+This is a reach-for-it-anytime standalone reference — the meta-skill you consult while building the rest of the set, not a step in a chain. Its natural neighbour is any router you maintain, because a router is the direct cure for the cognitive load that explicitly invoked skills pile up; when you're unsure which skill or flow fits a task, [framework-router](../engineering/framework-router.md) routes you over the whole set.

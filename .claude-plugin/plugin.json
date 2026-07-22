@@ -19,11 +19,12 @@
     "productivity"
   ],
   "skills": [
-    "./skills/ask-matt",
     "./skills/code-review",
     "./skills/codebase-design",
     "./skills/diagnosing-bugs",
     "./skills/domain-modeling",
+    "./skills/framework-router",
+    "./skills/framework-setup",
     "./skills/grill-me",
     "./skills/grill-with-docs",
     "./skills/grilling",
@@ -33,7 +34,6 @@
     "./skills/prototype",
     "./skills/research",
     "./skills/resolving-merge-conflicts",
-    "./skills/setup-matt-pocock-skills",
     "./skills/tdd",
     "./skills/teach",
     "./skills/to-spec",

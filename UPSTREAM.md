@@ -27,3 +27,22 @@ OpenSPDD's Java/Spring vocabulary, exhaustive class and method inventories, immu
 - Attribute copied or substantially adapted text to its source.
 - Keep AI Skills Framework artifacts, configuration schemas, and Laravel/TypeScript profiles owned by Minic.
 - Treat code as implementation truth, tests as behavioral evidence, and long-lived documents as durable intent rather than mirrors of implementation details.
+
+## Intentional divergences
+
+### Phase 2 — framework setup and routing
+
+- Renamed upstream `ask-matt` to `framework-router`; its flow, tracer-bullet
+  vocabulary, wayfinder on-ramp, and supporting disciplines remain intact.
+- Replaced `setup-matt-pocock-skills` with `framework-setup` and a versioned
+  `.agent-framework.yaml` contract.
+- Replaced prompt-only setup writes to `AGENTS.md` or `CLAUDE.md` with a
+  deterministic script that treats instruction files as read-only inputs.
+- Added Laravel, Livewire, React/TypeScript, and Svelte/TypeScript discovery.
+- Made local Markdown, GitHub Issues, Jira, and Linear first-class tracker
+  adapters. GitLab remains available in upstream history but is not a Phase 2
+  framework contract.
+- Updated dependent skills only at the configuration seam; their domain,
+  architecture, TDD, vertical-slice, and review behavior remains upstream.
+- Adapted `writing-great-skills` invocation guidance to portable Agent Skills
+  frontmatter and client-specific implicit-invocation policy.

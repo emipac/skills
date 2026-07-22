@@ -1,11 +1,15 @@
 ---
-name: ask-matt
-description: Ask which skill or flow fits your situation. A router over the skills in this repo.
+name: framework-router
+description: Route a development situation through AI Skills Framework. Use when the user is unsure where to start, which lifecycle branch fits, or what skill should run next.
 ---
 
-# Ask Matt
+# Framework Router
 
-You don't remember every skill, so ask.
+Orient to the right flow without doing the downstream work.
+
+Read `.agent-framework.yaml` when it exists. If an engineering flow needs
+project configuration and the file is missing, route to `/framework-setup`
+before continuing.
 
 A **flow** is a path through the skills. Most paths run along one **main flow**, and two **on-ramps** merge onto it. Everything else is standalone, or a vocabulary layer that runs underneath.
 
@@ -74,4 +78,4 @@ Off the main flow entirely.
 
 ## Precondition
 
-**`/setup-matt-pocock-skills`** — run before your first engineering flow to configure the issue tracker, triage labels, and doc layout the other skills assume. Custom issue trackers also work.
+**`/framework-setup`** — run before the first engineering flow to discover project instructions, select the tracker adapter, record artifact paths and verification commands, and protect `AGENTS.md`.

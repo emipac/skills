@@ -1,0 +1,6 @@
+interface:
+  display_name: "Framework Router"
+  short_description: "Find the right lifecycle route"
+  default_prompt: "Route this request through the appropriate AI Skills Framework flow."
+policy:
+  allow_implicit_invocation: false

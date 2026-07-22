@@ -4,7 +4,7 @@ AI Skills Framework is Minic's installable development lifecycle for Laravel bac
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** `0.1.0` package foundation. The current released catalog preserves upstream skill behavior while the Laravel-specific lifecycle is introduced through the planned milestone releases.
+> **Status:** Phase 2 development toward `0.2.0`: portable project setup and lifecycle routing now sit on the preserved upstream engineering backbone.
 
 ## Install with the universal skills CLI
 
@@ -49,13 +49,13 @@ See [the development plan](./docs/skill-framework-development-plan.md) for the l
 
 The `skills/` directory contains only released skills. Experimental, personal, miscellaneous, and deprecated upstream material lives outside the released discovery path.
 
-### User-invoked workflows
+### Explicitly invoked workflows
 
-- **[ask-matt](./skills/ask-matt/SKILL.md)** — Route a situation to the appropriate user-invoked workflow. This upstream name will be adapted in Phase 2.
+- **[framework-router](./skills/framework-router/SKILL.md)** — Route a situation to the appropriate lifecycle branch.
+- **[framework-setup](./skills/framework-setup/SKILL.md)** — Discover project instructions and write the protected, idempotent lifecycle configuration.
 - **[grill-with-docs](./skills/grill-with-docs/SKILL.md)** — Sharpen a plan while maintaining domain terminology and ADRs.
 - **[triage](./skills/triage/SKILL.md)** — Move issues through configured triage roles.
 - **[improve-codebase-architecture](./skills/improve-codebase-architecture/SKILL.md)** — Find deep-module opportunities and guide the selected improvement.
-- **[setup-matt-pocock-skills](./skills/setup-matt-pocock-skills/SKILL.md)** — Configure the inherited tracker and documentation conventions. This becomes the framework setup skill in Phase 2.
 - **[to-spec](./skills/to-spec/SKILL.md)** — Synthesize a feature specification.
 - **[to-tickets](./skills/to-tickets/SKILL.md)** — Produce vertical tracer-bullet tickets with blocking edges.
 - **[implement](./skills/implement/SKILL.md)** — Implement agreed work through TDD and review.
