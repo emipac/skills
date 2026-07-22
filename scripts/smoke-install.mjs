@@ -7,7 +7,14 @@ import process from 'node:process';
 const sourceRoot = process.cwd();
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
 const agents = ['codex', 'claude-code', 'cursor'];
-const smokeSkills = ['framework-router', 'framework-setup', 'srs-modeling'];
+const smokeSkills = [
+  'framework-router',
+  'framework-setup',
+  'srs-modeling',
+  'to-spec',
+  'to-tickets',
+  'implement',
+];
 
 try {
   await writeFile(
@@ -95,6 +102,48 @@ try {
       'evals',
       'cases.json',
     );
+    const featureAuditScript = path.join(
+      temporaryRoot,
+      installedRoot,
+      'to-spec',
+      'scripts',
+      'audit-feature-spec.mjs',
+    );
+    const featureContract = path.join(
+      temporaryRoot,
+      installedRoot,
+      'to-spec',
+      'references',
+      'feature-contract.md',
+    );
+    const ticketAuditScript = path.join(
+      temporaryRoot,
+      installedRoot,
+      'to-tickets',
+      'scripts',
+      'audit-ticket-contracts.mjs',
+    );
+    const deliveryContract = path.join(
+      temporaryRoot,
+      installedRoot,
+      'to-tickets',
+      'references',
+      'delivery-contract.md',
+    );
+    const implementationEvidence = path.join(
+      temporaryRoot,
+      installedRoot,
+      'implement',
+      'references',
+      'evidence-log.md',
+    );
+    const implementationAmendment = path.join(
+      temporaryRoot,
+      installedRoot,
+      'implement',
+      'references',
+      'contract-amendment.md',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);
@@ -126,6 +175,30 @@ try {
 
     if (!(await readFile(srsEvaluations, 'utf8')).includes('refine-existing-srs-surgically')) {
       throw new Error(`${agent}: SRS evaluations were not installed`);
+    }
+
+    if (!(await readFile(featureAuditScript, 'utf8')).includes('auditFeatureSpec')) {
+      throw new Error(`${agent}: feature contract auditor was not installed`);
+    }
+
+    if (!(await readFile(featureContract, 'utf8')).includes('Analysis matrix')) {
+      throw new Error(`${agent}: feature contract reference was not installed`);
+    }
+
+    if (!(await readFile(ticketAuditScript, 'utf8')).includes('auditTicketSet')) {
+      throw new Error(`${agent}: delivery contract auditor was not installed`);
+    }
+
+    if (!(await readFile(deliveryContract, 'utf8')).includes('Readiness gate')) {
+      throw new Error(`${agent}: delivery contract reference was not installed`);
+    }
+
+    if (!(await readFile(implementationEvidence, 'utf8')).includes('Red command')) {
+      throw new Error(`${agent}: implementation evidence reference was not installed`);
+    }
+
+    if (!(await readFile(implementationAmendment, 'utf8')).includes('Proposed contract amendment')) {
+      throw new Error(`${agent}: contract amendment reference was not installed`);
     }
   }
 

@@ -34,6 +34,31 @@ A stable negative-space constraint protecting one or more requirements by
 stating an invariant or prohibited outcome and the response to a violation.
 _Avoid_: guardrail (reserved for skill-execution boundaries)
 
+**Feature contract**:
+A `to-spec` planning artifact that extracts one cohesive delivery scope from
+the SRS and binds its requirements, acceptance criteria, safeguards, risks,
+non-goals, and public evidence seams. It is ready for decomposition, not ready
+for implementation.
+_Avoid_: feature SRS, implementation plan
+
+**Delivery contract**:
+The normative body of one implementation **Issue**: a vertical outcome, SRS
+traceability, public seam, safeguards, non-goals, acceptance evidence,
+verification matrix, assumptions, and blocking edges. `to-tickets` creates it;
+`implement` executes it.
+_Avoid_: REASONS Canvas, Operations script
+
+**Readiness gate**:
+A binary check that prevents a feature or delivery contract from advancing
+while references, public seams, evidence, blockers, or start-blocking decisions
+remain unresolved.
+
+**Contract amendment**:
+An explicit accepted, rejected, or deferred decision proposed when
+implementation learning would change observable behavior, safeguards,
+acceptance evidence, non-goals, public interfaces, or durable architecture.
+Private implementation choices do not require one.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
@@ -41,6 +66,10 @@ _Avoid_: guardrail (reserved for skill-execution boundaries)
 - A **Decision ticket** is an **Issue** (a child of a `wayfinder:map`)
 - An **SRS** contains many **Active requirements**
 - A **Safeguard** protects one or more SRS requirements
+- A **Feature contract** extracts one cohesive slice from an **SRS**
+- A **Feature contract** decomposes into many **Delivery contracts**
+- A **Delivery contract** is the normative body of one implementation **Issue**
+- A **Readiness gate** controls progression from SRS to feature contract, delivery contract, and implementation
 
 ## Flagged ambiguities
 

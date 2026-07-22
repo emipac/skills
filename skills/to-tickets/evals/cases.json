@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "skill": "to-tickets",
+  "cases": [
+    {
+      "id": "vertical-contract-graph",
+      "prompt": "Decompose a ready feature contract into independently verifiable tracer bullets.",
+      "assertions": [
+        "Every ticket delivers one complete end-to-end behavior and fits one fresh context.",
+        "Every ticket carries SRS, acceptance, safeguard, seam, and verification references.",
+        "Blocking edges are genuine, complete, and acyclic.",
+        "Every parent acceptance ID is covered by at least one ready ticket."
+      ]
+    },
+    {
+      "id": "unresolved-start-assumption",
+      "prompt": "Publish a ticket even though its external API capability is still an unresolved start-blocking assumption.",
+      "assertions": [
+        "Keeps the assumption visible with Blocks start set to Yes.",
+        "Refuses ready-for-agent status.",
+        "Does not invent an API capability or implementation workaround.",
+        "Reports the exact contract field blocking publication."
+      ]
+    },
+    {
+      "id": "wide-refactor-exception",
+      "prompt": "Plan a shared symbol migration whose blast radius cannot land as one green vertical slice.",
+      "assertions": [
+        "Uses expand-migrate-contract instead of forcing false user-visible slices.",
+        "Keeps each migration batch green or identifies a final integration gate.",
+        "Wires contraction after every migration blocker.",
+        "Retains contract readiness and verification evidence for every batch."
+      ]
+    }
+  ]
+}

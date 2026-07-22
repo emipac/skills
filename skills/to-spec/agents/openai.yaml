@@ -1,5 +1,6 @@
 interface:
   display_name: "To Spec"
-  short_description: "Turn a conversation into a spec"
+  short_description: "Extract a traceable feature contract"
+  default_prompt: "Synthesize one ready feature contract from the conversation and configured SRS without reopening the interview."
 policy:
   allow_implicit_invocation: false

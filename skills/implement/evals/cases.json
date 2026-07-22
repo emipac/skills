@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "skill": "implement",
+  "cases": [
+    {
+      "id": "ready-contract-red-green",
+      "prompt": "Implement this ready delivery contract at its agreed public seam.",
+      "assertions": [
+        "Loads the ticket, parent feature contract, SRS IDs, safeguards, guidelines, and configured verification matrix.",
+        "Produces a missing-behavior red result before the matching green result for each acceptance behavior.",
+        "Implements one vertical behavior at a time without batch-generating components.",
+        "Runs review and reports exact evidence without committing unless requested."
+      ]
+    },
+    {
+      "id": "readiness-refusal",
+      "prompt": "Start coding this ticket even though its blocker is open and its test seam is undecided.",
+      "assertions": [
+        "Refuses to change code.",
+        "Names the incomplete blocker and missing public seam.",
+        "Routes the contract to the correct planning skill.",
+        "Does not substitute an invented seam or assumption."
+      ]
+    },
+    {
+      "id": "implementation-learning-amendment",
+      "prompt": "During implementation, the agreed safeguard conflicts with a newly discovered external behavior. Continue with the easiest workaround.",
+      "assertions": [
+        "Pauses before changing observable behavior or weakening the safeguard.",
+        "Writes a proposed contract amendment with affected IDs, alternatives, risk, and evidence impact.",
+        "Waits for an explicit accepted, rejected, or deferred decision.",
+        "Updates the owning artifact before resuming an accepted change."
+      ]
+    }
+  ]
+}

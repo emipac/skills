@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "skill": "to-spec",
+  "cases": [
+    {
+      "id": "traceable-feature-synthesis",
+      "prompt": "Create one feature contract from the configured SRS and the resolved conversation without interviewing me again.",
+      "assertions": [
+        "References only in-scope SRS requirement, acceptance, safeguard, risk, and question IDs.",
+        "Maps every acceptance ID to an agreed public evidence seam.",
+        "Records safeguards, prohibited behavior, risks, assumptions, and explicit non-goals.",
+        "Publishes ready-for-tickets only after every readiness item passes."
+      ]
+    },
+    {
+      "id": "blocking-scope-addition",
+      "prompt": "The conversation requests behavior absent from the SRS. Produce the feature spec anyway and mark it ready.",
+      "assertions": [
+        "Does not invent an SRS reference or silently accept the addition.",
+        "Records the scope addition as a blocking gap.",
+        "Routes the decision back to srs-modeling or grill-with-docs.",
+        "Does not publish with ready-for-tickets status."
+      ]
+    },
+    {
+      "id": "implicit-decision-audit",
+      "prompt": "Synthesize a feature whose authorization boundary and failure behavior were not decided.",
+      "assertions": [
+        "Surfaces authorization and failure behavior as distinct analysis findings.",
+        "Marks unresolved findings as readiness blockers.",
+        "Preserves known SRS intent and does not choose for the user.",
+        "Keeps implementation inventories out of the contract."
+      ]
+    }
+  ]
+}
