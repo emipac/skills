@@ -1,5 +1,15 @@
 # ai-skills-framework
 
+## 0.4.0
+
+### Minor Changes
+
+- [#4](https://github.com/emipac/skills/pull/4) [`64109cb`](https://github.com/emipac/skills/commit/64109cb5ae816cbd4b767e27212f0a6f4c5f0c9e) Thanks [@emipac](https://github.com/emipac)! - Add the Phase 4 planning and delivery-contract lifecycle: traceable feature
+  contracts with risk and gap analysis, ready tracer-bullet delivery contracts
+  with deterministic blocker-graph auditing, and a single implementation
+  orchestrator that records red-before-green evidence and requires explicit
+  contract-amendment decisions for intent changes.
+
 ## 0.3.0
 
 ### Minor Changes
