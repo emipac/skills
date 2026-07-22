@@ -44,6 +44,11 @@ Agent Skills schema. See [.agents/invocation.md](./.agents/invocation.md).
 Changes to it must retain unit coverage proving repeat runs are byte-identical
 and every discovered `AGENTS.md` remains byte-for-byte unchanged.
 
+`srs-modeling` owns the durable SRS contract. Changes to its identifier,
+traceability, or readiness rules must retain audit tests for duplicate IDs,
+unknown references, acceptance coverage, open questions, and read-only CLI
+behavior.
+
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog
 history.

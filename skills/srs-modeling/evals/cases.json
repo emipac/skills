@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "skill": "srs-modeling",
+  "cases": [
+    {
+      "id": "create-greenfield-srs",
+      "mode": "create",
+      "prompt": "Create the configured SRS for a Laravel service from the supplied product notes. Several authorization and retention decisions are unknown.",
+      "assertions": [
+        "Creates every required SRS section at the configured path without modifying AGENTS.md.",
+        "Uses stable FR, NFR, SG, AC, RISK, and Q identifiers and never invents unknown decisions.",
+        "Routes domain definitions to the glossary and durable architectural rationale to ADRs.",
+        "Leaves unknown authorization and retention decisions visible as blocking open questions.",
+        "Runs the deterministic and semantic audits before reporting completion."
+      ]
+    },
+    {
+      "id": "refine-existing-srs-surgically",
+      "mode": "refine",
+      "prompt": "Update an approved SRS for a new cancellation rule affecting FR-ORD-014 and SG-ORD-003. Preserve all unrelated sections and stable identifiers.",
+      "assertions": [
+        "Names the affected IDs and unchanged boundary before editing.",
+        "Preserves unrelated wording, ordering, statuses, and identifiers.",
+        "Updates affected safeguards and acceptance coverage in both directions.",
+        "Retires or supersedes changed meaning instead of reusing an old ID.",
+        "Reports added, changed, retired, and unresolved IDs after both audits."
+      ]
+    },
+    {
+      "id": "audit-incomplete-srs",
+      "mode": "audit",
+      "prompt": "Audit this SRS. It contains a duplicate requirement ID, one uncovered NFR, an unknown safeguard reference, an open blocking question, and implementation-specific file inventories.",
+      "assertions": [
+        "Does not modify the SRS or any repository instruction file.",
+        "Reports deterministic ID, reference, and acceptance-coverage failures separately.",
+        "Keeps the blocking open question visible as a readiness finding.",
+        "Reports implementation leakage as a semantic ownership finding.",
+        "Prevents Approved status and cites every affected stable ID."
+      ]
+    }
+  ]
+}

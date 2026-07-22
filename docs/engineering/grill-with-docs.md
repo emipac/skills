@@ -1,7 +1,7 @@
 Quickstart:
 
 ```bash
-npx skills add mattpocock/skills --skill=grill-with-docs
+npx skills add emipac/skills --skill grill-with-docs
 ```
 
 ```bash
@@ -12,9 +12,12 @@ npx skills update grill-with-docs
 
 ## What it does
 
-`grill-with-docs` interviews you relentlessly about a plan or design, one question at a time, until you and the agent reach a shared understanding — and it writes the vocabulary and decisions down as you go.
+`grill-with-docs` interviews you relentlessly about a plan or design, one question at a time, until you and the agent reach a shared understanding — and it writes each accepted decision to its owning artifact as it goes.
 
-The grilling **leaves a paper trail**. A plain interview sharpens your thinking and then evaporates when the session ends; this one captures each term the moment it's resolved into a `CONTEXT.md` glossary, and records the hard, one-way decisions as ADRs. The alignment survives the conversation instead of living only in your head.
+The grilling **leaves a paper trail**. Product behavior and constraints go to
+the configured SRS through `srs-modeling`, canonical terms go to the glossary,
+and hard, one-way architectural decisions go to ADRs. Each meaning has one
+owner, with links instead of duplicated prose.
 
 ## When to reach for it
 
@@ -24,7 +27,9 @@ Reach for it at the very start of a change, when the plan is still fuzzy and the
 
 ## Prerequisites
 
-This skill is stateful — it writes into your repo as it grills. Resolved terms land in a `CONTEXT.md` glossary at the root (or the relevant context's `CONTEXT.md` if a `CONTEXT-MAP.md` marks a multi-context repo), and genuinely hard-to-reverse decisions land as ADRs under `docs/adr/`. Both are created lazily — nothing exists until the first term or decision crystallises — so you don't need to scaffold anything up front, but you do need to be somewhere it's safe to write these files.
+This skill is stateful. Run `framework-setup` first so the SRS, glossary, ADR,
+guideline, and protected-file paths are explicit. The configured `AGENTS.md`
+files remain read-only.
 
 ## The grill
 
@@ -35,7 +40,7 @@ What makes this variant its own skill is where the answers go. As the grill runs
 ## It's working if
 
 - It asks one question at a time and waits, rather than dumping a questionnaire.
-- Terms get written to `CONTEXT.md` the moment they resolve, in your project's own words.
+- Product decisions update the configured SRS through `srs-modeling`; terms and ADRs retain their distinct ownership.
 - It reaches into the codebase to answer its own questions where it can.
 - ADRs stay rare — you're not asked to rubber-stamp reversible choices.
 
@@ -44,7 +49,11 @@ What makes this variant its own skill is where the answers go. As the grill runs
 `grill-with-docs` is the opening step of the main build chain:
 
 ```txt
-grill-with-docs → to-spec → to-tickets → implement → code-review
+grill-with-docs → srs-modeling → to-spec → to-tickets → implement → code-review
 ```
 
-It comes first, before anything is written down as a spec: it produces the shared understanding and settled vocabulary that [to-spec](https://aihero.dev/skills-to-spec) then synthesises into a spec without re-interviewing you. Its close neighbours are [grilling](https://aihero.dev/skills-grilling), the same interview without the docs, and [domain-modeling](https://aihero.dev/skills-domain-modeling), the glossary-and-ADR discipline it drives. When you're unsure which skill or flow fits, [framework-router](./framework-router.md) routes you.
+It produces the shared understanding that [srs-modeling](./srs-modeling.md)
+records as durable requirements before `to-spec` extracts one feature slice.
+Its close neighbours are `grilling`, the interview primitive, and
+`domain-modeling`, the glossary-and-ADR discipline it drives. When you're
+unsure which flow fits, [framework-router](./framework-router.md) routes you.

@@ -46,3 +46,16 @@ OpenSPDD's Java/Spring vocabulary, exhaustive class and method inventories, immu
   architecture, TDD, vertical-slice, and review behavior remains upstream.
 - Adapted `writing-great-skills` invocation guidance to portable Agent Skills
   frontmatter and client-specific implicit-invocation policy.
+
+### Phase 3 — SRS lifecycle
+
+- Added Minic-owned `srs-modeling`; upstream Matt skills do not prescribe a
+  canonical comprehensive SRS or stable requirement identifier contract.
+- Extracted the useful product, requirement, role, scenario, non-functional,
+  risk, question, and acceptance structure of the Oldwood SRS while excluding
+  its project-specific physical schemas, Filament menus, and implementation
+  inventories.
+- Added OpenSPDD-inspired safeguards and traceability as lightweight SRS
+  constraints without adopting REASONS Operations or batch generation.
+- Integrated normative SRS maintenance with `grill-with-docs`, `wayfinder`, and
+  the lifecycle router while preserving upstream glossary and ADR ownership.

@@ -316,7 +316,7 @@ Completed and published as `v0.1.0`:
 
 #### Current status — 2026-07-22
 
-Implemented locally for `0.2.0`:
+Completed and published as `v0.2.0`:
 
 - Preserved the 20 unchanged supporting skills and their language-agnostic vocabulary.
 - Renamed `ask-matt` to `framework-router` while retaining its main flow, on-ramps, wayfinder branch, tracer bullets, TDD, and review sequence.
@@ -326,11 +326,9 @@ Implemented locally for `0.2.0`:
 - Added unit tests proving setup idempotency, explicit unresolved values, all four adapters, and byte-for-byte protection of every discovered `AGENTS.md`.
 - Recorded every material divergence from Matt's baseline in `UPSTREAM.md`.
 - Completed repository validation, all released-skill validators, unit tests, dependency audit, native Codex plugin validation, and isolated Codex, Claude Code, and Cursor installation smoke tests.
-
-Remaining before publication:
-
-- Review, commit, and push the Phase 2 changes when explicitly authorized.
-- Merge the Changesets version pull request to publish `0.2.0` at the agreed release point.
+- Published implementation commit `84019d754c38478c0334d3b579ffc1302fcf7962`; the Validate workflow passed.
+- Manually opened and merged [version pull request #1](https://github.com/emipac/skills/pull/1) after repository Actions permissions blocked automatic PR creation.
+- Published [release `v0.2.0`](https://github.com/emipac/skills/releases/tag/v0.2.0) before committing Phase 3, preserving distinct milestone versions.
 
 ### Phase 3 — SRS lifecycle
 
@@ -348,6 +346,22 @@ Remaining before publication:
 - An existing SRS can be refined without rewriting unrelated sections.
 - Every accepted decision is stored in the correct artifact.
 - Open questions and missing acceptance coverage remain visible.
+
+#### Current status — 2026-07-22
+
+Implemented locally for `0.3.0`:
+
+- Extracted a generic SRS contract and template from Oldwood's useful product, scope, requirement, role, scenario, non-functional, risk, question, and acceptance structure.
+- Excluded Oldwood-specific physical schema, Filament menu, file, class, and method inventories from the generic baseline.
+- Added `srs-modeling` creation, surgical refinement, and audit branches with explicit artifact ownership and readiness gates.
+- Added stable FR, NFR, SG, AC, RISK, and Q identifiers, retirement rules, acceptance coverage, safeguard references, and visible unresolved-question tracking.
+- Added a read-only deterministic SRS auditor, 9 SRS lifecycle tests, and creation/refinement/audit evaluation cases.
+- Integrated SRS maintenance with `grill-with-docs`, `wayfinder`, and `framework-router`.
+- Completed 17 unit tests, repository validation for 23 released skills and 89 Markdown files, official validation of all 23 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
+
+Remaining before publication:
+
+- Push Phase 3 only when explicitly authorized, then merge its generated version pull request to publish `0.3.0`.
 
 ### Phase 4 — Planning and delivery contracts
 

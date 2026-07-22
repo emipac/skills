@@ -4,7 +4,7 @@ AI Skills Framework is Minic's installable development lifecycle for Laravel bac
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** Phase 2 development toward `0.2.0`: portable project setup and lifecycle routing now sit on the preserved upstream engineering backbone.
+> **Status:** Phase 3 development: the Phase 2 setup and routing backbone is published as `v0.2.0`, and the SRS lifecycle is being prepared for `0.3.0`.
 
 ## Install with the universal skills CLI
 
@@ -54,6 +54,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 - **[framework-router](./skills/framework-router/SKILL.md)** — Route a situation to the appropriate lifecycle branch.
 - **[framework-setup](./skills/framework-setup/SKILL.md)** — Discover project instructions and write the protected, idempotent lifecycle configuration.
 - **[grill-with-docs](./skills/grill-with-docs/SKILL.md)** — Sharpen a plan while maintaining domain terminology and ADRs.
+- **[srs-modeling](./skills/srs-modeling/SKILL.md)** — Create, surgically refine, and audit the durable requirements baseline.
 - **[triage](./skills/triage/SKILL.md)** — Move issues through configured triage roles.
 - **[improve-codebase-architecture](./skills/improve-codebase-architecture/SKILL.md)** — Find deep-module opportunities and guide the selected improvement.
 - **[to-spec](./skills/to-spec/SKILL.md)** — Synthesize a feature specification.

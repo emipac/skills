@@ -1,0 +1,6 @@
+interface:
+  display_name: "SRS Modeling"
+  short_description: "Create, refine, and audit durable requirements"
+  default_prompt: "Create or refine the configured SRS and keep every requirement traceable to acceptance evidence."
+policy:
+  allow_implicit_invocation: false

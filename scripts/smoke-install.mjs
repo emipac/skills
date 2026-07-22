@@ -7,7 +7,7 @@ import process from 'node:process';
 const sourceRoot = process.cwd();
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
 const agents = ['codex', 'claude-code', 'cursor'];
-const smokeSkills = ['framework-router', 'framework-setup'];
+const smokeSkills = ['framework-router', 'framework-setup', 'srs-modeling'];
 
 try {
   await writeFile(
@@ -68,6 +68,33 @@ try {
       'references',
       'tracker-linear.md',
     );
+    const srsDocument = path.join(
+      temporaryRoot,
+      installedRoot,
+      'srs-modeling',
+      'SKILL.md',
+    );
+    const srsAuditScript = path.join(
+      temporaryRoot,
+      installedRoot,
+      'srs-modeling',
+      'scripts',
+      'audit-srs.mjs',
+    );
+    const srsTemplate = path.join(
+      temporaryRoot,
+      installedRoot,
+      'srs-modeling',
+      'references',
+      'srs-template.md',
+    );
+    const srsEvaluations = path.join(
+      temporaryRoot,
+      installedRoot,
+      'srs-modeling',
+      'evals',
+      'cases.json',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);
@@ -83,6 +110,22 @@ try {
 
     if (!(await readFile(linearAdapter, 'utf8')).includes('adapter: linear')) {
       throw new Error(`${agent}: tracker adapter references were not installed`);
+    }
+
+    if (!(await readFile(srsDocument, 'utf8')).includes('name: srs-modeling')) {
+      throw new Error(`${agent}: srs-modeling was not installed correctly`);
+    }
+
+    if (!(await readFile(srsAuditScript, 'utf8')).includes('auditSrs')) {
+      throw new Error(`${agent}: SRS audit script was not installed`);
+    }
+
+    if (!(await readFile(srsTemplate, 'utf8')).includes('## 12. Acceptance Criteria')) {
+      throw new Error(`${agent}: SRS template was not installed`);
+    }
+
+    if (!(await readFile(srsEvaluations, 'utf8')).includes('refine-existing-srs-surgically')) {
+      throw new Error(`${agent}: SRS evaluations were not installed`);
     }
   }
 

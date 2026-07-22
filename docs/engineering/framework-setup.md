@@ -11,6 +11,10 @@ SRS and domain artifacts, repository guidelines, history policy, protected
 instruction files, and verification commands. After confirmation it writes
 `.agent-framework.yaml` and the selected tracker reference.
 
+When no SRS exists, setup reserves `docs/specifications/srs.md` for
+`srs-modeling` without creating it. An explicit `null` remains available for
+repositories that intentionally exclude an SRS.
+
 Local Markdown, GitHub Issues, Jira, and Linear are first-class adapters.
 Repeated configuration is byte-identical, and automated tests prove setup
 leaves every discovered `AGENTS.md` unchanged.

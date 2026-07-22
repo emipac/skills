@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -170,6 +170,22 @@ test('explicit null selections do not fall back to discovered artifacts', async 
   assert.match(configuration, /^  adrs: null$/m);
   assert.match(configuration, /^  path: null$/m);
   assert.match(configuration, /^  required: false$/m);
+});
+
+test('new projects reserve the default SRS path without creating the document', async (context) => {
+  const projectRoot = await createLaravelFixture();
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await unlink(path.join(projectRoot, 'docs', 'specifications', 'srs.md'));
+
+  const result = await configureProject({
+    projectRoot,
+    selections: {
+      tracker: 'local-markdown',
+    },
+  });
+
+  assert.equal(result.configuration.artifacts.srs, 'docs/specifications/srs.md');
+  await assert.rejects(access(path.join(projectRoot, 'docs', 'specifications', 'srs.md')));
 });
 
 for (const tracker of ['local-markdown', 'github', 'jira', 'linear']) {

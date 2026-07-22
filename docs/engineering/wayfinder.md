@@ -1,7 +1,7 @@
 Quickstart:
 
 ```bash
-npx skills add mattpocock/skills --skill=wayfinder
+npx skills add emipac/skills --skill wayfinder
 ```
 
 ```bash
@@ -22,7 +22,10 @@ Reach for it when an effort is **more than one agent session can hold** and the 
 
 ## Prerequisites
 
-The map and its tickets live on the repo's issue tracker, so wayfinder needs the tracker wiring that [framework-setup](./framework-setup.md) lays down — it seeds a "Wayfinding operations" section describing how the map, child tickets, blocking, and frontier queries are expressed for GitHub, GitLab, or local-markdown. Absent that doc, wayfinder defaults to a local-markdown map.
+The map and its tickets live on the configured issue tracker. Run
+[framework-setup](./framework-setup.md) first and follow its local Markdown,
+GitHub Issues, Jira, or Linear adapter. Wayfinder never silently substitutes a
+different tracker.
 
 ## The map is an index, fog is the frontier
 
@@ -37,8 +40,15 @@ Every ticket is **HITL** (human in the loop — grilling, prototype) or **AFK** 
 - Naming the **destination** is the first act — before any ticket exists — because it fixes the scope every ticket is measured against.
 - One map is one `wayfinder:map` issue; tickets are its child issues, referred to by **name**, never a bare `#42`.
 - A session resolves **at most one ticket** (research tickets excepted), records the answer as a resolution comment, closes the ticket, and appends a one-line pointer to *Decisions so far*.
+- Durable product intent is refined into the configured SRS while the decision ticket retains its rationale and investigation record.
 - If the opening grill surfaces **no fog**, it stops and tells you the journey is small enough to skip the map.
 
 ## Where it fits
 
-`wayfinder` is a big-idea **on-ramp**: an effort too large and foggy to spec in one sitting generates a cleared map of decisions, which then merges onto the main build flow. When the fog is pushed back and the way is clear, hand off to [to-spec](https://aihero.dev/skills-to-spec) to schedule the multi-session build (or, if the effort turned out small, implement directly). It leans on [grilling](https://aihero.dev/skills-grilling) and [domain-modeling](https://aihero.dev/skills-domain-modeling) to resolve individual tickets, and on [prototype](https://aihero.dev/skills-prototype) and [research](https://aihero.dev/skills-research) for the ticket types that need them. When you're unsure which skill or flow fits, [framework-router](./framework-router.md) routes you.
+`wayfinder` is a big-idea **on-ramp**: an effort too large and foggy to spec in
+one sitting generates a cleared decision map. When the fog is gone, use
+[srs-modeling](./srs-modeling.md) to audit the canonical SRS, then `to-spec`
+extracts a feature slice for the main build flow. It leans on `grilling`,
+`domain-modeling`, `prototype`, and `research` to resolve individual tickets.
+When you're unsure which flow fits, [framework-router](./framework-router.md)
+routes you.
