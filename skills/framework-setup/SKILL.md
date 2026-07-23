@@ -42,11 +42,18 @@ Present detected values and ask only about unresolved or consequential choices:
 4. **Source scopes:** confirm backend, frontend, and shared roots. Prefer an
    existing schema version 3 contract, then detected entry-point and
    conventional roots. Express projects commonly use `server`, `backend`,
-   `api`, or `src/server`; React and Svelte commonly use `src`, `client`, or
-   `frontend`. Never classify TypeScript by extension alone. Shared and
-   unmatched files affect both scopes.
+   `api`, `database`, or `src/server`; React and Svelte commonly use `src`,
+   `client`, or `frontend`. Never classify TypeScript by extension alone.
+   Shared and unmatched files affect both scopes.
 5. **Command scopes:** confirm every discovered command as backend, frontend,
    or both. A package-manager command is not inherently a frontend command.
+   Discovery accepts safe qualified checks such as `test:unit`,
+   `test:integration`, `format:check`, and `smoke:<name>`, uses referenced
+   source roots as scope evidence, and excludes watch, fix, development,
+   coverage, and write variants unless explicitly selected. Prefer a
+   non-mutating `format:check` when both it and `format` exist. Record any
+   intentionally excluded scripts and preserve the same exclusion list on
+   later setup runs.
 6. **History:** retain an existing history convention; otherwise recommend
    `docs/history` without creating it.
 
@@ -74,6 +81,7 @@ node <skill-directory>/scripts/configure.mjs \
   --backend-scripts <comma-separated-package-script-names> \
   --frontend-scripts <comma-separated-package-script-names> \
   --both-scripts <comma-separated-package-script-names> \
+  --exclude-scripts <comma-separated-package-script-names> \
   --history <path-or-null>
 ```
 

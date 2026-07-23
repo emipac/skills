@@ -177,6 +177,7 @@ const discoverSourceScopes = (files, backend, frontend) => {
           'server',
           'backend',
           'api',
+          'database',
           path.join('src', 'server'),
           path.join('src', 'backend'),
           path.join('src', 'api'),
@@ -240,10 +241,17 @@ const packageScriptCommand = (packageManager, script) => {
 export const discoverVerification = async (
   projectRoot,
   packageManifest,
-  { backend, frontend, scriptScopes = {} },
+  {
+    backend,
+    frontend,
+    sourceScopes,
+    scriptScopes = {},
+    excludedScripts = [],
+  },
 ) => {
   const commands = emptyScopedCommands();
   const capabilities = new Set();
+  const excludedScriptNames = new Set(excludedScripts);
   const detectedFiles = [
     [
       'vendor/bin/pint',
@@ -276,10 +284,64 @@ export const discoverVerification = async (
     smoke: 'smoke',
     build: 'build',
     e2e: 'e2e',
-    'test:e2e': 'e2e',
   };
+  const safeQualifiers = {
+    format: new Set(['check', 'server', 'backend', 'client', 'frontend']),
+    lint: new Set(['check', 'server', 'backend', 'client', 'frontend']),
+    typecheck: new Set(['server', 'backend', 'client', 'frontend']),
+    'type-check': new Set(['server', 'backend', 'client', 'frontend']),
+    test: new Set([
+      'unit',
+      'integration',
+      'server',
+      'backend',
+      'client',
+      'frontend',
+      'e2e',
+    ]),
+    smoke: null,
+    build: new Set(['server', 'backend', 'client', 'frontend']),
+    e2e: new Set(['server', 'backend', 'client', 'frontend']),
+  };
+  const unsafeQualifiers = new Set(['coverage', 'dev', 'fix', 'only', 'watch', 'write']);
   const packageManager = await detectPackageManager(projectRoot);
-  const explicitScope = (script) => {
+  const escapeRegularExpression = (value) => (
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  );
+  const commandMentionsRoot = (command, root) => {
+    const normalizedCommand = command.replaceAll('\\', '/');
+    const normalizedRoot = root.replaceAll('\\', '/').replace(/^\.\/|\/$/g, '');
+
+    return new RegExp(
+      `(?:^|[\\s"'=:(])${escapeRegularExpression(normalizedRoot)}(?:/|\\b)`,
+    ).test(normalizedCommand);
+  };
+  const commandScope = (command) => {
+    if (!sourceScopes) {
+      return null;
+    }
+
+    const backendMatch = sourceScopes.backend.some(
+      (root) => commandMentionsRoot(command, root),
+    );
+    const frontendMatch = sourceScopes.frontend.some(
+      (root) => commandMentionsRoot(command, root),
+    );
+    const sharedMatch = sourceScopes.shared.some(
+      (root) => commandMentionsRoot(command, root),
+    );
+
+    if (sharedMatch || (backendMatch && frontendMatch)) {
+      return 'both';
+    }
+
+    if (backendMatch) {
+      return 'backend';
+    }
+
+    return frontendMatch ? 'frontend' : null;
+  };
+  const explicitScope = (script, command) => {
     if (scriptScopes[script]) {
       return scriptScopes[script];
     }
@@ -294,6 +356,12 @@ export const discoverVerification = async (
       return 'frontend';
     }
 
+    const inferredCommandScope = commandScope(command);
+
+    if (inferredCommandScope) {
+      return inferredCommandScope;
+    }
+
     if (backend === 'express-typescript' && frontend === 'none') {
       return 'backend';
     }
@@ -306,25 +374,38 @@ export const discoverVerification = async (
   };
   const categoryForScript = (script) => {
     const parts = script.split(':');
-    const knownParts = new Set([
-      ...Object.keys(scriptCategories),
-      'server',
-      'backend',
-      'client',
-      'frontend',
-    ]);
+    const base = parts[0];
+    const qualifiers = parts.slice(1);
 
-    if (!scriptScopes[script] && parts.some((part) => !knownParts.has(part))) {
+    if (!Object.hasOwn(scriptCategories, base)) {
       return null;
     }
 
-    if (parts.includes('e2e')) {
-      return 'e2e';
+    if (scriptScopes[script]) {
+      return qualifiers.includes('e2e') ? 'e2e' : scriptCategories[base];
     }
 
-    const base = parts.find((part) => Object.hasOwn(scriptCategories, part));
+    if (qualifiers.some((qualifier) => unsafeQualifiers.has(qualifier))) {
+      return null;
+    }
 
-    return base ? scriptCategories[base] : null;
+    const allowedQualifiers = safeQualifiers[base];
+
+    if (
+      allowedQualifiers
+      && qualifiers.some((qualifier) => !allowedQualifiers.has(qualifier))
+    ) {
+      return null;
+    }
+
+    if (
+      script === 'format'
+      && Object.hasOwn(packageManifest.scripts ?? {}, 'format:check')
+    ) {
+      return null;
+    }
+
+    return qualifiers.includes('e2e') ? 'e2e' : scriptCategories[base];
   };
   const addPackageCapability = (category, scope, script) => {
     if (['typecheck', 'type-check'].some((name) => script.split(':').includes(name))) {
@@ -350,14 +431,18 @@ export const discoverVerification = async (
     }
   };
 
-  for (const script of Object.keys(packageManifest.scripts ?? {})) {
+  for (const [script, scriptCommand] of Object.entries(packageManifest.scripts ?? {})) {
+    if (excludedScriptNames.has(script)) {
+      continue;
+    }
+
     const category = categoryForScript(script);
 
     if (!category) {
       continue;
     }
 
-    const scope = explicitScope(script);
+    const scope = explicitScope(script, scriptCommand);
 
     if (!verificationScopes.includes(scope)) {
       throw new Error(`Unsupported scope for package script ${script}: ${scope}`);
@@ -467,7 +552,7 @@ export const discoverProject = async (projectRoot) => {
     verification: await discoverVerification(
       resolvedRoot,
       packageManifest,
-      { backend, frontend },
+      { backend, frontend, sourceScopes },
     ),
   };
 };
@@ -677,7 +762,13 @@ export const configureProject = async ({ projectRoot, selections }) => {
     verification: await discoverVerification(
       discovery.projectRoot,
       await readJson(path.join(discovery.projectRoot, 'package.json')),
-      { backend, frontend, scriptScopes: selections.scriptScopes },
+      {
+        backend,
+        frontend,
+        sourceScopes,
+        scriptScopes: selections.scriptScopes,
+        excludedScripts: selections.excludedScripts,
+      },
     ),
     history: {
       path: selectedValue(
@@ -800,6 +891,7 @@ const runCli = async () => {
       frontend: options.frontend,
       sourceScopes: sourceScopeArguments(options),
       scriptScopes: scriptScopeArguments(options),
+      excludedScripts: listArgument(options['exclude-scripts']),
     },
   });
 
