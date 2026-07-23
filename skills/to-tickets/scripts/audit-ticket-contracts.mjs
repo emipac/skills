@@ -209,6 +209,7 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
     } else {
       const verificationColumns = [
         'Layer',
+        'Scope',
         'Evidence',
         'Command or capability',
         'Required',
@@ -227,6 +228,7 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
         const commandColumn = columnIndex(verificationTable, 'Command or capability');
         const evidenceColumn = columnIndex(verificationTable, 'Evidence');
         const requiredColumn = columnIndex(verificationTable, 'Required');
+        const scopeColumn = columnIndex(verificationTable, 'Scope');
 
         for (const row of verificationTable.rows) {
           if (!row[commandColumn]?.trim() || !row[evidenceColumn]?.trim()) {
@@ -242,6 +244,14 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
               errors,
               'invalid-verification-requirement',
               `${ticket.id} verification rows must state Yes or No with a reason`,
+            );
+          }
+
+          if (!/^(?:backend|frontend|both)$/i.test(row[scopeColumn] ?? '')) {
+            addError(
+              errors,
+              'invalid-verification-scope',
+              `${ticket.id} verification rows must use backend, frontend, or both scope`,
             );
           }
         }

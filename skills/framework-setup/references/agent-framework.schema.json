@@ -11,13 +11,14 @@
     "tracker",
     "artifacts",
     "guidelines",
+    "source_scopes",
     "verification",
     "history",
     "protected_files"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
-    "backend": { "enum": ["laravel", "unknown"] },
+    "schema_version": { "const": 3 },
+    "backend": { "enum": ["laravel", "express-typescript", "unknown"] },
     "frontend": {
       "enum": [
         "livewire",
@@ -45,6 +46,28 @@
       "items": { "type": "string" },
       "uniqueItems": true
     },
+    "source_scopes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "frontend", "shared"],
+      "properties": {
+        "backend": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "frontend": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "shared": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    },
     "verification": {
       "type": "object",
       "additionalProperties": false,
@@ -59,9 +82,26 @@
         "commands": {
           "type": "object",
           "additionalProperties": {
-            "type": "array",
-            "items": { "type": "string" },
-            "uniqueItems": true
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["backend", "frontend", "both"],
+            "properties": {
+              "backend": {
+                "type": "array",
+                "items": { "type": "string" },
+                "uniqueItems": true
+              },
+              "frontend": {
+                "type": "array",
+                "items": { "type": "string" },
+                "uniqueItems": true
+              },
+              "both": {
+                "type": "array",
+                "items": { "type": "string" },
+                "uniqueItems": true
+              }
+            }
           }
         }
       }

@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "dependencies": {
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "vite build"
+  }
+}

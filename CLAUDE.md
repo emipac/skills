@@ -2,8 +2,8 @@
 
 This repository is the Minic-maintained AI Skills Framework. It is derived from
 Matt Pocock's skills and is evolving toward a deterministic, TDD-oriented
-Laravel lifecycle with adaptable Livewire, React/TypeScript, and
-Svelte/TypeScript frontend support.
+Laravel or Express/TypeScript lifecycle with adaptable Livewire,
+React/TypeScript, and Svelte/TypeScript frontend support.
 
 ## Repository structure
 
@@ -55,12 +55,12 @@ explicit amendment decisions, and explicit commit/push authorization. Contract
 changes require unit coverage for traceability, blockers, cycles, assumptions,
 and readiness.
 
-`framework-setup` schema version 2 owns verification profiles, capabilities,
-and exact commands. `verify-change` must retain deterministic impact ordering,
-exact command evidence, justified skips, and mandatory smoke or browser
-coverage for user-facing work. `code-review` must keep Standards, Contract, and
-Evidence findings independent. Durable synchronization requires an explicit
-owning artifact and decision gate.
+`framework-setup` schema version 3 owns profiles, source scopes, capabilities,
+and exact scoped commands. `verify-change` must retain deterministic impact
+ordering, exact command evidence, visible ambiguous paths, justified skips, and
+mandatory smoke or browser coverage for user-facing work. `code-review` must
+keep Standards, Contract, and Evidence findings independent. Durable
+synchronization requires an explicit owning artifact and decision gate.
 
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog

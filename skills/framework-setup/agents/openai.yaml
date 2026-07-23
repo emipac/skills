@@ -1,6 +1,6 @@
 interface:
   display_name: "Framework Setup"
   short_description: "Discover and configure the lifecycle contract"
-  default_prompt: "Configure this repository, including verification profiles and exact commands, without modifying AGENTS.md."
+  default_prompt: "Configure this repository, including backend/frontend profiles, confirmed source scopes, and exact scoped verification commands, without modifying AGENTS.md."
 policy:
   allow_implicit_invocation: false

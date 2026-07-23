@@ -141,10 +141,10 @@ No password reset or social login.
 
 ## Verification Matrix
 
-| Layer | Evidence | Command or capability | Required |
-| --- | --- | --- | --- |
-| Feature | AC-AUTH-001 and AC-AUTH-002 authentication behavior | php artisan test --compact --filter=SignIn | Yes |
-| Static | Type correctness | vendor/bin/phpstan analyse | Yes |
+| Layer | Scope | Evidence | Command or capability | Required |
+| --- | --- | --- | --- | --- |
+| Feature | backend | AC-AUTH-001 and AC-AUTH-002 authentication behavior | php artisan test --compact --filter=SignIn | Yes |
+| Static | backend | Type correctness | vendor/bin/phpstan analyse | Yes |
 
 ## Blocked By
 
@@ -273,6 +273,22 @@ test('rejects acceptance criteria missing from the verification matrix', () => {
   assert.ok(result.errors.some((error) => (
     error.code === 'unverified-acceptance'
     && error.message.includes('AC-AUTH-002')
+  )));
+});
+
+test('rejects an unknown verification scope', () => {
+  const invalidTicket = ticket({ id: 'TB-001' }).replace(
+    '| Feature | backend |',
+    '| Feature | sideways |',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: invalidTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => (
+    error.code === 'invalid-verification-scope'
   )));
 });
 

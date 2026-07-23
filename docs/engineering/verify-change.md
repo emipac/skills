@@ -13,9 +13,11 @@ into an impact-based evidence ladder:
 focused → format → static analysis → affected tests → smoke → build → browser → broad tests
 ```
 
-Setup records a versioned Laravel/frontend profile, proved capabilities, and
-exact commands. The planner selects only relevant layers, preserves configured
-command order, and explains every skip. It never guesses a replacement command.
+Setup records a versioned Laravel or Express/TypeScript profile, confirmed source
+scopes, proved capabilities, and exact commands partitioned by backend, frontend,
+or both. The planner classifies changed files against those scopes, preserves
+configured command order, and explains every skip or ambiguous classification. It
+never guesses a replacement command.
 
 User-facing work requires smoke or browser evidence. Frontend changes require
 the configured production build. Completion requires an evidence row for every

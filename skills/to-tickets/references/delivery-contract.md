@@ -65,9 +65,9 @@ implementation choices to the red-green loop.
 
 ## Verification Matrix
 
-| Layer | Evidence | Command or capability | Required |
-| --- | --- | --- | --- |
-| <Targeted/static/affected/smoke/build/browser/broad> | <AC/SG IDs and what the row proves> | <Exact configured command or named capability> | <Yes/No with reason> |
+| Layer | Scope | Evidence | Command or capability | Required |
+| --- | --- | --- | --- | --- |
+| <Targeted/static/affected/smoke/build/browser/broad> | <Backend/frontend/both> | <AC/SG IDs and what the row proves> | <Exact configured command or named capability> | <Yes/No with reason> |
 
 ## Blocked By
 

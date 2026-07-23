@@ -1,0 +1,19 @@
+{
+  "private": true,
+  "dependencies": {
+    "express": "^5.0.0",
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  },
+  "scripts": {
+    "typecheck:backend": "tsc --noEmit",
+    "test:backend": "node --test backend",
+    "smoke:backend": "node --test tests/smoke",
+    "build:backend": "tsc",
+    "test:frontend": "vitest run",
+    "build:frontend": "vite build",
+    "e2e:frontend": "playwright test"
+  }
+}

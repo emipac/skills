@@ -1,0 +1,19 @@
+{
+  "private": true,
+  "dependencies": {
+    "express": "^5.0.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  },
+  "scripts": {
+    "typecheck:server": "tsc --noEmit",
+    "test:server": "node --test server",
+    "smoke:server": "node --test tests/smoke",
+    "build:server": "tsc",
+    "test:client": "vitest run",
+    "build:client": "vite build",
+    "e2e:client": "playwright test"
+  }
+}

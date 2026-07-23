@@ -1,0 +1,6 @@
+{
+  "require": {
+    "laravel/framework": "^13.0",
+    "livewire/livewire": "^4.0"
+  }
+}

@@ -6,11 +6,12 @@ npx skills add emipac/skills --skill framework-setup
 
 [Source](https://github.com/emipac/skills/tree/main/skills/framework-setup)
 
-`framework-setup` deterministically discovers Laravel and frontend profiles,
-SRS and domain artifacts, repository guidelines, history policy, protected
-instruction files, and verification profiles. Schema version 2 records proved
-capabilities and package-manager-correct commands for Laravel, Livewire,
-React/TypeScript, or Svelte/TypeScript. After confirmation it writes
+`framework-setup` deterministically discovers Laravel or Express/TypeScript
+backend profiles, frontend profiles, source-scope candidates, SRS and domain
+artifacts, repository guidelines, history policy, protected instruction files,
+and verification profiles. Schema version 3 records confirmed backend,
+frontend, and shared roots plus proved, package-manager-correct commands scoped
+to backend, frontend, or both. After confirmation it writes
 `.agent-framework.yaml` and the selected tracker reference.
 
 When no SRS exists, setup reserves `docs/specifications/srs.md` for

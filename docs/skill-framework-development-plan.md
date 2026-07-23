@@ -1,6 +1,6 @@
 # AI Skills Framework — Development Plan
 
-**Status:** In progress — Phase 5
+**Status:** In progress — Phase 6
 **Created:** 2026-07-22
 **Product name:** AI Skills Framework
 **Machine identifier:** `ai-skills-framework`
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Create AI Skills Framework, an installable, maintainable, and versioned Minic agent skill framework for Laravel backend development with adaptable TypeScript frontend support.
+Create AI Skills Framework, an installable, maintainable, and versioned Minic agent skill framework for Laravel or Express with TypeScript backend development and adaptable Livewire or TypeScript frontend support.
 
 The framework will:
 
@@ -411,7 +411,7 @@ Completed and published as `v0.4.0`:
 
 #### Current status — 2026-07-22
 
-Implemented locally for `0.5.0`:
+Completed and published as `v0.5.0`:
 
 - Evolved `.agent-framework.yaml` to schema version 2 with stack-specific verification profiles, explicit capabilities, and lockfile-selected package-manager commands.
 - Added model-invoked `verify-change` with deterministic impact classification, focused-to-broad evidence ordering, required smoke or browser coverage for user-facing work, and exact-command evidence auditing.
@@ -421,28 +421,110 @@ Implemented locally for `0.5.0`:
 - Added selective synchronization ownership for SRS behavior, glossary terms, ADR rationale, tracker evidence, and history while excluding private implementation details.
 - Added verification and review evaluations, deterministic planner tests, setup schema tests, and cross-client installation coverage.
 - Completed 39 unit and contract tests, repository validation for 24 released skills and 104 Markdown files, official validation of all 24 skills, native Codex plugin validation, dependency audit, and isolated Codex, Claude Code, and Cursor installation smoke tests.
+- Merged [Phase 5 pull request #6](https://github.com/emipac/skills/pull/6), then merged [version pull request #7](https://github.com/emipac/skills/pull/7).
+- Published [release `v0.5.0`](https://github.com/emipac/skills/releases/tag/v0.5.0); Validate and Release workflows passed.
 
-Remaining before publication:
+### Phase 6 — Express/TypeScript compatibility and pilot
 
-- Review, commit, and push Phase 5 only when explicitly authorized.
+#### Destination
 
-### Phase 6 — Compatibility and pilot release
+Publish `v0.6.0` with first-class Express/TypeScript backend support, preserved Laravel behavior, deterministic backend/frontend scope selection, cross-client compatibility evidence, and one real-feature pilot.
 
-#### Work
+#### Supported baseline
 
-- Validate behavior in Codex, Cursor, Claude, Copilot, and OpenCode.
-- Exercise Laravel-only, Livewire, React with TypeScript, and Svelte with TypeScript fixtures.
-- Run end-to-end lifecycle evaluations from ambiguous request through reviewed implementation.
-- Publish `0.1.0`.
-- Pilot the framework on one real feature.
-- Stabilize artifact schemas and invocation behavior before `1.0.0`.
+- Backend profiles: `laravel`, `express-typescript`, and conservative `unknown`.
+- Frontend profiles: `livewire` with Laravel, React with TypeScript, Svelte with TypeScript, `none`, and conservative `unknown`.
+- Express-only and Express with React/TypeScript or Svelte/TypeScript are supported in a single repository.
+- npm, pnpm, Yarn, and Bun remain supported through the detected lockfile and repository scripts.
+- Workspace repositories are supported only through explicit root scripts and confirmed source scopes; automatic per-workspace command discovery is deferred.
+- Express support extends the existing lifecycle and supporting disciplines; it does not add another implementation orchestrator or duplicate Laravel skills.
+
+#### Configuration contract
+
+- Evolve `.agent-framework.yaml` to schema version 3.
+- Add `express-typescript` to backend discovery when `express`, TypeScript, and a TypeScript configuration are proved to exist; plain JavaScript Express remains `unknown`.
+- Detect Express-only projects as `frontend: none`; retain React/TypeScript and Svelte/TypeScript detection when either frontend is present.
+- Add confirmed `source_scopes` for backend, frontend, and shared roots. Use longest-root matching; shared or unmatched paths conservatively affect both scopes.
+- Scope each verification command as backend, frontend, or both while preserving exact command order within each evidence stage.
+- Read schema version 2 configurations for compatibility, but require `framework-setup` to confirm source and command scopes before rewriting them as schema version 3.
+- Preserve setup idempotency, explicit unresolved values, tracker adapters, managed-file boundaries, and byte-for-byte protection of every discovered `AGENTS.md`.
+
+#### Express/TypeScript verification
+
+- Add one Express/TypeScript verification reference covering formatter, linter, TypeScript checking, focused tests, affected tests, HTTP/API smoke evidence, production build when configured, E2E evidence when applicable, and broad tests.
+- Discover only proved package scripts and installed capabilities; missing required checks remain visible gaps and never become guessed commands.
+- Replace extension-only impact classification with configured source scopes so backend `.ts` files are not treated as frontend files.
+- Treat API routes and externally observable HTTP responses as user-facing. They require configured HTTP integration or smoke evidence, but not browser evidence unless a browser workflow is affected.
+- Require a frontend production build only when the frontend scope changes; require an Express build only when the delivery contract or configured backend profile makes it applicable.
+- Keep the evidence ladder and audit language-agnostic: focused behavior, format, static analysis, affected tests, smoke, build, browser/E2E, then broad tests.
+
+#### Lifecycle integration
+
+- Update `framework-setup`, `framework-router`, `verify-change`, `implement`, and `code-review` to consume the selected backend profile and source scopes.
+- Keep SRS, feature-contract, delivery-contract, safeguard, amendment, TDD, and durable-synchronization formats shared between Laravel and Express.
+- Make review select applicable Laravel or Express/TypeScript standards while retaining the same independent Standards, Contract, and Evidence axes.
+- Update product documentation, examples, metadata, and evaluations without introducing framework-specific glossary terms into the language-agnostic backbone.
+
+#### Fixtures and evaluations
+
+- Add minimal fixtures for Express/TypeScript only, Express with React/TypeScript, and Express with Svelte/TypeScript.
+- Add negative fixtures for plain JavaScript Express, ambiguous source roots, missing TypeScript checks, missing API smoke evidence, and unsupported workspace layouts.
+- Add regression fixtures for Laravel-only, Livewire, Laravel with React/TypeScript, and Laravel with Svelte/TypeScript.
+- Test discovery, schema migration, idempotency, source-scope matching, command scoping, verification ordering, evidence auditing, and unchanged `AGENTS.md` bytes.
+- Run an end-to-end lifecycle evaluation from an ambiguous Express feature request through SRS traceability, feature and ticket contracts, red-green implementation evidence, verification, and three-axis review.
+
+#### Delivery order
+
+1. **Configuration contract:** schema version 3, source scopes, scoped commands, and migration rules.
+2. **Setup discovery:** Express/TypeScript detection, frontend separation, confirmation flow, and idempotent generation.
+3. **Verification planner:** profile-aware impact classification, API evidence, builds, and scoped command selection.
+4. **Lifecycle guidance:** Express reference plus router, implementation, and review integration.
+5. **Fixtures and regression suite:** Express matrices, failure modes, and complete Laravel regression coverage.
+6. **Client compatibility:** install and invoke the core lifecycle in Codex, Cursor, Claude Code, Copilot, and OpenCode where their supported extension mechanisms allow it.
+7. **Pilot and release:** deliver one real Express/TypeScript tracer bullet, record feedback as explicit framework changes, add a Changeset, and publish `v0.6.0`.
+
+Each numbered slice blocks the next. Configuration and verification changes must be complete before documentation claims Express support.
 
 #### Success criteria
 
-- Installation and core lifecycle work in the target clients.
-- The same project conventions and safeguards survive client changes.
-- Pilot feedback is recorded as explicit framework changes.
-- Version `1.0.0` is not released until artifact contracts are stable.
+- Express/TypeScript-only setup selects `backend: express-typescript` and `frontend: none` without manual YAML editing.
+- Express with React/TypeScript or Svelte/TypeScript records distinct, confirmed backend and frontend source scopes.
+- An Express backend `.ts` change does not trigger a frontend build, while an affected frontend change does.
+- API changes require and report exact focused, static, test, and HTTP smoke evidence according to the delivery contract.
+- Missing TypeScript, smoke, build, or test capabilities surface as explicit readiness or verification gaps.
+- Schema version 2 migration is deterministic and the second schema version 3 setup run is byte-identical.
+- All existing Laravel discovery, verification, review, installation, and protection tests continue to pass unchanged in behavior.
+- Installation and the core lifecycle work in each target client with client-specific limitations documented.
+- The Express pilot completes one vertical red-green tracer bullet with clean Standards, Contract, and Evidence review.
+- `v0.6.0` is not published until the full repository validation, official skill validation, plugin validation, dependency audit, installation smoke tests, fixture matrix, and pilot evidence pass.
+
+#### Safeguards and out of scope
+
+- Never modify generated `AGENTS.md` or project instruction files.
+- Never infer Express support from TypeScript alone or invent verification commands.
+- Never classify all `.js` or `.ts` files as frontend solely by extension.
+- Never fork the lifecycle into separate Laravel and Express skill sets.
+- Do not add plain JavaScript Express, Fastify, NestJS, automatic per-workspace discovery, application scaffolding, dependency installation, or deployment automation in Phase 6.
+
+#### Current status — 2026-07-23
+
+Implemented locally for `0.6.0`:
+
+- Added the `express-typescript` backend profile and schema version 3 with confirmed backend, frontend, and shared source roots.
+- Added deterministic discovery for Express/TypeScript-only, React/TypeScript, and Svelte/TypeScript layouts, including the `server` backend and `src` frontend convention.
+- Added backend, frontend, and both command scopes with explicit package-script overrides and package-manager-correct commands.
+- Replaced extension-only impact decisions with longest-root matching and visible shared, ambiguous, and unmatched scope notes.
+- Added Express API verification requirements, missing TypeScript/test gaps, HTTP smoke semantics, and Express-specific Standards guidance without adding lifecycle skills.
+- Added Express-only, Express/React, Express/Svelte, and plain JavaScript negative fixtures plus schema migration, idempotency, unsafe-root, command-scope, verification, and regression tests.
+- Extended isolated core-skill installation coverage to Codex, Claude Code, Cursor, GitHub Copilot, and OpenCode.
+- Added the `0.6.0` Changeset and documented the project/client compatibility matrix.
+
+Remaining before publication:
+
+- Run one real Express/TypeScript tracer-bullet pilot and record its Standards, Contract, and Evidence results.
+- Confirm actual lifecycle invocation in each available target client; automated installation is already proved for all five.
+- Run official skill and native plugin validators where their CLIs are allowed.
+- Review, commit, push, and open the Phase 6 pull request only when explicitly authorized.
 
 ## Release policy
 

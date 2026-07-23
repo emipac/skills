@@ -29,6 +29,26 @@
         "Does not declare verification complete",
         "Routes the gap back to setup or contract amendment"
       ]
+    },
+    {
+      "id": "express-api-with-react-client",
+      "prompt": "Verify an Express/TypeScript API route change under server/ in a repository whose React frontend lives under src/.",
+      "assertions": [
+        "Classifies server files as backend through configured source scopes",
+        "Runs backend TypeScript, focused test, and HTTP smoke evidence",
+        "Does not require the React production build",
+        "Uses exact backend-scoped commands only"
+      ]
+    },
+    {
+      "id": "express-ambiguous-path",
+      "prompt": "Verify a shared TypeScript contract outside every configured source root.",
+      "assertions": [
+        "Conservatively classifies the file as both scopes",
+        "Runs applicable backend and frontend commands",
+        "Does not classify by TypeScript extension alone",
+        "Reports the unmatched source-scope condition"
+      ]
     }
   ]
 }

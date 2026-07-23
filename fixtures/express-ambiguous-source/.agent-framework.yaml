@@ -1,0 +1,10 @@
+schema_version: 3
+backend: express-typescript
+frontend: react-typescript
+tracker: local-markdown
+source_scopes:
+  backend:
+    - src
+  frontend:
+    - src
+  shared: []

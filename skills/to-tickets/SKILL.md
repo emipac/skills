@@ -23,9 +23,9 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    no product decisions to begin.
 
 2. **Explore delivery boundaries.** Inspect the current codebase, existing
-   public seams, configured verification profile, capabilities and commands,
-   glossary, and ADRs. Identify optional prefactoring that makes the feature
-   easy without changing behavior.
+   public seams, configured backend/frontend profiles, source scopes,
+   verification capabilities and scoped commands, glossary, and ADRs. Identify
+   optional prefactoring that makes the feature easy without changing behavior.
 
 3. **Draft tracer bullets.** Each ticket cuts a narrow but complete path through
    every affected layer, is independently demoable or verifiable, and fits one
@@ -37,9 +37,10 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    [the template](references/delivery-contract.md#template). Every contract
    carries its SRS/AC/SG IDs, outcome, domain concepts, approach and tradeoffs,
    architecture boundary, public seam, safeguards, prohibited behavior,
-   verification matrix, assumptions, and blockers. Use exact configured
-   commands where available and a named capability only when the final selector
-   depends on the slice.
+   verification matrix, assumptions, and blockers. Give each verification row
+   a backend, frontend, or both scope. Use exact configured commands where
+   available and a named capability only when the final selector depends on the
+   slice.
 
 5. **Wire the graph.** Add only genuine start-blocking edges. Create all tracker
    issues first when native identifiers are needed, then wire native blocking

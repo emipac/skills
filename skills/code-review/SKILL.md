@@ -26,8 +26,8 @@ entire review.
 
 ## 2. Load normative sources
 
-Read `.agent-framework.yaml`, every configured guideline, the originating
-delivery contract and comments, parent feature contract, linked SRS
+Read `.agent-framework.yaml`, its selected profiles and source scopes, every
+configured guideline, the originating delivery contract and comments, parent feature contract, linked SRS
 requirements and safeguards, accepted contract amendments, red-green evidence,
 and the final verification report. Resolve tracker references through the
 configured adapter.
@@ -46,9 +46,12 @@ discarding provisional conclusions between passes. Each pass reads the same
 diff but only its own sources:
 
 - **Standards** — apply configured repository rules and
-  [the standards baseline](references/standards-baseline.md). Report documented
-  violations separately from judgement-call smells. Repository rules override
-  the baseline.
+  [the standards baseline](references/standards-baseline.md). For an
+  `express-typescript` backend also load
+  [the Express/TypeScript baseline](references/express-typescript.md). Apply a
+  framework baseline only to files in its confirmed source scope. Report
+  documented violations separately from judgement-call smells. Repository
+  rules override the baseline.
 - **Contract** — compare the diff with SRS, feature, and delivery intent. Find
   missing or partial behavior, scope additions, safeguard or non-goal
   violations, incorrect behavior, implicit decisions, and intent drift not

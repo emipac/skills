@@ -1,7 +1,7 @@
 {
   "name": "ai-skills-framework",
   "version": "0.5.0",
-  "description": "A deterministic, TDD-oriented Laravel development lifecycle with adaptable TypeScript frontend support.",
+  "description": "A deterministic, TDD-oriented Laravel or Express TypeScript development lifecycle with adaptable frontend support.",
   "author": {
     "name": "Minic",
     "url": "https://github.com/emipac/skills"
@@ -11,6 +11,7 @@
   "license": "MIT",
   "keywords": [
     "laravel",
+    "express",
     "typescript",
     "skills",
     "tdd",
