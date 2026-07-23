@@ -1,0 +1,27 @@
+{
+  "main": "server/server.ts",
+  "scripts": {
+    "build": "vite build && tsc --noEmit",
+    "build:frontend": "vite build",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:frontend": "vitest run",
+    "test:unit": "jest --testPathPatterns=server/**tests** --testPathIgnorePatterns=server/**tests**/integration/",
+    "test:integration": "jest --testPathPatterns=server/**tests**/integration/",
+    "test:watch": "jest --watch",
+    "type-check": "tsc --noEmit",
+    "smoke:search": "playwright test e2e/search-response-variants.spec.ts",
+    "db:setup": "tsx database/setup.ts"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

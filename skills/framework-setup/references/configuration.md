@@ -18,7 +18,13 @@ documents it points to.
 - `verification.capabilities` records proved tool and evidence capabilities.
 - `verification.commands` contains exact commands proved to exist during
   discovery, grouped by evidence category and backend, frontend, or both scope.
-  Package scripts use the lockfile-selected package manager.
+  Package scripts use the lockfile-selected package manager. Qualified
+  verification scripts are accepted only when their base category is known;
+  operational, watch, fix, write, development, and coverage variants remain
+  excluded unless explicitly selected. When both `format` and `format:check`
+  exist, discovery prefers the non-mutating check. Script-name scope markers
+  take precedence, followed by confirmed source-root references in the command,
+  then the conservative profile default.
 - `history` records the project completion-log convention.
 - `protected_files` lists instruction files setup must preserve byte-for-byte.
 
@@ -30,3 +36,7 @@ Schema version 2 configurations do not contain source scopes or scoped
 commands. The verification parser can read version 2 for compatibility, but
 rerun `framework-setup`, confirm every proposed scope, and generate schema
 version 3 before new work.
+
+Use `--exclude-scripts` for discovered commands that are redundant, unsafe, or
+inapplicable. Repeat the same exclusions on later setup runs because the
+generated contract stores the selected exact commands, not discovery policy.

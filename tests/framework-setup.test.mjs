@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   configureProject,
+  discoverVerification,
   discoverProject,
 } from '../skills/framework-setup/scripts/configure.mjs';
 
@@ -487,4 +488,80 @@ test('does not infer unsupported workspace package profiles', async () => {
 
   assert.equal(discovery.backend, 'unknown');
   assert.equal(discovery.frontend, 'none');
+});
+
+test('discovers safe qualified verification scripts and source-root scopes', async () => {
+  const discovery = await discoverProject(
+    path.join(process.cwd(), 'fixtures', 'express-realistic-scripts'),
+  );
+
+  assert.deepEqual(discovery.sourceScopes, {
+    backend: ['database', 'server'],
+    frontend: ['src'],
+    shared: [],
+  });
+  assert.deepEqual(discovery.verification.commands, {
+    format: {
+      backend: [],
+      frontend: [],
+      both: ['npm run format:check'],
+    },
+    static_analysis: {
+      backend: [],
+      frontend: [],
+      both: ['npm run lint', 'npm run type-check'],
+    },
+    test: {
+      backend: ['npm run test:unit', 'npm run test:integration'],
+      frontend: ['npm run test:frontend'],
+      both: ['npm run test'],
+    },
+    smoke: {
+      backend: [],
+      frontend: [],
+      both: ['npm run smoke:search'],
+    },
+    build: {
+      backend: [],
+      frontend: ['npm run build:frontend'],
+      both: ['npm run build'],
+    },
+    e2e: {
+      backend: [],
+      frontend: [],
+      both: [],
+    },
+  });
+});
+
+test('removes explicitly excluded package scripts from verification discovery', async () => {
+  const fixtureRoot = path.join(
+    process.cwd(),
+    'fixtures',
+    'express-realistic-scripts',
+  );
+  const packageManifest = JSON.parse(
+    await readFile(path.join(fixtureRoot, 'package.json'), 'utf8'),
+  );
+  const verification = await discoverVerification(
+    fixtureRoot,
+    packageManifest,
+    {
+      backend: 'express-typescript',
+      frontend: 'react-typescript',
+      sourceScopes: {
+        backend: ['database', 'server'],
+        frontend: ['src'],
+        shared: [],
+      },
+      excludedScripts: ['build', 'test'],
+    },
+  );
+
+  assert.deepEqual(verification.commands.test.both, []);
+  assert.deepEqual(verification.commands.build.both, []);
+  assert.deepEqual(verification.commands.test.backend, [
+    'npm run test:unit',
+    'npm run test:integration',
+  ]);
 });
