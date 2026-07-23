@@ -1,5 +1,14 @@
 # ai-skills-framework
 
+## 0.6.0
+
+### Minor Changes
+
+- [#8](https://github.com/emipac/skills/pull/8) [`19506d4`](https://github.com/emipac/skills/commit/19506d42a2b6f25062697699e88bbcd83db58fa1) Thanks [@emipac](https://github.com/emipac)! - Add first-class Express with TypeScript backend discovery, schema version 3
+  source and command scopes, API-aware verification and review guidance,
+  compatibility fixtures, and install coverage for GitHub Copilot and OpenCode
+  while preserving Laravel behavior.
+
 ## 0.5.0
 
 ### Minor Changes
