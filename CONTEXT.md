@@ -1,6 +1,6 @@
 # AI Skills Framework
 
-A Minic-maintained collection of agent skills for a deterministic, TDD-oriented Laravel development lifecycle with adaptable TypeScript frontends. Released skills are flat under `skills/` and are distributed through universal, Claude Code, and Codex installers. `/framework-setup` records repository-local conventions in `.agent-framework.yaml`; `/framework-router` selects the lifecycle route.
+A Minic-maintained collection of agent skills for a deterministic, TDD-oriented Laravel or Express with TypeScript development lifecycle with adaptable Livewire and TypeScript frontends. Released skills are flat under `skills/` and are distributed through universal, Claude Code, and Codex installers. `/framework-setup` records repository-local conventions in `.agent-framework.yaml`; `/framework-router` selects the lifecycle route.
 
 ## Language
 
@@ -60,9 +60,15 @@ acceptance evidence, non-goals, public interfaces, or durable architecture.
 Private implementation choices do not require one.
 
 **Verification profile**:
-The configured Laravel/frontend evidence contract containing proved
-capabilities and exact commands. It is selected by project stack and consumed
-by `verify-change`.
+The configured backend/frontend evidence contract containing confirmed source
+scopes, proved capabilities, and exact scoped commands. It is selected by
+project stack and consumed by `verify-change`.
+
+**Source scope**:
+A confirmed repository-relative root classified as backend, frontend, or
+shared. Longest-root matching classifies changed files; shared, tied, and
+unmatched files conservatively affect both verification scopes.
+_Avoid_: frontend file extension, inferred TypeScript layer
 
 **Evidence ladder**:
 An impact-based verification order progressing from focused behavior through
@@ -89,6 +95,7 @@ after an explicit owning decision. Private implementation remains code truth.
 - A **Feature contract** decomposes into many **Delivery contracts**
 - A **Delivery contract** is the normative body of one implementation **Issue**
 - A **Readiness gate** controls progression from SRS to feature contract, delivery contract, and implementation
+- A **Source scope** selects the applicable commands within a **Verification profile**
 - A **Verification profile** produces an **Evidence ladder** for one **Delivery contract**
 - A **Three-axis review** evaluates the implementation after its **Evidence ladder** passes
 - **Durable synchronization** records only accepted long-lived learning

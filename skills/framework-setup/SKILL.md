@@ -1,6 +1,6 @@
 ---
 name: framework-setup
-description: Discover and configure a repository for AI Skills Framework without modifying AGENTS.md. Use before the first lifecycle run, when switching tracker adapters, or when project conventions and verification commands change.
+description: Discover and configure a Laravel or Express/TypeScript repository for AI Skills Framework without modifying AGENTS.md. Use before the first lifecycle run, when migrating the configuration schema, switching tracker adapters, or changing project conventions, source scopes, or verification commands.
 ---
 
 # Framework Setup
@@ -22,9 +22,10 @@ Read every path reported under `guidelinePaths` before proposing configuration.
 Treat existing repository instructions as authoritative. `AGENTS.md` is a
 protected input: read it, record it, and preserve its exact bytes.
 
-Completion criterion: backend, frontend, SRS candidates, guideline paths,
-protected files, and the detected verification profile, capabilities, and
-exact commands are visible.
+Completion criterion: backend, frontend, source-scope candidates, existing
+schema version, SRS candidates, guideline paths, protected files, and the
+detected verification profile, capabilities, and exact scoped commands are
+visible.
 
 ### 2. Confirm the branches
 
@@ -35,13 +36,23 @@ Present detected values and ask only about unresolved or consequential choices:
 2. **SRS:** recommend the strongest discovered SRS candidate, or reserve
    `docs/specifications/srs.md` for `/srs-modeling` when none exists. Use `null`
    only when the user explicitly excludes an SRS.
-3. **Profiles:** confirm Laravel and one frontend profile: `livewire`,
-   `react-typescript`, `svelte-typescript`, or `none`.
-4. **History:** retain an existing history convention; otherwise recommend
+3. **Profiles:** confirm `laravel`, `express-typescript`, or `unknown` and one
+   compatible frontend profile: `livewire`, `react-typescript`,
+   `svelte-typescript`, `none`, or `unknown`.
+4. **Source scopes:** confirm backend, frontend, and shared roots. Prefer an
+   existing schema version 3 contract, then detected entry-point and
+   conventional roots. Express projects commonly use `server`, `backend`,
+   `api`, or `src/server`; React and Svelte commonly use `src`, `client`, or
+   `frontend`. Never classify TypeScript by extension alone. Shared and
+   unmatched files affect both scopes.
+5. **Command scopes:** confirm every discovered command as backend, frontend,
+   or both. A package-manager command is not inherently a frontend command.
+6. **History:** retain an existing history convention; otherwise recommend
    `docs/history` without creating it.
 
 Show the proposed configuration before writing. Defaults yield to applicable
-project instructions.
+project instructions. A schema version 2 configuration must be confirmed before
+rewriting it as schema version 3.
 
 Completion criterion: the user has confirmed every value that changes the
 generated contract.
@@ -57,6 +68,12 @@ node <skill-directory>/scripts/configure.mjs \
   --srs <path-or-null> \
   --backend <profile> \
   --frontend <profile> \
+  --backend-scopes <comma-separated-roots> \
+  --frontend-scopes <comma-separated-roots> \
+  --shared-scopes <comma-separated-roots> \
+  --backend-scripts <comma-separated-package-script-names> \
+  --frontend-scripts <comma-separated-package-script-names> \
+  --both-scripts <comma-separated-package-script-names> \
   --history <path-or-null>
 ```
 
@@ -75,13 +92,15 @@ Completion criterion: the command succeeds and reports the four managed files.
 ### 4. Verify
 
 Run discovery again, inspect the generated files, then rerun the identical
-configure command. The second run must produce byte-identical files.
+configure command. The second run must produce byte-identical schema version 3
+files.
 
 Report:
 
 - selected profiles and tracker;
+- confirmed backend, frontend, and shared source roots;
 - recorded SRS, glossary, ADR, guideline, convention, and history paths;
-- exact verification commands discovered;
+- exact verification commands and their backend/frontend/both scopes;
 - protected instruction files checked;
 - any unresolved values left as `null` or empty lists.
 

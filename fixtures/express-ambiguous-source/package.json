@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "express": "^5.0.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  }
+}

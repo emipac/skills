@@ -1,10 +1,10 @@
 # AI Skills Framework
 
-AI Skills Framework is Minic's installable development lifecycle for Laravel backends with Livewire or TypeScript frontends using React or Svelte.
+AI Skills Framework is Minic's installable development lifecycle for Laravel or Express with TypeScript backends and Livewire, React/TypeScript, or Svelte/TypeScript frontends.
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** Phase 5 development: planning and delivery contracts are published as `v0.4.0`; deterministic verification and three-axis review are being prepared for `0.5.0`.
+> **Status:** Phase 5 is published as `v0.5.0`; Phase 6 Express/TypeScript compatibility is implemented locally for `v0.6.0`, with real-project pilot and release validation pending.
 
 ## Install with the universal skills CLI
 
@@ -44,6 +44,8 @@ Then install **AI Skills Framework** from the Minic marketplace in Codex.
 - Never commit, push, or modify generated `AGENTS.md` files without explicit authorization.
 
 See [the development plan](./docs/skill-framework-development-plan.md) for the lifecycle, delivery phases, release cadence, and `1.0.0` criteria.
+See [the compatibility matrix](./docs/compatibility.md) for supported clients,
+backend/frontend profiles, and workspace limitations.
 
 ## Released skills
 

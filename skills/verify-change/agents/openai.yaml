@@ -1,4 +1,4 @@
 interface:
   display_name: "Verify Change"
   short_description: "Plan and prove change verification"
-  default_prompt: "Use $verify-change to run the configured verification profile and report exact evidence."
+  default_prompt: "Use $verify-change to run the configured source-scoped verification profile and report exact evidence."

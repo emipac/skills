@@ -90,3 +90,15 @@ OpenSPDD's Java/Spring vocabulary, exhaustive class and method inventories, immu
 - Added selective synchronization rules for SRS behavior, glossary terms, ADR
   rationale, ticket evidence, and history while keeping private implementation
   details as code truth.
+
+### Phase 6 — Express/TypeScript compatibility
+
+- Added Minic-owned `express-typescript` backend discovery while preserving the
+  shared language-agnostic lifecycle and Laravel profile.
+- Evolved `.agent-framework.yaml` to schema version 3 with confirmed source
+  roots and backend, frontend, or both command scopes.
+- Extended `verify-change`, delivery contracts, and three-axis review with
+  source-scope classification, HTTP/API evidence, and Express/TypeScript
+  standards.
+- Added Express compatibility fixtures and universal installer coverage for
+  GitHub Copilot and OpenCode.

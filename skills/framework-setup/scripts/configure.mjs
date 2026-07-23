@@ -16,7 +16,7 @@ const trackerAdapters = new Set([
   'jira',
   'linear',
 ]);
-const backendProfiles = new Set(['laravel', 'unknown']);
+const backendProfiles = new Set(['laravel', 'express-typescript', 'unknown']);
 const frontendProfiles = new Set([
   'livewire',
   'react-typescript',
@@ -41,6 +41,49 @@ const readJson = async (filePath) => {
   }
 
   return JSON.parse(await readFile(filePath, 'utf8'));
+};
+
+const readExistingConfiguration = async (projectRoot) => {
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+
+  if (!(await exists(configurationPath))) {
+    return { schemaVersion: null, sourceScopes: null };
+  }
+
+  const contents = await readFile(configurationPath, 'utf8');
+  const schemaVersion = Number(contents.match(/^schema_version:\s*(\d+)$/m)?.[1] ?? 0);
+  const sourceScopes = { backend: [], frontend: [], shared: [] };
+  let inSourceScopes = false;
+  let currentScope = null;
+
+  for (const line of contents.split(/\r?\n/)) {
+    if (line === 'source_scopes:') {
+      inSourceScopes = true;
+      continue;
+    }
+
+    if (inSourceScopes && line && !line.startsWith(' ')) {
+      break;
+    }
+
+    const scope = line.match(/^  (backend|frontend|shared):(?:\s*\[\])?$/);
+
+    if (inSourceScopes && scope) {
+      currentScope = scope[1];
+      continue;
+    }
+
+    const root = line.match(/^    -\s+(.+)$/);
+
+    if (inSourceScopes && currentScope && root) {
+      sourceScopes[currentScope].push(root[1].replace(/^"|"$/g, ''));
+    }
+  }
+
+  return {
+    schemaVersion: schemaVersion || null,
+    sourceScopes: schemaVersion >= 3 ? sourceScopes : null,
+  };
 };
 
 const readGitRemotes = async (projectRoot) => {
@@ -91,6 +134,84 @@ const walkFiles = async (directory, projectRoot, files = []) => {
 };
 
 const sortUnique = (values) => [...new Set(values)].sort();
+const verificationCategories = [
+  'format',
+  'static_analysis',
+  'test',
+  'smoke',
+  'build',
+  'e2e',
+];
+const verificationScopes = ['backend', 'frontend', 'both'];
+
+const emptyScopedCommands = () => Object.fromEntries(
+  verificationCategories.map((category) => [
+    category,
+    { backend: [], frontend: [], both: [] },
+  ]),
+);
+
+const hasFilesUnder = (files, root) => files.some((file) => (
+  (file === root || file.startsWith(`${root}${path.sep}`))
+  && /\.(?:(?:c|m)?(?:js|ts)x?|svelte|php|blade\.php)$/i.test(file)
+));
+
+const existingRoots = (files, candidates) => candidates.filter(
+  (candidate) => hasFilesUnder(files, candidate),
+);
+
+const discoverSourceScopes = (files, backend, frontend) => {
+  const backendCandidates = existingRoots(
+    files,
+    backend === 'laravel'
+      ? [
+          'app',
+          'bootstrap',
+          'config',
+          'database',
+          'routes',
+          'tests',
+          path.join('resources', 'views'),
+        ]
+      : [
+          'server',
+          'backend',
+          'api',
+          path.join('src', 'server'),
+          path.join('src', 'backend'),
+          path.join('src', 'api'),
+        ],
+  );
+  const frontendCandidates = existingRoots(files, [
+    'client',
+    'frontend',
+    path.join('src', 'client'),
+    path.join('src', 'frontend'),
+    path.join('resources', 'js'),
+  ]);
+  const shared = existingRoots(files, ['shared', path.join('src', 'shared')]);
+
+  if (backend === 'express-typescript' && backendCandidates.length === 0) {
+    const sourceRoot = existingRoots(files, ['src']);
+
+    if (sourceRoot.length > 0 && frontend === 'none') {
+      backendCandidates.push(...sourceRoot);
+    }
+  }
+
+  if (
+    ['react-typescript', 'svelte-typescript'].includes(frontend)
+    && frontendCandidates.length === 0
+  ) {
+    frontendCandidates.push(...existingRoots(files, ['src']));
+  }
+
+  return {
+    backend: sortUnique(backendCandidates),
+    frontend: sortUnique(frontendCandidates),
+    shared: sortUnique(shared),
+  };
+};
 
 const detectPackageManager = async (projectRoot) => {
   for (const [lockfile, packageManager] of [
@@ -119,16 +240,9 @@ const packageScriptCommand = (packageManager, script) => {
 export const discoverVerification = async (
   projectRoot,
   packageManifest,
-  { backend, frontend },
+  { backend, frontend, scriptScopes = {} },
 ) => {
-  const commands = {
-    format: [],
-    static_analysis: [],
-    test: [],
-    smoke: [],
-    build: [],
-    e2e: [],
-  };
+  const commands = emptyScopedCommands();
   const capabilities = new Set();
   const detectedFiles = [
     [
@@ -148,29 +262,109 @@ export const discoverVerification = async (
 
   for (const [relativePath, category, command, capability] of detectedFiles) {
     if (await exists(path.join(projectRoot, relativePath))) {
-      commands[category].push(command);
+      commands[category].backend.push(command);
       capabilities.add(capability);
     }
   }
 
   const scriptCategories = {
-    format: ['format', 'frontend-format'],
-    lint: ['static_analysis', 'frontend-lint'],
-    typecheck: ['static_analysis', 'typescript'],
-    'type-check': ['static_analysis', 'typescript'],
-    test: ['test', 'frontend-tests'],
-    smoke: ['smoke', 'smoke-tests'],
-    build: ['build', 'frontend-build'],
-    e2e: ['e2e', 'frontend-e2e'],
-    'test:e2e': ['e2e', 'frontend-e2e'],
+    format: 'format',
+    lint: 'static_analysis',
+    typecheck: 'static_analysis',
+    'type-check': 'static_analysis',
+    test: 'test',
+    smoke: 'smoke',
+    build: 'build',
+    e2e: 'e2e',
+    'test:e2e': 'e2e',
   };
   const packageManager = await detectPackageManager(projectRoot);
-
-  for (const [script, [category, capability]] of Object.entries(scriptCategories)) {
-    if (packageManifest.scripts?.[script]) {
-      commands[category].push(packageScriptCommand(packageManager, script));
-      capabilities.add(capability);
+  const explicitScope = (script) => {
+    if (scriptScopes[script]) {
+      return scriptScopes[script];
     }
+
+    const parts = script.split(':');
+
+    if (parts.includes('server') || parts.includes('backend')) {
+      return 'backend';
+    }
+
+    if (parts.includes('client') || parts.includes('frontend')) {
+      return 'frontend';
+    }
+
+    if (backend === 'express-typescript' && frontend === 'none') {
+      return 'backend';
+    }
+
+    if (backend === 'express-typescript' && frontend !== 'none') {
+      return 'both';
+    }
+
+    return frontend === 'none' ? 'backend' : 'frontend';
+  };
+  const categoryForScript = (script) => {
+    const parts = script.split(':');
+    const knownParts = new Set([
+      ...Object.keys(scriptCategories),
+      'server',
+      'backend',
+      'client',
+      'frontend',
+    ]);
+
+    if (!scriptScopes[script] && parts.some((part) => !knownParts.has(part))) {
+      return null;
+    }
+
+    if (parts.includes('e2e')) {
+      return 'e2e';
+    }
+
+    const base = parts.find((part) => Object.hasOwn(scriptCategories, part));
+
+    return base ? scriptCategories[base] : null;
+  };
+  const addPackageCapability = (category, scope, script) => {
+    if (['typecheck', 'type-check'].some((name) => script.split(':').includes(name))) {
+      capabilities.add('typescript');
+      return;
+    }
+
+    const capabilitySuffix = {
+      format: 'format',
+      static_analysis: 'lint',
+      test: 'tests',
+      smoke: 'smoke',
+      build: 'build',
+      e2e: 'e2e',
+    }[category];
+
+    if (scope !== 'frontend' && backend === 'express-typescript') {
+      capabilities.add(`express-${capabilitySuffix}`);
+    }
+
+    if (scope !== 'backend' && frontend !== 'none') {
+      capabilities.add(`frontend-${capabilitySuffix}`);
+    }
+  };
+
+  for (const script of Object.keys(packageManifest.scripts ?? {})) {
+    const category = categoryForScript(script);
+
+    if (!category) {
+      continue;
+    }
+
+    const scope = explicitScope(script);
+
+    if (!verificationScopes.includes(scope)) {
+      throw new Error(`Unsupported scope for package script ${script}: ${scope}`);
+    }
+
+    commands[category][scope].push(packageScriptCommand(packageManager, script));
+    addPackageCapability(category, scope, script);
   }
 
   const profile = frontend === 'none' ? backend : `${backend}-${frontend}`;
@@ -182,7 +376,7 @@ export const discoverVerification = async (
   };
 };
 
-const discoverFrontend = (composerPackages, nodePackages) => {
+const discoverFrontend = (composerPackages, nodePackages, backend) => {
   if (nodePackages.svelte && nodePackages.typescript) {
     return 'svelte-typescript';
   }
@@ -195,7 +389,7 @@ const discoverFrontend = (composerPackages, nodePackages) => {
     return 'livewire';
   }
 
-  if (Object.keys(nodePackages).length === 0) {
+  if (backend === 'express-typescript' || Object.keys(nodePackages).length === 0) {
     return 'none';
   }
 
@@ -208,6 +402,7 @@ export const discoverProject = async (projectRoot) => {
   const composerManifest = await readJson(path.join(resolvedRoot, 'composer.json'));
   const packageManifest = await readJson(path.join(resolvedRoot, 'package.json'));
   const gitRemotes = await readGitRemotes(resolvedRoot);
+  const existingConfiguration = await readExistingConfiguration(resolvedRoot);
   const composerPackages = {
     ...composerManifest.require,
     ...composerManifest['require-dev'],
@@ -229,13 +424,24 @@ export const discoverProject = async (projectRoot) => {
     ].includes(basename) || filePath.startsWith(`docs${path.sep}conventions${path.sep}`);
   });
   const markdownFiles = allFiles.filter((filePath) => filePath.endsWith('.md'));
-  const backend = composerPackages['laravel/framework'] ? 'laravel' : 'unknown';
-  const frontend = discoverFrontend(composerPackages, nodePackages);
+  const hasTypeScriptConfiguration = allFiles.some(
+    (filePath) => /^tsconfig(?:\.[^/]+)?\.json$/i.test(filePath),
+  );
+  const backend = composerPackages['laravel/framework']
+    ? 'laravel'
+    : nodePackages.express && nodePackages.typescript && hasTypeScriptConfiguration
+      ? 'express-typescript'
+      : 'unknown';
+  const frontend = discoverFrontend(composerPackages, nodePackages, backend);
+  const sourceScopes = existingConfiguration.sourceScopes
+    ?? discoverSourceScopes(allFiles, backend, frontend);
 
   return {
     projectRoot: resolvedRoot,
     backend,
     frontend,
+    sourceScopes,
+    existingConfiguration,
     gitRemotes,
     recommendedTracker: gitRemotes.some((remote) => /github\.com[:/]/i.test(remote.url))
       ? 'github'
@@ -309,6 +515,12 @@ const renderConfiguration = (configuration) => {
   ];
 
   appendYamlList(lines, 'guidelines', configuration.guidelines);
+  lines.push('source_scopes:');
+
+  for (const scope of verificationScopes.slice(0, 2).concat('shared')) {
+    appendYamlList(lines, scope, configuration.source_scopes[scope], 2);
+  }
+
   lines.push(
     'verification:',
     `  profile: ${yamlScalar(configuration.verification.profile)}`,
@@ -317,7 +529,11 @@ const renderConfiguration = (configuration) => {
   lines.push('  commands:');
 
   for (const [category, commands] of Object.entries(configuration.verification.commands)) {
-    appendYamlList(lines, category, commands, 4);
+    lines.push(`    ${category}:`);
+
+    for (const scope of verificationScopes) {
+      appendYamlList(lines, scope, commands[scope], 6);
+    }
   }
 
   lines.push(
@@ -378,11 +594,45 @@ const selectedValue = (selections, key, fallback) => (
   selections[key] === undefined ? fallback : selections[key]
 );
 
+const normalizeSourceScopes = (sourceScopes) => Object.fromEntries(
+  ['backend', 'frontend', 'shared'].map((scope) => {
+    const roots = sourceScopes?.[scope];
+
+    if (!Array.isArray(roots)) {
+      throw new Error(`Source scope ${scope} must be an array`);
+    }
+
+    return [
+      scope,
+      sortUnique(roots.map((root) => {
+        if (typeof root !== 'string') {
+          throw new Error(`Invalid ${scope} source root: ${String(root)}`);
+        }
+
+        const normalized = root.replaceAll('\\', '/').replace(/^\.\/|\/$/g, '');
+
+        if (
+          !normalized
+          || path.posix.isAbsolute(normalized)
+          || normalized.split('/').includes('..')
+        ) {
+          throw new Error(`Invalid ${scope} source root: ${root}`);
+        }
+
+        return normalized;
+      })),
+    ];
+  }),
+);
+
 export const configureProject = async ({ projectRoot, selections }) => {
   const discovery = await discoverProject(projectRoot);
   const tracker = selections.tracker;
   const backend = selections.backend ?? discovery.backend;
   const frontend = selections.frontend ?? discovery.frontend;
+  const sourceScopes = normalizeSourceScopes(
+    selections.sourceScopes ?? discovery.sourceScopes,
+  );
 
   if (!trackerAdapters.has(tracker)) {
     throw new Error(`Unsupported tracker adapter: ${tracker}`);
@@ -401,7 +651,7 @@ export const configureProject = async ({ projectRoot, selections }) => {
     discovery.protectedFiles,
   );
   const configuration = {
-    schema_version: 2,
+    schema_version: 3,
     backend,
     frontend,
     tracker,
@@ -423,7 +673,12 @@ export const configureProject = async ({ projectRoot, selections }) => {
       ),
     },
     guidelines: discovery.guidelinePaths,
-    verification: discovery.verification,
+    source_scopes: sourceScopes,
+    verification: await discoverVerification(
+      discovery.projectRoot,
+      await readJson(path.join(discovery.projectRoot, 'package.json')),
+      { backend, frontend, scriptScopes: selections.scriptScopes },
+    ),
     history: {
       path: selectedValue(
         selections,
@@ -499,6 +754,26 @@ const parseArguments = (argumentsList) => {
 };
 
 const nullableArgument = (value) => value === 'null' ? null : value;
+const listArgument = (value) => (
+  value === undefined || value === ''
+    ? []
+    : value.split(',').map((item) => item.trim()).filter(Boolean)
+);
+const sourceScopeArguments = (options) => (
+  ['backend-scopes', 'frontend-scopes', 'shared-scopes']
+    .some((key) => options[key] !== undefined)
+    ? {
+        backend: listArgument(options['backend-scopes']),
+        frontend: listArgument(options['frontend-scopes']),
+        shared: listArgument(options['shared-scopes']),
+      }
+    : undefined
+);
+const scriptScopeArguments = (options) => Object.fromEntries(
+  ['backend', 'frontend', 'both'].flatMap((scope) => (
+    listArgument(options[`${scope}-scripts`]).map((script) => [script, scope])
+  )),
+);
 
 const runCli = async () => {
   const options = parseArguments(process.argv.slice(2));
@@ -523,6 +798,8 @@ const runCli = async () => {
       historyPath: nullableArgument(options.history),
       backend: options.backend,
       frontend: options.frontend,
+      sourceScopes: sourceScopeArguments(options),
+      scriptScopes: scriptScopeArguments(options),
     },
   });
 

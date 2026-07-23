@@ -14,7 +14,8 @@ single implementation orchestrator; `/tdd` supplies the red-green discipline,
 Read `.agent-framework.yaml`, the selected tracker adapter, the full ticket and
 comments, parent feature contract, linked SRS requirements/acceptance
 criteria/safeguards, glossary, ADRs, project guidelines, and configured
-verification commands. Inspect the working tree and relevant code.
+backend/frontend profiles, source scopes, and verification commands. Inspect
+the working tree and relevant code.
 
 If the user provides ad-hoc work without a ticket, establish the same minimal
 delivery contract in the conversation and get explicit approval before coding.
@@ -36,9 +37,10 @@ changed.
 
 ## 3. Establish the baseline
 
-Run the narrow existing tests and static checks that cover the seam. Separate
-pre-existing failures from contract work. Record the protected files and never
-modify `AGENTS.md`.
+Classify the seam through the confirmed backend, frontend, or shared source
+roots. Run the narrow existing tests and static checks that cover that scope.
+Separate pre-existing failures from contract work. Record the protected files
+and never modify `AGENTS.md`.
 
 Completion criterion: the baseline is understood and one exact command can
 show the first new behavior red.

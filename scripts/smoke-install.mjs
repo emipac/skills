@@ -6,7 +6,13 @@ import process from 'node:process';
 
 const sourceRoot = process.cwd();
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
-const agents = ['codex', 'claude-code', 'cursor'];
+const agents = [
+  'codex',
+  'claude-code',
+  'cursor',
+  'github-copilot',
+  'opencode',
+];
 const smokeSkills = [
   'framework-router',
   'framework-setup',
@@ -48,6 +54,8 @@ try {
     ['codex', '.agents/skills'],
     ['claude-code', '.claude/skills'],
     ['cursor', '.agents/skills'],
+    ['github-copilot', '.agents/skills'],
+    ['opencode', '.agents/skills'],
   ]);
 
   for (const [agent, installedRoot] of installedRootsByAgent) {
@@ -167,12 +175,26 @@ try {
       'references',
       'typescript-frontends.md',
     );
+    const expressVerificationProfile = path.join(
+      temporaryRoot,
+      installedRoot,
+      'verify-change',
+      'references',
+      'express-typescript.md',
+    );
     const reviewAxes = path.join(
       temporaryRoot,
       installedRoot,
       'code-review',
       'references',
       'review-report.md',
+    );
+    const expressReviewProfile = path.join(
+      temporaryRoot,
+      installedRoot,
+      'code-review',
+      'references',
+      'express-typescript.md',
     );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
@@ -243,8 +265,16 @@ try {
       throw new Error(`${agent}: TypeScript verification profile was not installed`);
     }
 
+    if (!(await readFile(expressVerificationProfile, 'utf8')).includes('public HTTP')) {
+      throw new Error(`${agent}: Express verification profile was not installed`);
+    }
+
     if (!(await readFile(reviewAxes, 'utf8')).includes('## Evidence')) {
       throw new Error(`${agent}: three-axis review reference was not installed`);
+    }
+
+    if (!(await readFile(expressReviewProfile, 'utf8')).includes('Middleware ordering')) {
+      throw new Error(`${agent}: Express review profile was not installed`);
     }
   }
 

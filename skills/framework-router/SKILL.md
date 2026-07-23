@@ -73,9 +73,9 @@ Two model-invoked references that run *beneath* the other skills — each the si
   requirements, safeguards, risks, questions, and acceptance coverage. Reach
   for it to create, refine, or audit the configured SRS.
 - **`/codebase-design`** — the deep-module vocabulary (module, interface, depth, seam, adapter, leverage, locality) for designing a module's *shape*: a lot of behaviour behind a small interface at a clean seam. `/tdd` and `/improve-codebase-architecture` both speak it.
-- **`/verify-change`** — plan and audit impact-based Laravel and frontend
-  evidence from focused checks through broad suites using only configured
-  capabilities and exact commands.
+- **`/verify-change`** — plan and audit source-scoped Laravel,
+  Express/TypeScript, and frontend evidence from focused checks through broad
+  suites using only configured capabilities and exact commands.
 
 ## Crossing sessions
 
@@ -94,4 +94,7 @@ Off the main flow entirely.
 
 ## Precondition
 
-**`/framework-setup`** — run before the first engineering flow to discover project instructions, select the tracker adapter, record artifact paths and verification commands, and protect `AGENTS.md`.
+**`/framework-setup`** — run before the first engineering flow to discover
+project instructions, select backend/frontend profiles and source scopes,
+select the tracker adapter, record artifact paths and scoped verification
+commands, and protect `AGENTS.md`.

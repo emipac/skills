@@ -29,6 +29,16 @@
         "Assesses available tests without inventing acceptance criteria",
         "Keeps all three axis summaries separate"
       ]
+    },
+    {
+      "id": "express-api-safeguard",
+      "prompt": "Review an Express/TypeScript route change that weakens request authorization and changes an error response.",
+      "assertions": [
+        "Applies Express standards only to the configured backend scope",
+        "Contract reports authorization and response safeguard drift",
+        "Evidence requires focused API and HTTP smoke coverage",
+        "Keeps Standards, Contract, and Evidence findings independent"
+      ]
     }
   ]
 }

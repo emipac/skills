@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "dependencies": {
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "smoke": "node --test tests/smoke",
+    "build": "tsc"
+  }
+}

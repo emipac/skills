@@ -159,6 +159,178 @@ test('does not run frontend-only layers for a backend-only change', () => {
   );
 });
 
+test('preserves Laravel backend-only behavior with schema version 3 scopes', () => {
+  const result = planVerification({
+    verification: {
+      profile: 'laravel-react-typescript',
+      sourceScopes: {
+        backend: ['app', 'routes', 'tests'],
+        frontend: ['resources/js'],
+        shared: [],
+      },
+      capabilities: verification.capabilities,
+      commands: {
+        format: {
+          backend: ['vendor/bin/pint --dirty --format agent'],
+          frontend: [],
+          both: [],
+        },
+        static_analysis: {
+          backend: ['vendor/bin/phpstan analyse'],
+          frontend: ['npm run lint'],
+          both: [],
+        },
+        test: {
+          backend: ['php artisan test --compact'],
+          frontend: ['npm run test'],
+          both: [],
+        },
+        smoke: { backend: [], frontend: [], both: [] },
+        build: { backend: [], frontend: ['npm run build'], both: [] },
+        e2e: { backend: [], frontend: ['npm run e2e'], both: [] },
+      },
+    },
+    changedFiles: ['app/Models/Order.php'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.scopes, { backend: true, frontend: false });
+  assert.equal(result.steps.some((step) => step.command === 'npm run build'), false);
+});
+
+test('uses configured source scopes for Express and frontend TypeScript', () => {
+  const expressVerification = {
+    profile: 'express-typescript-react-typescript',
+    sourceScopes: {
+      backend: ['server'],
+      frontend: ['src'],
+      shared: ['shared'],
+    },
+    capabilities: ['express-tests', 'frontend-build', 'typescript'],
+    commands: {
+      format: { backend: [], frontend: [], both: [] },
+      static_analysis: {
+        backend: ['npm run typecheck:server'],
+        frontend: ['npm run lint:client'],
+        both: [],
+      },
+      test: {
+        backend: ['npm run test:server'],
+        frontend: ['npm run test:client'],
+        both: [],
+      },
+      smoke: {
+        backend: ['npm run smoke:server'],
+        frontend: [],
+        both: [],
+      },
+      build: {
+        backend: ['npm run build:server'],
+        frontend: ['npm run build:client'],
+        both: [],
+      },
+      e2e: { backend: [], frontend: ['npm run e2e:client'], both: [] },
+    },
+  };
+
+  const backendResult = planVerification({
+    verification: expressVerification,
+    changedFiles: ['server/routes/users.ts'],
+    userFacing: true,
+    ticketRows: [],
+  });
+
+  assert.equal(backendResult.valid, true);
+  assert.deepEqual(backendResult.scopes, { backend: true, frontend: false });
+  assert.equal(
+    backendResult.steps.some((step) => step.command === 'npm run build:server'),
+    true,
+  );
+  assert.equal(
+    backendResult.steps.some((step) => step.command === 'npm run build:client'),
+    false,
+  );
+
+  const frontendResult = planVerification({
+    verification: expressVerification,
+    changedFiles: ['src/pages/Users.tsx'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.deepEqual(frontendResult.scopes, { backend: false, frontend: true });
+  assert.equal(
+    frontendResult.steps.some((step) => step.command === 'npm run build:client'),
+    true,
+  );
+  assert.equal(
+    frontendResult.steps.some((step) => step.command === 'npm run build:server'),
+    false,
+  );
+
+  const sharedResult = planVerification({
+    verification: expressVerification,
+    changedFiles: ['shared/user.ts'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.deepEqual(sharedResult.scopes, { backend: true, frontend: true });
+
+  const unmatchedResult = planVerification({
+    verification: expressVerification,
+    changedFiles: ['config/runtime.ts'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.deepEqual(unmatchedResult.scopes, { backend: true, frontend: true });
+  assert.deepEqual(unmatchedResult.scopeNotes, [
+    { file: 'config/runtime.ts', reason: 'unmatched' },
+  ]);
+
+  const ambiguousResult = planVerification({
+    verification: {
+      ...expressVerification,
+      sourceScopes: { backend: ['src'], frontend: ['src'], shared: [] },
+    },
+    changedFiles: ['src/index.tsx'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.deepEqual(ambiguousResult.scopes, { backend: true, frontend: true });
+  assert.deepEqual(ambiguousResult.scopeNotes, [
+    { file: 'src/index.tsx', reason: 'ambiguous' },
+  ]);
+});
+
+test('reports missing Express TypeScript and test capabilities', () => {
+  const result = planVerification({
+    verification: {
+      profile: 'express-typescript',
+      sourceScopes: { backend: ['server'], frontend: [], shared: [] },
+      capabilities: [],
+      commands: {},
+    },
+    changedFiles: ['server/index.ts'],
+    userFacing: false,
+    ticketRows: [],
+  });
+
+  assert.equal(result.valid, false);
+  assert.equal(
+    result.errors.some((error) => error.code === 'missing-typescript-check'),
+    true,
+  );
+  assert.equal(
+    result.errors.some((error) => error.code === 'missing-express-tests'),
+    true,
+  );
+});
+
 test('audits exact command outcomes and justified optional skips', () => {
   const plan = planVerification({
     verification,
@@ -205,6 +377,50 @@ history:
   });
 });
 
+test('parses schema version 3 source scopes and scoped commands', () => {
+  const parsed = parseVerificationConfiguration(`schema_version: 3
+backend: express-typescript
+frontend: react-typescript
+source_scopes:
+  backend:
+    - server
+  frontend:
+    - src
+  shared:
+    - shared
+verification:
+  profile: express-typescript-react-typescript
+  capabilities:
+    - express-tests
+  commands:
+    test:
+      backend:
+        - npm run test:server
+      frontend:
+        - npm run test:client
+      both: []
+history:
+  path: null
+`);
+
+  assert.deepEqual(parsed, {
+    profile: 'express-typescript-react-typescript',
+    sourceScopes: {
+      backend: ['server'],
+      frontend: ['src'],
+      shared: ['shared'],
+    },
+    capabilities: ['express-tests'],
+    commands: {
+      test: {
+        backend: ['npm run test:server'],
+        frontend: ['npm run test:client'],
+        both: [],
+      },
+    },
+  });
+});
+
 test('discovers package-manager-correct frontend commands', async (context) => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), 'verification-profile-'));
   context.after(() => rm(projectRoot, { recursive: true, force: true }));
@@ -223,11 +439,57 @@ test('discovers package-manager-correct frontend commands', async (context) => {
   );
 
   assert.equal(result.profile, 'laravel-svelte-typescript');
-  assert.deepEqual(result.commands.static_analysis, [
-    'pnpm run lint',
-    'pnpm run typecheck',
-  ]);
-  assert.deepEqual(result.commands.test, ['pnpm run test']);
+  assert.deepEqual(result.commands.static_analysis, {
+    backend: [],
+    frontend: ['pnpm run lint', 'pnpm run typecheck'],
+    both: [],
+  });
+  assert.deepEqual(result.commands.test, {
+    backend: [],
+    frontend: ['pnpm run test'],
+    both: [],
+  });
+});
+
+test('honors confirmed package-script scopes for mixed Express projects', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'verification-express-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const result = await discoverVerification(
+    projectRoot,
+    {
+      scripts: {
+        test: 'vitest run',
+        'test:unit': 'vitest run unit',
+        'test:watch': 'vitest',
+        build: 'tsc',
+      },
+    },
+    {
+      backend: 'express-typescript',
+      frontend: 'react-typescript',
+      scriptScopes: {
+        test: 'both',
+        'test:unit': 'backend',
+        build: 'backend',
+      },
+    },
+  );
+
+  assert.deepEqual(result.commands.test, {
+    backend: ['npm run test:unit'],
+    frontend: [],
+    both: ['npm run test'],
+  });
+  assert.equal(
+    Object.values(result.commands.test).flat().includes('npm run test:watch'),
+    false,
+  );
+  assert.deepEqual(result.commands.build, {
+    backend: ['npm run build'],
+    frontend: [],
+    both: [],
+  });
 });
 
 test('verification planner CLI is read-only and returns valid JSON', async (context) => {
