@@ -1,5 +1,12 @@
 # ai-skills-framework
 
+## 0.6.1
+
+### Patch Changes
+
+- [#11](https://github.com/emipac/skills/pull/11) [`32101b3`](https://github.com/emipac/skills/commit/32101b3ecd151498bc9b533a7eb648fed29fca9f) Thanks [@emipac](https://github.com/emipac)! - Harden Express package-script discovery with safe qualified checks, source-root
+  scope inference, explicit exclusions, and `database/` backend discovery.
+
 ## 0.6.0
 
 ### Minor Changes
