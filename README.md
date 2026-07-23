@@ -4,7 +4,7 @@ AI Skills Framework is Minic's installable development lifecycle for Laravel or 
 
 It keeps Matt Pocock's composable, language-agnostic engineering skills as the backbone and selectively adds OpenSPDD-inspired risk analysis, safeguards, traceability, and intent-drift checks. Delivery favors comprehensive SRS documents, vertical tracer-bullet tickets, test-driven implementation, deterministic verification, and contract-aware review.
 
-> **Status:** Phase 5 is published as `v0.5.0`; Phase 6 Express/TypeScript compatibility is implemented locally for `v0.6.0`, with real-project pilot and release validation pending.
+> **Status:** Phase 6 Express/TypeScript compatibility is published as `v0.6.0`; the real-project pilot remains follow-up validation for the compatibility baseline.
 
 ## Install with the universal skills CLI
 
