@@ -1,0 +1,4 @@
+interface:
+  display_name: "Estimate Project"
+  short_description: "Create phased AI-assisted project estimates"
+  default_prompt: "Use $estimate-project to produce a phased customer-ready estimate from this PRD or SRS."
