@@ -1,5 +1,18 @@
 # ai-skills-framework
 
+## 0.7.0
+
+### Minor Changes
+
+- [#12](https://github.com/emipac/skills/pull/12) [`0d75cce`](https://github.com/emipac/skills/commit/0d75ccef747d66299e156628d68431a532e61deb) Thanks [@emipac](https://github.com/emipac)! - Add a customer-facing project estimation skill with AI-assisted phase sizing,
+  explicit project-management and manual-testing effort, traceable third-party and
+  client-input dependencies, milestones, and roadmaps.
+
+### Patch Changes
+
+- [#11](https://github.com/emipac/skills/pull/11) [`32101b3`](https://github.com/emipac/skills/commit/32101b3ecd151498bc9b533a7eb648fed29fca9f) Thanks [@emipac](https://github.com/emipac)! - Harden Express package-script discovery with safe qualified checks, source-root
+  scope inference, explicit exclusions, and `database/` backend discovery.
+
 ## 0.6.0
 
 ### Minor Changes
