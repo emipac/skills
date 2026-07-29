@@ -67,6 +67,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 - **[handoff](./skills/handoff/SKILL.md)** — Create a compact continuation artifact.
 - **[teach](./skills/teach/SKILL.md)** — Teach a skill or concept through a stateful multi-session process.
 - **[writing-great-skills](./skills/writing-great-skills/SKILL.md)** — Apply predictable skill-authoring vocabulary and principles.
+- **[curate-upstream-skills](./skills/curate-upstream-skills/SKILL.md)** — Review Matt Pocock upstream changes and port only structurally compatible skill updates.
 
 ### Supporting disciplines
 

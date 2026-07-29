@@ -5,11 +5,19 @@ AI Skills Framework is maintained by Minic as a derivative of two MIT-licensed p
 ## Matt Pocock skills
 
 - Repository: https://github.com/mattpocock/skills
-- Fork baseline: `ed37663cc5fbef691ddfecd080dff42f7e7e350d`
+- Ancestry baseline: `ed37663cc5fbef691ddfecd080dff42f7e7e350d`
+- Last reviewed upstream SHA: `2ab958093e83e0ec752e6c1c5932da465bf23e0c`
+- Last reviewed: 2026-07-29
 - Role: lifecycle backbone, composable engineering workflows, tracer-bullet decomposition, TDD, domain modeling, deep-module vocabulary, and code review.
 - License: MIT, Copyright (c) 2026 Matt Pocock.
 
 The Git remote named `upstream` must continue to point to `git@github.com:mattpocock/skills.git`. Upstream changes are reviewed and ported intentionally; they are never merged blindly across AI Skills Framework contracts.
+
+### Synchronization ledger
+
+| Upstream range | Reviewed | Disposition | Affected areas | Local reference | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `ed37663cc5fbef691ddfecd080dff42f7e7e350d..2ab958093e83e0ec752e6c1c5932da465bf23e0c` | 2026-07-29 | No port | Upstream `README.md` | — | Reorganized installation documentation only; no skill contracts changed. |
 
 ## OpenSPDD
 

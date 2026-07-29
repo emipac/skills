@@ -1,0 +1,4 @@
+interface:
+  display_name: "Curate Upstream Skills"
+  short_description: "Review and port compatible upstream skill updates"
+  default_prompt: "Use $curate-upstream-skills to review Matt Pocock upstream changes and port only structurally compatible updates."
