@@ -1,11 +1,11 @@
 ---
 name: code-review
-description: Review a branch, pull request, or fixed diff through three independent axes — Standards, Contract, and Evidence — with traceable findings for conventions, intent drift, safeguards, scope, and verification sufficiency.
+description: Review a branch, pull request, or fixed diff through four independent axes — Standards, Contract, Security, and Evidence — with traceable findings for conventions, intent drift, safeguards, exploitable weaknesses, scope, and verification sufficiency.
 ---
 
 # Code Review
 
-Review one fixed diff through three independent lenses. Do not let a clean axis
+Review one fixed diff through four independent lenses. Do not let a clean axis
 cancel findings from another.
 
 ## 1. Pin the review surface
@@ -38,10 +38,10 @@ mark missing contract/evidence sources rather than inventing them.
 Completion criterion: every available standard, requirement, safeguard,
 non-goal, acceptance ID, and evidence source is indexed before review begins.
 
-## 3. Run three independent review passes
+## 3. Run four independent review passes
 
 Use isolated subagents in parallel when the client supports them and the user
-has authorized delegation. Otherwise run three separate sequential passes,
+has authorized delegation. Otherwise run four separate sequential passes,
 discarding provisional conclusions between passes. Each pass reads the same
 diff but only its own sources:
 
@@ -56,20 +56,29 @@ diff but only its own sources:
   missing or partial behavior, scope additions, safeguard or non-goal
   violations, incorrect behavior, implicit decisions, and intent drift not
   covered by an accepted amendment.
+- **Security** — run `/audit-security` as a diff-scoped security audit. Limit
+  its primary surface to changed hunks and inspect only the reachable code,
+  configuration, deployment context, and dependencies needed to validate an
+  attacker path or control. Supply the pinned revision, diff, project security
+  policy, and confirmed framework profile. Apply its OWASP baseline and four
+  mandatory defensive invariants. Return validated vulnerabilities, hardening
+  opportunities, and coverage gaps without importing conclusions from the
+  other review axes.
 - **Evidence** — map every acceptance ID and affected safeguard to red-green
   evidence and final verification. Find missing tests, stale passes, command
   substitutions, unjustified skips, insufficient assertions, and user-facing
   changes without smoke or browser evidence.
 
-Every finding cites the changed file/hunk and its normative source or missing
-evidence row. Use `P0` through `P3` severity within each axis.
+Every finding cites the changed file/hunk and its normative source,
+security source-to-sink evidence, or missing evidence row. Use `P0` through
+`P3` severity within each axis.
 
-Completion criterion: all three passes cover the complete diff without seeing
+Completion criterion: all four passes cover the complete diff without seeing
 or adapting to another pass's findings.
 
 ## 4. Reconcile without blending
 
-Deduplicate only identical findings within the same axis. Keep the three axes
+Deduplicate only identical findings within the same axis. Keep the four axes
 under separate headings and never produce one cross-axis score. An item that
 appears in multiple axes remains in each because its consequence differs.
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Code Review"
-  short_description: "Review standards, contract, and evidence"
-  default_prompt: "Use $code-review to review this diff independently for standards, contract compliance, and evidence."
+  short_description: "Review standards, contract, security, and evidence"
+  default_prompt: "Use $code-review to review this diff independently for standards, contract compliance, security, and evidence."

@@ -14,6 +14,7 @@ const agents = [
   'opencode',
 ];
 const smokeSkills = [
+  'audit-security',
   'framework-router',
   'framework-setup',
   'srs-modeling',
@@ -196,6 +197,19 @@ try {
       'references',
       'express-typescript.md',
     );
+    const securityAudit = path.join(
+      temporaryRoot,
+      installedRoot,
+      'audit-security',
+      'SKILL.md',
+    );
+    const securityOwaspBaseline = path.join(
+      temporaryRoot,
+      installedRoot,
+      'audit-security',
+      'references',
+      'owasp-baseline.md',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);
@@ -207,6 +221,14 @@ try {
 
     if (!(await readFile(setupScript, 'utf8')).includes('configureProject')) {
       throw new Error(`${agent}: framework-setup script was not installed`);
+    }
+
+    if (!(await readFile(securityAudit, 'utf8')).includes('name: audit-security')) {
+      throw new Error(`${agent}: audit-security was not installed correctly`);
+    }
+
+    if (!(await readFile(securityOwaspBaseline, 'utf8')).includes('OWASP Top 10:2025')) {
+      throw new Error(`${agent}: audit-security OWASP baseline was not installed`);
     }
 
     if (!(await readFile(linearAdapter, 'utf8')).includes('adapter: linear')) {
@@ -270,7 +292,7 @@ try {
     }
 
     if (!(await readFile(reviewAxes, 'utf8')).includes('## Evidence')) {
-      throw new Error(`${agent}: three-axis review reference was not installed`);
+      throw new Error(`${agent}: four-axis review reference was not installed`);
     }
 
     if (!(await readFile(expressReviewProfile, 'utf8')).includes('Middleware ordering')) {

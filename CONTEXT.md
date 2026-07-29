@@ -75,10 +75,10 @@ An impact-based verification order progressing from focused behavior through
 formatting, static analysis, affected tests, smoke, build, browser, and broad
 tests. Each required step records its exact command and outcome.
 
-**Three-axis review**:
-Independent Standards, Contract, and Evidence review passes over one fixed
+**Four-axis review**:
+Independent Standards, Contract, Security, and Evidence review passes over one fixed
 diff. Findings remain separate so correctness on one axis cannot hide failure
-on another.
+on another. Security delegates a diff-scoped audit to `audit-security`.
 
 **Durable synchronization**:
 The selective update of the SRS, glossary, ADRs, tracker evidence, or history
@@ -97,7 +97,7 @@ after an explicit owning decision. Private implementation remains code truth.
 - A **Readiness gate** controls progression from SRS to feature contract, delivery contract, and implementation
 - A **Source scope** selects the applicable commands within a **Verification profile**
 - A **Verification profile** produces an **Evidence ladder** for one **Delivery contract**
-- A **Three-axis review** evaluates the implementation after its **Evidence ladder** passes
+- A **Four-axis review** evaluates the implementation after its **Evidence ladder** passes
 - **Durable synchronization** records only accepted long-lived learning
 
 ## Flagged ambiguities

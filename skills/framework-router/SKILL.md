@@ -32,7 +32,7 @@ The route most work travels. You have an idea and want it built.
    - **Yes** → **`/to-spec`** extracts one `ready-for-tickets` feature contract with SRS traceability, safeguards, risks, and public seams. **`/to-tickets`** then creates ready tracer-bullet delivery contracts and an acyclic blocker graph. Start **`/implement`** once per frontier ticket, **clearing context between each one**.
    - **No** → establish an explicitly approved minimal delivery contract, then run **`/implement`** in this context.
 
-   Either way, **`/implement`** enforces readiness, drives **`/tdd`** one vertical red-green behavior at a time, records evidence, pauses for explicit contract amendments when learning changes durable intent, then runs **`/verify-change`** and the three-axis **`/code-review`** before selectively synchronizing durable knowledge. It commits or pushes only when explicitly requested. Reach for **`/tdd`** alone for a concrete ad-hoc behavior, **`/verify-change`** alone for an evidence ladder, and **`/code-review`** alone to review a fixed diff.
+   Either way, **`/implement`** enforces readiness, drives **`/tdd`** one vertical red-green behavior at a time, records evidence, pauses for explicit contract amendments when learning changes durable intent, then runs **`/verify-change`** and the four-axis **`/code-review`** before selectively synchronizing durable knowledge. Its Security axis delegates to **`/audit-security`**. It commits or pushes only when explicitly requested. Reach for **`/tdd`** alone for a concrete ad-hoc behavior, **`/verify-change`** alone for an evidence ladder, and **`/code-review`** alone to review a fixed diff.
 
 ### Context hygiene
 
@@ -89,6 +89,10 @@ Off the main flow entirely.
 - **`/grill-me`** — the same relentless interview as `/grill-with-docs`, but for when you have **no codebase**. Stateless: it saves nothing locally, builds no `CONTEXT.md`. Reach for it to sharpen any plan or design that doesn't live in a repo.
 - **`/prototype`** — a small, throwaway program that answers one design question: does this state model feel right, or what should this UI look like. Throwaway from day one — keep the answer, delete the code. It's the detour in step 2 of the main flow, but reach for it any time a design question is hard to settle on paper.
 - **`/research`** — delegate reading legwork to a **background agent**: it investigates a question against **primary sources**, then leaves a cited Markdown file in the repo. Keep working while it reads. The file it produces is something to take *into* the main flow at `/grill-with-docs` — research feeds the thinking, it doesn't replace it.
+- **`/audit-security`** — audit a whole repository or explicit code surface for
+  evidence-backed vulnerabilities, OWASP control failures, and gaps in
+  evaluation isolation, trust boundaries, credential lifetime, or metadata
+  blocking. It reports findings without implementing fixes.
 - **`/estimate-project`** — turn a comprehensive PRD or SRS into a customer-ready, implementation-phase estimate with explicit AI-assisted engineering, project management, manual testing, milestones, risks, and a delivery roadmap. Use it for commercial planning after scope is sufficiently stable; publish tracer-bullet tickets separately through `/to-tickets` only when requested.
 - **`/teach`** — learn a concept over multiple sessions, using the current directory as a stateful workspace.
 - **`/writing-great-skills`** — reference for writing and editing skills well.

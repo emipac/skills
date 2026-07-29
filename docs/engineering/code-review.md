@@ -6,13 +6,15 @@ npx skills add emipac/skills --skill code-review
 
 [Source](https://github.com/emipac/skills/tree/main/skills/code-review)
 
-`code-review` pins one merge-base diff and evaluates it through three
+`code-review` pins one merge-base diff and evaluates it through four
 independent axes:
 
 - **Standards:** repository conventions plus a judgement-call code-smell
   baseline.
 - **Contract:** SRS, feature, and delivery intent, including safeguards,
   non-goals, scope additions, implicit decisions, and unapproved drift.
+- **Security:** a diff-scoped `audit-security` pass covering exploitable
+  weaknesses, OWASP controls, and the four mandatory defensive invariants.
 - **Evidence:** acceptance coverage, red-green proof, exact final commands,
   skipped layers, and smoke or browser coverage.
 

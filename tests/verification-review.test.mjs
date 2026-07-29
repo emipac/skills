@@ -531,7 +531,7 @@ history:
   assert.equal(await readFile(configurationPath, 'utf8'), configuration);
 });
 
-test('declares verification and three-axis review evaluation cases', async () => {
+test('declares verification and four-axis review evaluation cases', async () => {
   const verifyCases = JSON.parse(await readFile(
     path.join(root, 'skills', 'verify-change', 'evals', 'cases.json'),
     'utf8',
@@ -549,19 +549,62 @@ test('declares verification and three-axis review evaluation cases', async () =>
   }
 });
 
-test('code review separates Standards, Contract, and Evidence', async () => {
+test('code review delegates an independent Security audit', async () => {
   const skill = await readFile(
     path.join(root, 'skills', 'code-review', 'SKILL.md'),
     'utf8',
   );
+  const report = await readFile(
+    path.join(root, 'skills', 'code-review', 'references', 'review-report.md'),
+    'utf8',
+  );
 
-  for (const axis of ['Standards', 'Contract', 'Evidence']) {
+  for (const axis of ['Standards', 'Contract', 'Security', 'Evidence']) {
     assert.match(skill, new RegExp(`\\*\\*${axis}\\*\\*`));
+    assert.match(report, new RegExp(`## ${axis}`));
   }
 
   assert.match(skill, /safeguard/i);
   assert.match(skill, /intent drift/i);
   assert.match(skill, /independent (?:pass|review)/i);
+  assert.match(skill, /audit-security/);
+  assert.match(skill, /diff-scoped security audit/i);
+});
+
+test('security audit enforces OWASP coverage and defensive priorities', async () => {
+  const skill = await readFile(
+    path.join(root, 'skills', 'audit-security', 'SKILL.md'),
+    'utf8',
+  );
+  const owasp = await readFile(
+    path.join(root, 'skills', 'audit-security', 'references', 'owasp-baseline.md'),
+    'utf8',
+  );
+  const evaluations = JSON.parse(await readFile(
+    path.join(root, 'skills', 'audit-security', 'evals', 'cases.json'),
+    'utf8',
+  ));
+
+  for (const priority of [
+    'Strict evaluation isolation',
+    'Narrow trust boundaries',
+    'Short-lived credentials',
+    'Blocked metadata access',
+  ]) {
+    assert.match(skill, new RegExp(priority, 'i'));
+  }
+
+  assert.match(owasp, /OWASP Top 10:2025/);
+  assert.match(owasp, /OWASP ASVS 5\.0\.0/);
+  assert.match(
+    skill,
+    /validated\s+vulnerabilities from hardening opportunities and coverage gaps/i,
+  );
+  assert.equal(evaluations.cases.length, 3);
+  assert.equal(
+    evaluations.cases.every((evaluation) => evaluation.assertions.length >= 4),
+    true,
+  );
 });
 
 test('selective synchronization keeps incidental implementation out of durable artifacts', async () => {
