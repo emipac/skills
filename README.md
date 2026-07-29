@@ -39,7 +39,7 @@ Then install **AI Skills Framework** from the Minic marketplace in Codex.
 - Prefer public testing seams and red-green-refactor delivery.
 - Treat safeguards and prohibited behavior as explicit ticket constraints.
 - Run static analysis, tests, smoke checks, and browser verification according to impact.
-- Review standards, contract alignment, drift, and evidence independently.
+- Review standards, contract alignment, security, drift, and evidence independently.
 - Synchronize only durable behavioral, domain, and architectural knowledge.
 - Never commit, push, or modify generated `AGENTS.md` files without explicit authorization.
 
@@ -70,6 +70,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 
 ### Supporting disciplines
 
+- **[audit-security](./skills/audit-security/SKILL.md)** — Audit a repository or scoped code for evidence-backed security weaknesses against OWASP and mandatory defensive invariants.
 - **[prototype](./skills/prototype/SKILL.md)** — Build a disposable artifact to answer a design question.
 - **[diagnosing-bugs](./skills/diagnosing-bugs/SKILL.md)** — Reproduce, minimize, hypothesize, instrument, fix, and regression-test.
 - **[research](./skills/research/SKILL.md)** — Investigate against high-trust primary sources.
@@ -77,7 +78,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 - **[domain-modeling](./skills/domain-modeling/SKILL.md)** — Maintain precise domain terminology and durable decisions.
 - **[codebase-design](./skills/codebase-design/SKILL.md)** — Design deep modules at clean seams.
 - **[verify-change](./skills/verify-change/SKILL.md)** — Plan and audit configured Laravel and frontend evidence from focused checks through broad suites.
-- **[code-review](./skills/code-review/SKILL.md)** — Review Standards, Contract, and Evidence independently.
+- **[code-review](./skills/code-review/SKILL.md)** — Review Standards, Contract, Security, and Evidence independently.
 - **[resolving-merge-conflicts](./skills/resolving-merge-conflicts/SKILL.md)** — Resolve merge and rebase conflicts from source intent.
 - **[grilling](./skills/grilling/SKILL.md)** — Provide the reusable decision interview loop.
 

@@ -138,11 +138,12 @@ Exact commands must be discovered during setup and recorded in framework configu
 
 ### Review
 
-Code review will evaluate three independent axes:
+Code review will evaluate four independent axes:
 
 1. **Standards:** project guidelines, applicable Laravel/JavaScript conventions, and code quality.
 2. **Contract:** SRS/spec/ticket compliance, safeguards, scope, omissions, additions, implicit decisions, and direction drift.
-3. **Evidence:** whether the selected checks and tests prove the acceptance criteria.
+3. **Security:** a diff-scoped `audit-security` pass for exploitable weaknesses, OWASP controls, and mandatory defensive invariants.
+4. **Evidence:** whether the selected checks and tests prove the acceptance criteria.
 
 ### Selective synchronization
 

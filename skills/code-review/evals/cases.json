@@ -6,6 +6,7 @@
       "assertions": [
         "Standards can pass independently",
         "Contract reports safeguard intent drift",
+        "Security runs audit-security independently against the fixed diff",
         "Evidence evaluates the changed failure path separately",
         "Findings cite the changed hunk and safeguard"
       ]
@@ -15,6 +16,7 @@
       "prompt": "Review an implementation matching its ticket when the required browser command was skipped.",
       "assertions": [
         "Contract can pass independently",
+        "Security still runs independently and reports its own source completeness",
         "Evidence reports the missing required browser result",
         "No cross-axis score hides the finding",
         "The required skip remains a blocker"
@@ -27,7 +29,7 @@
         "Reports unavailable contract sources",
         "Still runs Standards",
         "Assesses available tests without inventing acceptance criteria",
-        "Keeps all three axis summaries separate"
+        "Keeps all four axis summaries separate"
       ]
     },
     {
@@ -36,8 +38,19 @@
       "assertions": [
         "Applies Express standards only to the configured backend scope",
         "Contract reports authorization and response safeguard drift",
+        "Security validates the authorization weakness through audit-security",
         "Evidence requires focused API and HTTP smoke coverage",
-        "Keeps Standards, Contract, and Evidence findings independent"
+        "Keeps Standards, Contract, Security, and Evidence findings independent"
+      ]
+    },
+    {
+      "id": "security-diff-isolation",
+      "prompt": "Review a diff that adds a worker for user-submitted evaluation code while standards, contract, and tests are otherwise clean.",
+      "assertions": [
+        "Runs audit-security as a diff-scoped independent pass",
+        "Checks evaluation isolation, credential lifetime, trust boundaries, and metadata access",
+        "Keeps a security finding visible when the other axes are clean",
+        "Separates validated vulnerabilities from hardening opportunities and coverage gaps"
       ]
     }
   ]

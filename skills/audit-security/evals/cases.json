@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "repository-owasp-audit",
+      "prompt": "Audit this Laravel repository from a security perspective and account for OWASP.",
+      "assertions": [
+        "Pins the repository revision and audit exclusions",
+        "Maps trust boundaries before reporting findings",
+        "Covers authentication, authorization, configuration, server, and database security",
+        "Reports OWASP versions and separates vulnerabilities from hardening and gaps"
+      ]
+    },
+    {
+      "id": "scoped-outbound-request",
+      "prompt": "Security-audit only the supplied webhook URL fetching component.",
+      "assertions": [
+        "Keeps the audit limited to the supplied component",
+        "Traces attacker-controlled URLs through DNS and redirects to the network sink",
+        "Checks link-local and cloud metadata blocking plus deny-by-default egress",
+        "States missing surrounding infrastructure controls as coverage gaps"
+      ]
+    },
+    {
+      "id": "evaluation-runner-isolation",
+      "prompt": "Audit the service that runs user-submitted evaluation code.",
+      "assertions": [
+        "Requires disposable sandbox isolation and explicit resource limits",
+        "Checks for host sockets, ambient credentials, writable mounts, and network egress",
+        "Requires scoped short-lived credentials and blocked metadata access",
+        "Does not run active exploit payloads without authorization"
+      ]
+    }
+  ]
+}

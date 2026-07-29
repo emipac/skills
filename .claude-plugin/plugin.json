@@ -20,6 +20,7 @@
     "productivity"
   ],
   "skills": [
+    "./skills/audit-security",
     "./skills/code-review",
     "./skills/codebase-design",
     "./skills/diagnosing-bugs",

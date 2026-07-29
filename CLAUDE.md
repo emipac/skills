@@ -59,7 +59,8 @@ and readiness.
 and exact scoped commands. `verify-change` must retain deterministic impact
 ordering, exact command evidence, visible ambiguous paths, justified skips, and
 mandatory smoke or browser coverage for user-facing work. `code-review` must
-keep Standards, Contract, and Evidence findings independent. Durable
+keep Standards, Contract, Security, and Evidence findings independent, with
+Security delegated to a diff-scoped `audit-security` pass. Durable
 synchronization requires an explicit owning artifact and decision gate.
 
 Do not automatically commit or push changes. Preserve upstream attribution in

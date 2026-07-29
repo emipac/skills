@@ -1,4 +1,4 @@
-# Three-axis review report
+# Four-axis review report
 
 ```markdown
 ## Standards
@@ -14,6 +14,15 @@
 **Worst severity:** <P0-P3 or None>
 
 - [P1] `<file:line>` — <affected ID, safeguard/non-goal, drift, and correction>
+
+## Security
+
+**Sources:** <audit-security coverage, policy, OWASP/ASVS versions, and runtime evidence>
+**Worst severity:** <P0-P3 or None>
+
+- [P1] `<file:line>` — <attacker source-to-sink path, impact, control mapping, and correction>
+- **Hardening:** <defense-in-depth opportunity or None>
+- **Coverage gap:** <missing context or evidence or None>
 
 ## Evidence
 

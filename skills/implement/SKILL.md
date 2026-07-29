@@ -91,8 +91,9 @@ Never canonize incidental private implementation details in durable artifacts.
 Run `/verify-change` to plan and execute every required row in the ticket
 Verification Matrix from focused checks through broad suites. Preserve its
 exact command evidence and capability gaps. Run `/code-review` against the
-fixed diff through Standards, Contract, and Evidence. Fix in-scope findings and
-rerun every affected evidence step.
+fixed diff through Standards, Contract, Security, and Evidence. The Security
+axis delegates a diff-scoped audit to `/audit-security`. Fix in-scope findings
+and rerun every affected evidence step.
 
 After review is clean, apply
 [durable synchronization](references/durable-synchronization.md). Update the
@@ -114,6 +115,6 @@ Report:
 Commit or push only when the user explicitly requests it.
 
 Completion criterion: every acceptance criterion is green, the verification
-evidence audit passes, all three review axes have no unresolved in-scope
+evidence audit passes, all four review axes have no unresolved in-scope
 finding, required durable synchronization is complete, and the working tree
 contains only contract-scoped changes.

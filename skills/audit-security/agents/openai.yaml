@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Security"
+  short_description: "Audit code for exploitable security weaknesses"
+  default_prompt: "Use $audit-security to audit this repository or specified code for security weaknesses."
