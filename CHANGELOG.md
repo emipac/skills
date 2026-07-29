@@ -1,5 +1,13 @@
 # ai-skills-framework
 
+## 0.8.0
+
+### Minor Changes
+
+- [#14](https://github.com/emipac/skills/pull/14) [`168307d`](https://github.com/emipac/skills/commit/168307d5f2b9ecc468a779081f28f657cebb57bd) Thanks [@emipac](https://github.com/emipac)! - Add an OWASP-aware security audit skill with mandatory evaluation isolation,
+  narrow trust boundaries, short-lived credentials, and blocked metadata access.
+  Integrate it into code review as an independent Security axis.
+
 ## 0.7.0
 
 ### Minor Changes
