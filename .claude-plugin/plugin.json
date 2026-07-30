@@ -23,6 +23,7 @@
     "./skills/audit-security",
     "./skills/code-review",
     "./skills/codebase-design",
+    "./skills/curate-upstream-skills",
     "./skills/diagnosing-bugs",
     "./skills/domain-modeling",
     "./skills/estimate-project",

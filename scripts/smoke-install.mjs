@@ -15,6 +15,7 @@ const agents = [
 ];
 const smokeSkills = [
   'audit-security',
+  'curate-upstream-skills',
   'framework-router',
   'framework-setup',
   'srs-modeling',
@@ -210,6 +211,26 @@ try {
       'references',
       'owasp-baseline.md',
     );
+    const upstreamIntake = path.join(
+      temporaryRoot,
+      installedRoot,
+      'curate-upstream-skills',
+      'SKILL.md',
+    );
+    const upstreamAnalyzer = path.join(
+      temporaryRoot,
+      installedRoot,
+      'curate-upstream-skills',
+      'scripts',
+      'analyze-upstream.mjs',
+    );
+    const upstreamPolicy = path.join(
+      temporaryRoot,
+      installedRoot,
+      'curate-upstream-skills',
+      'references',
+      'compatibility-policy.md',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);
@@ -229,6 +250,18 @@ try {
 
     if (!(await readFile(securityOwaspBaseline, 'utf8')).includes('OWASP Top 10:2025')) {
       throw new Error(`${agent}: audit-security OWASP baseline was not installed`);
+    }
+
+    if (!(await readFile(upstreamIntake, 'utf8')).includes('name: curate-upstream-skills')) {
+      throw new Error(`${agent}: curate-upstream-skills was not installed correctly`);
+    }
+
+    if (!(await readFile(upstreamAnalyzer, 'utf8')).includes('analyzeChanges')) {
+      throw new Error(`${agent}: curated upstream analyzer was not installed`);
+    }
+
+    if (!(await readFile(upstreamPolicy, 'utf8')).includes('Auto-port gate')) {
+      throw new Error(`${agent}: curated upstream policy was not installed`);
     }
 
     if (!(await readFile(linearAdapter, 'utf8')).includes('adapter: linear')) {
