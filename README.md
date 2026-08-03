@@ -55,6 +55,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 
 - **[framework-router](./skills/framework-router/SKILL.md)** — Route a situation to the appropriate lifecycle branch.
 - **[framework-setup](./skills/framework-setup/SKILL.md)** — Discover project instructions and write the protected, idempotent lifecycle configuration.
+- **[setup-laravel-development](./skills/setup-laravel-development/SKILL.md)** — Install and configure the locked Pest 5 quality toolchain for a fresh Laravel application, with Boost handed off last.
 - **[grill-with-docs](./skills/grill-with-docs/SKILL.md)** — Sharpen a plan while maintaining domain terminology and ADRs.
 - **[srs-modeling](./skills/srs-modeling/SKILL.md)** — Create, surgically refine, and audit the durable requirements baseline.
 - **[triage](./skills/triage/SKILL.md)** — Move issues through configured triage roles.

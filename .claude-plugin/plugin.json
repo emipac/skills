@@ -38,6 +38,7 @@
     "./skills/prototype",
     "./skills/research",
     "./skills/resolving-merge-conflicts",
+    "./skills/setup-laravel-development",
     "./skills/srs-modeling",
     "./skills/tdd",
     "./skills/teach",

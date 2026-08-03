@@ -18,6 +18,7 @@ const smokeSkills = [
   'curate-upstream-skills',
   'framework-router',
   'framework-setup',
+  'setup-laravel-development',
   'srs-modeling',
   'to-spec',
   'to-tickets',
@@ -79,6 +80,19 @@ try {
       'framework-setup',
       'scripts',
       'configure.mjs',
+    );
+    const laravelSetupDocument = path.join(
+      temporaryRoot,
+      installedRoot,
+      'setup-laravel-development',
+      'SKILL.md',
+    );
+    const laravelSetupEvaluations = path.join(
+      temporaryRoot,
+      installedRoot,
+      'setup-laravel-development',
+      'evals',
+      'cases.json',
     );
     const linearAdapter = path.join(
       temporaryRoot,
@@ -242,6 +256,18 @@ try {
 
     if (!(await readFile(setupScript, 'utf8')).includes('configureProject')) {
       throw new Error(`${agent}: framework-setup script was not installed`);
+    }
+
+    if (!(await readFile(laravelSetupDocument, 'utf8')).includes(
+      'name: setup-laravel-development',
+    )) {
+      throw new Error(`${agent}: Laravel development setup was not installed correctly`);
+    }
+
+    const laravelSetupCases = JSON.parse(await readFile(laravelSetupEvaluations, 'utf8'));
+
+    if (laravelSetupCases.cases.length !== 3) {
+      throw new Error(`${agent}: Laravel development setup evaluations were not installed`);
     }
 
     if (!(await readFile(securityAudit, 'utf8')).includes('name: audit-security')) {
