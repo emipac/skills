@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "fresh-laravel-13-setup",
+      "prompt": "Set up this fresh Laravel project with the deterministic Pest 5 development toolchain.",
+      "assertions": [
+        "Checks PHP, Laravel, sockets, Composer, Node.js, and npm compatibility before mutation",
+        "Installs all requested non-Boost packages in one Composer transaction with Pest constrained to 5.x",
+        "Configures Pest, Playwright, Larastan, Pest PHPStan, Rector, Pint, PAO, and Ray",
+        "Installs Laravel Boost last and leaves boost:install for the user"
+      ]
+    },
+    {
+      "id": "existing-partial-toolchain",
+      "prompt": "Finish this Laravel development setup; some Pest and PHPStan configuration already exists.",
+      "assertions": [
+        "Inspects and preserves existing test, PHPStan, Rector, Pint, and Composer script conventions",
+        "Adds only missing package constraints, extensions, paths, and scripts",
+        "Surfaces conflicting script semantics for user resolution",
+        "Verifies the final locked dependency graph and full quality gate"
+      ]
+    },
+    {
+      "id": "incompatible-laravel-version",
+      "prompt": "Install the Pest 5 Laravel setup in this Laravel 12 project running PHP 8.3.",
+      "assertions": [
+        "Stops before dependency files change",
+        "Reports the PHP 8.4 and Laravel 13.23 compatibility requirements",
+        "Does not bypass platform requirements or downgrade requested packages",
+        "Does not run boost:install"
+      ]
+    }
+  ]
+}

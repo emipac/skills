@@ -1,0 +1,6 @@
+interface:
+  display_name: "Laravel Development Setup"
+  short_description: "Set up a deterministic Laravel toolchain"
+  default_prompt: "Use $setup-laravel-development to configure this fresh Laravel application for deterministic development."
+policy:
+  allow_implicit_invocation: false
