@@ -1,5 +1,15 @@
 # ai-skills-framework
 
+## 0.9.0
+
+### Minor Changes
+
+- [#16](https://github.com/emipac/skills/pull/16) [`f22b30d`](https://github.com/emipac/skills/commit/f22b30de21c2a528c4866a846d861fa8a935a4cd) Thanks [@emipac](https://github.com/emipac)! - Add a curated upstream intake skill that automatically ports only structurally
+  compatible Matt Pocock skill changes and records every review disposition.
+
+- [#17](https://github.com/emipac/skills/pull/17) [`1b3014e`](https://github.com/emipac/skills/commit/1b3014e18e5bb0716dd39b4d247e6296c9a52b34) Thanks [@emipac](https://github.com/emipac)! - Add a Laravel development setup skill for a deterministic Pest 5, Pint, PAO,
+  Larastan, Rector, Ray, browser-testing, and Laravel Boost toolchain.
+
 ## 0.8.0
 
 ### Minor Changes
