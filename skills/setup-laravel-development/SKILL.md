@@ -111,6 +111,8 @@ parameters:
     level: 5
 
     parseModelCastsMethod: true
+    
+    reportUnmatchedIgnoredErrors: false
 
     ignoreErrors:
         -
@@ -139,6 +141,8 @@ When no Rector configuration exists, create `rector.php`:
 
 use Pest\Rector\Set\PestSetList;
 use Rector\Config\RectorConfig;
+use Rector\Php81\Rector\Class_\SpatieEnumClassToEnumRector;
+use Rector\Php81\Rector\MethodCall\SpatieEnumMethodCallToEnumConstRector;
 use RectorLaravel\Set\LaravelSetList;
 
 return RectorConfig::configure()
@@ -155,6 +159,10 @@ return RectorConfig::configure()
         LaravelSetList::LARAVEL_CODE_QUALITY,
         LaravelSetList::LARAVEL_COLLECTION,
         PestSetList::CODING_STYLE,
+    ])
+    ->withSkip([
+        SpatieEnumClassToEnumRector::class,
+        SpatieEnumMethodCallToEnumConstRector::class,
     ])
     ->withTypeCoverageLevel(0)
     ->withDeadCodeLevel(0)
