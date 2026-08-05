@@ -350,4 +350,3 @@ portably providing large dependencies, services, caches, browsers, and
 credentials across desktop environments. That should become an explicit
 implementation risk and conformance target rather than being hidden inside an
 adapter.
-
