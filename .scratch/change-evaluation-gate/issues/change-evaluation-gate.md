@@ -1,6 +1,6 @@
 # Change Evaluation Gate
 
-Status: open
+Status: done
 Parent: none
 Assignee:
 Labels: wayfinder:map
@@ -27,12 +27,11 @@ A resolved decision set sufficient to produce an implementation-ready specificat
 - [Design the shared gate interface and adapters](design-shared-gate-interface-and-adapters.md) — One versioned `evaluate(request) -> decision` process interface owns isolated snapshot grading, coverage, integrity, policy, and evidence; Git and desktop clients remain thin event/result adapters.
 - [Decide installation and activation model](decide-installation-and-activation-model.md) — The opt-in gate separates installation, repository configuration, and clone-local transactional activation; it preserves shared configuration and existing hooks, pins active releases, and reports reconciled health without silent activation, updates, repair, or removal.
 - [Define configuration, evidence, and security contract](define-configuration-evidence-and-security-contract.md) — Schema v4 adds opt-in gate policy and OS-independent shell-free commands; pinned configuration, same-host snapshot execution, immutable local evidence, serialized evaluations, explicit runtime inputs, drift detection, and lifecycle events provide reproducibility without virtualization or adversarial-security claims.
+- [Set specification readiness and handoff criteria](set-spec-readiness-and-handoff-criteria.md) — Wayfinder remains authoritative; the approved SRS supplies stable traceability IDs; the contract-complete handoff, ownership, compatibility evidence, `0.9.0` migration path, retention bounds, scope boundary, and release-gated risk dispositions are settled.
 
 ## Not yet specified
 
-- The exact structure and ownership of the eventual implementation-ready specification.
-- Additional agent clients beyond Cursor, Codex, and Claude Code.
-- Release sequencing, versioning, and migration behavior after the product contract is settled.
+- None.
 
 ## Out of scope
 
@@ -40,5 +39,6 @@ A resolved decision set sufficient to produce an implementation-ready specificat
 - Replacing `framework-setup` or `verify-change` without a decision proving that their existing interfaces cannot support the gate.
 - Treating local hooks as tamper-proof enforcement or preventing raw `--no-verify`, hook removal, or Git reconfiguration; CI or server-side attestation is a possible later scope.
 - Provisioning Docker, virtual machines, separate databases, or hardened OS/container sandboxes for local evaluation; v1 reuses the existing developer runtime and services.
+- Supporting additional clients beyond local Git `pre-commit`, Claude Code Desktop's local Code tab, Codex Desktop with a local project, and Cursor IDE's local Agent; each requires a fresh post-v1 Wayfinder effort and separate compatibility evidence.
 
 ## Comments

@@ -34,17 +34,26 @@ A stable negative-space constraint protecting one or more requirements by
 stating an invariant or prohibited outcome and the response to a violation.
 _Avoid_: guardrail (reserved for skill-execution boundaries)
 
+**Wayfinder decision set**:
+A completed Wayfinder map as the decision index, its resolved Decision tickets as
+the owning records, and their accepted linked artifacts. When a feature comes from
+a Wayfinder effort, this set is the authoritative planning input to `to-spec`; SRS
+IDs provide traceability without overriding an accepted decision.
+_Avoid_: map summary, Wayfinder SRS
+
 **Feature contract**:
-A `to-spec` planning artifact that extracts one cohesive delivery scope from
-the SRS and binds its requirements, acceptance criteria, safeguards, risks,
-non-goals, and public evidence seams. It is ready for decomposition, not ready
-for implementation.
+A `to-spec` planning artifact that extracts one cohesive delivery scope from the
+established decision sources, including a completed Wayfinder decision set when
+one exists, and binds the relevant SRS requirements, acceptance criteria,
+safeguards, risks, non-goals, and public evidence seams. It is ready for
+decomposition, not ready for implementation.
 _Avoid_: feature SRS, implementation plan
 
 **Specification handoff**:
-The transfer from a completed Wayfinder decision map to one canonical Feature
-contract that owns normative delivery scope. The map remains rationale;
-subsequent Delivery contracts derive from the readiness-approved Feature contract.
+The transfer from a completed Wayfinder decision set to one canonical Feature
+contract. During synthesis the Wayfinder decisions are normative and SRS IDs
+provide traceability; after readiness approval the Feature contract owns delivery
+scope and subsequent Delivery contracts derive from it.
 
 **Delivery contract**:
 The normative body of one implementation **Issue**: a vertical outcome, SRS
