@@ -74,14 +74,14 @@ acceptance evidence, non-goals, public interfaces, or durable architecture.
 Private implementation choices do not require one.
 
 **Verification profile**:
-The configured backend/frontend evidence contract containing confirmed source
-scopes, proved capabilities, and exact scoped commands. It is selected by
-project stack and consumed by `verify-change`.
+The configured evidence contract containing profile presence, confirmed source
+scopes, proved capabilities, and exact scoped commands. `none` means a backend or
+frontend profile is absent; `unknown` means it may exist but is unclassified.
 
 **Source scope**:
 A confirmed repository-relative root classified as backend, frontend, or
 shared. Longest-root matching classifies changed files; shared, tied, and
-unmatched files conservatively affect both verification scopes.
+unmatched files conservatively affect every configured active profile.
 _Avoid_: frontend file extension, inferred TypeScript layer
 
 **Evidence ladder**:

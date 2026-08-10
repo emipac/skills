@@ -200,6 +200,60 @@ test('preserves Laravel backend-only behavior with schema version 3 scopes', () 
   assert.equal(result.steps.some((step) => step.command === 'npm run build'), false);
 });
 
+test('limits shared, tied, and unmatched files to configured active profiles', () => {
+  const parsed = parseVerificationConfiguration(`schema_version: 3
+backend: unknown
+frontend: none
+source_scopes:
+  backend: []
+  frontend: []
+  shared:
+    - skills
+verification:
+  profile: unknown
+  capabilities: []
+  commands:
+    test:
+      backend: []
+      frontend: []
+      both:
+        - npm run test:unit
+history:
+  path: null
+`);
+
+  assert.equal(parsed.schemaVersion, 3);
+  assert.equal(parsed.backend, 'unknown');
+  assert.equal(parsed.frontend, 'none');
+
+  for (const [reason, sourceScopes] of [
+    ['shared', parsed.sourceScopes],
+    ['ambiguous', { backend: ['skills'], frontend: ['skills'], shared: [] }],
+    ['unmatched', { backend: [], frontend: [], shared: [] }],
+  ]) {
+    const result = planVerification({
+      verification: { ...parsed, sourceScopes },
+      changedFiles: ['skills/framework-setup/SKILL.md'],
+      userFacing: false,
+      ticketRows: [],
+    });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.scopes, { backend: true, frontend: false });
+    assert.deepEqual(result.scopeNotes, [
+      { file: 'skills/framework-setup/SKILL.md', reason },
+    ]);
+    assert.equal(
+      result.steps.some((step) => step.command === 'npm run test:unit'),
+      true,
+    );
+    assert.equal(
+      result.errors.some((error) => error.code === 'missing-frontend-build'),
+      false,
+    );
+  }
+});
+
 test('uses configured source scopes for Express and frontend TypeScript', () => {
   const expressVerification = {
     profile: 'express-typescript-react-typescript',
@@ -368,6 +422,7 @@ history:
 `);
 
   assert.deepEqual(parsed, {
+    schemaVersion: 2,
     profile: 'laravel-livewire',
     capabilities: ['laravel-tests'],
     commands: {
@@ -404,6 +459,9 @@ history:
 `);
 
   assert.deepEqual(parsed, {
+    schemaVersion: 3,
+    backend: 'express-typescript',
+    frontend: 'react-typescript',
     profile: 'express-typescript-react-typescript',
     sourceScopes: {
       backend: ['server'],

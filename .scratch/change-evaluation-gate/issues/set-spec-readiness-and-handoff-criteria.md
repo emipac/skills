@@ -109,6 +109,20 @@ The repository is already released at `0.8.0`, so the accepted backward-compatib
 introduction moves to the next minor, `0.9.0`. The schema compatibility,
 migration, configuration, and activation decisions are otherwise unchanged.
 
+### Accepted Q-005 profile-presence addendum — 2026-08-10
+
+Schema version 4 adds explicit `backend: none` symmetry with the existing
+`frontend: none`. `none` means proved absent, while `unknown` remains a
+conservative present-but-unclassified profile. Backend-only, frontend-only,
+full-stack, and tooling-only configurations are valid; tooling-only uses the
+Verification profile `tooling`.
+
+Migration may preserve a concrete or `none` profile without reinterpretation,
+but schema v3 `unknown` requires an explicit maintainer mapping before it can
+become schema v4 `none`. Shared, tied, and unmatched paths affect configured
+active profiles only, and profile-specific scopes or commands cannot target a
+profile declared `none`.
+
 ### Accepted Q-002 owner — 2026-08-05
 
 The repository owner or lead maintainer is the Change Evaluation Gate Product

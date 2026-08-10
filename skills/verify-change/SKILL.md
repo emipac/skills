@@ -19,7 +19,9 @@ when it is Express, and [TypeScript frontends](references/typescript-frontends.m
 for the selected frontend profile.
 
 Classify every changed file by longest confirmed source root. Shared, tied, or
-unmatched paths affect both scopes. Mark whether the change affects
+unmatched paths affect every configured active profile. A profile configured as
+`none` is inactive and must never be synthesized; `unknown` remains active and
+conservative. Mark whether the change affects
 externally observable API routes or responses, screens, forms, or browser
 state. Treat an absent required command or capability as a gap, not permission
 to improvise.
@@ -60,8 +62,9 @@ do not bury a narrow failure under broader output.
 
 User-facing behavior requires smoke or browser evidence. An API change can
 satisfy this with configured HTTP integration or smoke evidence; it needs
-browser evidence only when a browser workflow changes. Frontend changes require
-the configured production build. Express builds run only when selected by
+browser evidence only when a browser workflow changes. Changes require a
+production frontend build only when an actual frontend profile is configured
+and affected. Express builds run only when selected by
 scope and configuration or required by the delivery contract. A required
 unavailable layer blocks completion until setup or the delivery contract is
 explicitly amended.

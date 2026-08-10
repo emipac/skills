@@ -101,3 +101,26 @@ outcome, reason, and redaction metadata. Bypasses also retain the previously
 accepted commit-visible marker. Direct `--no-verify`, hook/evidence deletion, and
 Git reconfiguration remain detectable only opportunistically and are not presented
 as prevented.
+
+### Accepted profile-presence amendment — 2026-08-10
+
+**Status:** accepted
+**Decision owner:** Repository owner
+**Affected IDs:** `FR-CFG-008`, `FR-CFG-009`, `AC-CFG-005`, `SG-CFG-002`, `RISK-005`, `Q-005`
+
+Schema version 4 represents backend and frontend presence symmetrically. `none`
+means the profile is proved absent; `unknown` means a relevant profile may exist
+but cannot yet be classified and therefore remains conservative. Backend-only,
+frontend-only, full-stack, and tooling-only repositories are valid. The
+tooling-only combination uses `backend: none`, `frontend: none`, and the
+Verification profile `tooling`.
+
+Shared, tied, and unmatched files affect every configured active profile, never
+a profile declared `none`. Cross-cutting Verification commands remain applicable
+to tooling-only repositories. A schema v4 contract rejects source scopes or
+profile-specific commands assigned to an inactive profile.
+
+Migration never reinterprets schema v3 `unknown` as schema v4 `none`. That change
+requires an explicit repository-maintainer mapping in the previewed transaction;
+unresolved profile presence preserves schema v3 without modification. This
+amendment adds no Gate configuration, activation, hook, trust, or runtime state.

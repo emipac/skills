@@ -97,10 +97,10 @@ const configuredFileScope = (file, sourceScopes) => {
   };
 };
 
-const changedScopes = (changedFiles, sourceScopes) => {
+const changedScopes = (changedFiles, sourceScopes, activeScopes) => {
   if (changedFiles.length === 0) {
     return {
-      scopes: { backend: true, frontend: true },
+      scopes: { ...activeScopes },
       notes: [],
     };
   }
@@ -113,10 +113,10 @@ const changedScopes = (changedFiles, sourceScopes) => {
 
     return {
       scopes: {
-        backend: classifiedFiles.some(
+        backend: activeScopes.backend && classifiedFiles.some(
           ({ scope }) => scope === 'backend' || scope === 'both',
         ),
-        frontend: classifiedFiles.some(
+        frontend: activeScopes.frontend && classifiedFiles.some(
           ({ scope }) => scope === 'frontend' || scope === 'both',
         ),
       },
@@ -128,12 +128,12 @@ const changedScopes = (changedFiles, sourceScopes) => {
 
   return {
     scopes: {
-      backend: changedFiles.some((file) => (
+      backend: activeScopes.backend && changedFiles.some((file) => (
         /\.php$/i.test(file)
         || /^(?:app|bootstrap|config|database|routes|tests)\//.test(file)
         || /^(?:artisan|composer\.(?:json|lock))$/.test(file)
       )),
-      frontend: changedFiles.some((file) => (
+      frontend: activeScopes.frontend && changedFiles.some((file) => (
         /\.(?:js|jsx|ts|tsx|svelte|vue|css|scss)$/i.test(file)
         || /^(?:resources|src|frontend)\//.test(file)
         || /^(?:package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/.test(file)
@@ -172,6 +172,27 @@ export const parseVerificationConfiguration = (contents) => {
   let sourceScopeName = null;
 
   for (const line of contents.split(/\r?\n/)) {
+    const schemaVersion = line.match(/^schema_version:\s*(\d+)$/);
+
+    if (schemaVersion) {
+      verification.schemaVersion = Number(schemaVersion[1]);
+      continue;
+    }
+
+    const backend = line.match(/^backend:\s*(.+)$/);
+
+    if (backend) {
+      verification.backend = normalizeScalar(backend[1]);
+      continue;
+    }
+
+    const frontend = line.match(/^frontend:\s*(.+)$/);
+
+    if (frontend) {
+      verification.frontend = normalizeScalar(frontend[1]);
+      continue;
+    }
+
     if (line === 'source_scopes:') {
       topLevel = 'source_scopes';
       verification.sourceScopes = { backend: [], frontend: [], shared: [] };
@@ -297,9 +318,14 @@ export const planVerification = ({
   const errors = [];
   const skipped = [];
   const steps = [];
+  const activeScopes = {
+    backend: verification.backend !== 'none',
+    frontend: verification.frontend !== 'none',
+  };
   const scopeClassification = changedScopes(
     changedFiles,
     verification.sourceScopes,
+    activeScopes,
   );
   const scopes = scopeClassification.scopes;
 

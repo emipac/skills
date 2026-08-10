@@ -1,14 +1,29 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
+import * as frameworkSetup from '../skills/framework-setup/scripts/configure.mjs';
 import {
   configureProject,
   discoverVerification,
   discoverProject,
 } from '../skills/framework-setup/scripts/configure.mjs';
+
+const execFileAsync = promisify(execFile);
+const configureScript = fileURLToPath(
+  new URL('../skills/framework-setup/scripts/configure.mjs', import.meta.url),
+);
+const configurationSchemaPath = fileURLToPath(
+  new URL(
+    '../skills/framework-setup/references/agent-framework.schema.json',
+    import.meta.url,
+  ),
+);
 
 const createLaravelFixture = async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-setup-'));
@@ -233,6 +248,8 @@ test('migrates schema version 2 with confirmed source scopes', async (context) =
 
   assert.deepEqual(discovery.existingConfiguration, {
     schemaVersion: 2,
+    backend: 'unknown',
+    frontend: 'unknown',
     sourceScopes: null,
   });
   assert.deepEqual(discovery.sourceScopes, {
@@ -253,6 +270,507 @@ test('migrates schema version 2 with confirmed source scopes', async (context) =
     await readFile(path.join(projectRoot, '.agent-framework.yaml'), 'utf8'),
     /^schema_version: 3$/m,
   );
+});
+
+test('previews schema v4 ambiguity without modifying schema v3', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-migration-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const originalConfiguration = `schema_version: 3
+backend: unknown
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend: []
+  frontend: []
+  shared:
+    - skills
+verification:
+  profile: unknown
+  capabilities: []
+  commands:
+    test:
+      backend: []
+      frontend: []
+      both:
+        - "node scripts/check.mjs | tee output.log"
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  await writeFile(configurationPath, originalConfiguration);
+
+  assert.equal(typeof frameworkSetup.previewConfigurationMigration, 'function');
+
+  const preview = await frameworkSetup.previewConfigurationMigration({
+    projectRoot,
+    mappings: { profiles: { backend: 'none' }, commands: {} },
+  });
+
+  assert.equal(preview.status, 'requires-mapping');
+  assert.equal(preview.fromVersion, 3);
+  assert.equal(preview.toVersion, 4);
+  assert.equal(preview.previewHash, null);
+  assert.deepEqual(preview.ambiguities, [
+    {
+      path: 'verification.commands.test.both[0]',
+      value: 'node scripts/check.mjs | tee output.log',
+      required: ['runner', 'args', 'timeout_seconds'],
+    },
+  ]);
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+});
+
+test('previews backend-only, frontend-only, full-stack, and tooling schema v4 profiles', async (context) => {
+  const roots = [];
+  context.after(() => Promise.all(
+    roots.map((root) => rm(root, { recursive: true, force: true })),
+  ));
+
+  for (const scenario of [
+    {
+      name: 'backend-only',
+      backend: 'laravel',
+      frontend: 'none',
+      profile: 'laravel',
+      scope: 'backend',
+      sourceScopes: { backend: ['app'], frontend: [], shared: [] },
+      profileMappings: {},
+    },
+    {
+      name: 'frontend-only',
+      backend: 'unknown',
+      frontend: 'react-typescript',
+      profile: 'react-typescript',
+      scope: 'frontend',
+      sourceScopes: { backend: [], frontend: ['src'], shared: [] },
+      profileMappings: { backend: 'none' },
+    },
+    {
+      name: 'full-stack',
+      backend: 'laravel',
+      frontend: 'react-typescript',
+      profile: 'laravel-react-typescript',
+      scope: 'both',
+      sourceScopes: { backend: ['app'], frontend: ['resources/js'], shared: [] },
+      profileMappings: {},
+    },
+    {
+      name: 'tooling-only',
+      backend: 'unknown',
+      frontend: 'none',
+      profile: 'tooling',
+      scope: 'both',
+      sourceScopes: { backend: [], frontend: [], shared: ['skills'] },
+      profileMappings: { backend: 'none' },
+    },
+  ]) {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), `ai-framework-${scenario.name}-`));
+    roots.push(projectRoot);
+    const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+    const sourceScopeLines = (scope, values) => values.length === 0
+      ? `  ${scope}: []`
+      : `  ${scope}:\n${values.map((value) => `    - ${value}`).join('\n')}`;
+    const commands = ['backend', 'frontend', 'both'].map((scope) => (
+      scope === scenario.scope
+        ? `      ${scope}:\n        - "npm run test:unit"`
+        : `      ${scope}: []`
+    )).join('\n');
+    const originalConfiguration = `schema_version: 3
+backend: ${scenario.backend}
+frontend: ${scenario.frontend}
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+${sourceScopeLines('backend', scenario.sourceScopes.backend)}
+${sourceScopeLines('frontend', scenario.sourceScopes.frontend)}
+${sourceScopeLines('shared', scenario.sourceScopes.shared)}
+verification:
+  profile: legacy
+  capabilities: []
+  commands:
+    test:
+${commands}
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+    await writeFile(configurationPath, originalConfiguration);
+    const commandPath = `verification.commands.test.${scenario.scope}[0]`;
+
+    const preview = await frameworkSetup.previewConfigurationMigration({
+      projectRoot,
+      mappings: {
+        profiles: scenario.profileMappings,
+        commands: { [commandPath]: { timeout_seconds: 300 } },
+      },
+    });
+
+    assert.equal(preview.status, 'ready');
+    assert.match(preview.previewHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(preview.ambiguities, []);
+    assert.match(preview.proposedConfiguration, /^schema_version: 4$/m);
+    assert.match(
+      preview.proposedConfiguration,
+      new RegExp(`^backend: ${scenario.backend === 'unknown' ? 'none' : scenario.backend}$`, 'm'),
+    );
+    assert.match(preview.proposedConfiguration, new RegExp(`^frontend: ${scenario.frontend}$`, 'm'));
+    assert.match(
+      preview.proposedConfiguration,
+      new RegExp(`^  profile: ${scenario.profile}$`, 'm'),
+    );
+    assert.match(
+      preview.proposedConfiguration,
+      new RegExp(`^        - \\{"runner":"package-script","args":\\["test:unit"\\],"working_directory":"\\.","timeout_seconds":300,"allowed_environment":\\[\\],"evidence_category":"test","source_scope":"${scenario.scope}"\\}$`, 'm'),
+    );
+    assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+  }
+});
+
+test('rejects schema v4 migration data assigned to an inactive profile', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-inactive-profile-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const configuration = `schema_version: 3
+backend: unknown
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend:
+    - server
+  frontend: []
+  shared: []
+verification:
+  profile: unknown
+  capabilities: []
+  commands:
+    test:
+      backend:
+        - "npm run test:server"
+      frontend: []
+      both: []
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  await writeFile(configurationPath, configuration);
+
+  await assert.rejects(
+    frameworkSetup.previewConfigurationMigration({
+      projectRoot,
+      mappings: {
+        profiles: { backend: 'none' },
+        commands: {
+          'verification.commands.test.backend[0]': { timeout_seconds: 300 },
+        },
+      },
+    }),
+    /Backend profile none cannot retain backend source scopes or commands/,
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), configuration);
+});
+
+test('rejects invalid or behavior-changing schema v4 mappings', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-invalid-mapping-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const configuration = `schema_version: 3
+backend: laravel
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend:
+    - app
+  frontend: []
+  shared: []
+verification:
+  profile: laravel
+  capabilities: []
+  commands:
+    test:
+      backend:
+        - "php artisan test --compact"
+      frontend: []
+      both: []
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  const commandPath = 'verification.commands.test.backend[0]';
+  await writeFile(configurationPath, configuration);
+
+  await assert.rejects(
+    frameworkSetup.previewConfigurationMigration({
+      projectRoot,
+      mappings: {
+        profiles: { backend: 'none' },
+        commands: { [commandPath]: { timeout_seconds: 300 } },
+      },
+    }),
+    /Profile mapping for backend is only allowed when its schema v3 value is unknown/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewConfigurationMigration({
+      projectRoot,
+      mappings: {
+        commands: {
+          [commandPath]: {
+            runner: 'shell',
+            args: ['artisan', 'test', '--compact'],
+            timeout_seconds: 300,
+          },
+        },
+      },
+    }),
+    /Unsupported command runner: shell/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewConfigurationMigration({
+      projectRoot,
+      mappings: {
+        commands: {
+          [commandPath]: {
+            working_directory: '../outside',
+            timeout_seconds: 300,
+          },
+        },
+      },
+    }),
+    /Invalid command working directory: \.\.\/outside/,
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), configuration);
+});
+
+test('atomically installs only the confirmed schema v4 preview', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-confirmed-migration-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const originalConfiguration = `schema_version: 3
+backend: unknown
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend: []
+  frontend: []
+  shared:
+    - skills
+verification:
+  profile: unknown
+  capabilities: []
+  commands:
+    test:
+      backend: []
+      frontend: []
+      both:
+        - "npm run test:unit"
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  const mappings = {
+    profiles: { backend: 'none' },
+    commands: {
+      'verification.commands.test.both[0]': { timeout_seconds: 300 },
+    },
+  };
+  await writeFile(configurationPath, originalConfiguration);
+  const preview = await frameworkSetup.previewConfigurationMigration({
+    projectRoot,
+    mappings,
+  });
+
+  assert.equal(typeof frameworkSetup.migrateConfiguration, 'function');
+  await assert.rejects(
+    frameworkSetup.migrateConfiguration({
+      projectRoot,
+      mappings,
+      confirmation: 'stale-preview',
+    }),
+    /Migration confirmation does not match the current preview/,
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+
+  const result = await frameworkSetup.migrateConfiguration({
+    projectRoot,
+    mappings,
+    confirmation: preview.previewHash,
+  });
+
+  assert.equal(result.status, 'migrated');
+  assert.equal(result.previewHash, preview.previewHash);
+  assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  assert.doesNotMatch(preview.proposedConfiguration, /^evaluation_gate:/m);
+  assert.deepEqual(
+    (await readdir(projectRoot)).filter((entry) => entry.startsWith('.agent-framework.yaml.')),
+    [],
+  );
+});
+
+test('exposes preview and confirmation through the schema v4 migration command', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-migration-cli-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const mappingPath = path.join(projectRoot, 'migration-mapping.json');
+  const originalConfiguration = `schema_version: 3
+backend: unknown
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend: []
+  frontend: []
+  shared: []
+verification:
+  profile: unknown
+  capabilities: []
+  commands: {}
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  await writeFile(configurationPath, originalConfiguration);
+  await writeFile(mappingPath, '{"profiles":{"backend":"none"}}\n');
+
+  const previewOutput = await execFileAsync(process.execPath, [
+    configureScript,
+    '--migrate-v4',
+    '--project',
+    projectRoot,
+    '--mapping',
+    mappingPath,
+  ]);
+  const preview = JSON.parse(previewOutput.stdout);
+
+  assert.equal(preview.status, 'ready');
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+
+  const migrationOutput = await execFileAsync(process.execPath, [
+    configureScript,
+    '--migrate-v4',
+    '--project',
+    projectRoot,
+    '--mapping',
+    mappingPath,
+    '--confirm',
+    preview.previewHash,
+  ]);
+  const migration = JSON.parse(migrationOutput.stdout);
+
+  assert.equal(migration.status, 'migrated');
+  assert.match(await readFile(configurationPath, 'utf8'), /^schema_version: 4$/m);
+});
+
+test('reads schema v4 profile presence and source scopes', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-read-v4-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeFile(
+    path.join(projectRoot, '.agent-framework.yaml'),
+    `schema_version: 4
+backend: none
+frontend: react-typescript
+source_scopes:
+  backend: []
+  frontend:
+    - src
+  shared:
+    - shared
+`,
+  );
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.existingConfiguration, {
+    schemaVersion: 4,
+    backend: 'none',
+    frontend: 'react-typescript',
+    sourceScopes: {
+      backend: [],
+      frontend: ['src'],
+      shared: ['shared'],
+    },
+  });
+});
+
+test('defines distinct schema v3 and v4 verification contracts', async () => {
+  const schema = JSON.parse(await readFile(configurationSchemaPath, 'utf8'));
+  const schemaV3 = schema.$defs.schemaV3;
+  const schemaV4 = schema.$defs.schemaV4;
+  const descriptor = schema.$defs.commandDescriptor;
+
+  assert.deepEqual(schema.oneOf, [
+    { $ref: '#/$defs/schemaV3' },
+    { $ref: '#/$defs/schemaV4' },
+  ]);
+  assert.equal(schemaV3.properties.schema_version.const, 3);
+  assert.equal(schemaV4.properties.schema_version.const, 4);
+  assert.doesNotMatch(
+    JSON.stringify(schemaV3.properties.backend),
+    /none/,
+  );
+  assert.match(
+    JSON.stringify(schema.$defs.backendProfileV4),
+    /none/,
+  );
+  assert.equal(
+    schema.$defs.rawCommandScopes.properties.backend.$ref,
+    '#/$defs/uniqueStrings',
+  );
+  assert.equal(schema.$defs.uniqueStrings.items.type, 'string');
+  assert.equal(
+    schema.$defs.descriptorCommandScopes.properties.backend.items.$ref,
+    '#/$defs/backendCommandDescriptor',
+  );
+  assert.deepEqual(descriptor.required, [
+    'runner',
+    'args',
+    'working_directory',
+    'timeout_seconds',
+    'allowed_environment',
+    'evidence_category',
+    'source_scope',
+  ]);
+  assert.deepEqual(descriptor.properties.runner.enum, [
+    'composer-bin',
+    'php-script',
+    'package-script',
+    'repository-script',
+  ]);
+  assert.equal(schemaV3.properties.evaluation_gate, undefined);
+  assert.equal(schemaV4.properties.evaluation_gate, undefined);
 });
 
 test('rejects unsafe source roots', async (context) => {
