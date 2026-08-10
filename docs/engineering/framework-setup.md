@@ -25,6 +25,13 @@ tooling-only repositories through symmetric `none` profile values. Preview is
 read-only; installation requires the exact preview hash, writes atomically, and
 does not configure or activate the Change Evaluation Gate.
 
+Gate adoption is a separate explicit schema v4 transaction. A policy JSON file
+must contain exactly the checks, budget, bypass, execution, and evidence
+subcontracts. `--configure-gate --policy <path>` previews the exact YAML and
+hash; adding `--confirm <hash>` installs it atomically. Ordinary setup and skill
+or plugin installation leave the option unselected. Configuration writes no
+hook, receipt, trust, or activation state and reports the Gate as inactive.
+
 When no SRS exists, setup reserves `docs/specifications/srs.md` for
 `srs-modeling` without creating it. An explicit `null` remains available for
 repositories that intentionally exclude an SRS.

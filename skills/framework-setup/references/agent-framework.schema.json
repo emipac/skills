@@ -59,6 +59,7 @@
         "guidelines": { "$ref": "#/$defs/uniqueStrings" },
         "source_scopes": { "$ref": "#/$defs/sourceScopes" },
         "verification": { "$ref": "#/$defs/verificationV4" },
+        "evaluation_gate": { "$ref": "#/$defs/evaluationGate" },
         "history": { "$ref": "#/$defs/history" },
         "protected_files": { "$ref": "#/$defs/uniqueStrings" }
       },
@@ -258,6 +259,77 @@
       "allOf": [
         { "$ref": "#/$defs/commandDescriptor" },
         { "properties": { "source_scope": { "const": "both" } } }
+      ]
+    },
+    "evaluationGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks", "budget", "bypass", "execution", "evidence"],
+      "properties": {
+        "checks": { "$ref": "#/$defs/gateChecks" },
+        "budget": { "$ref": "#/$defs/gateBudget" },
+        "bypass": { "$ref": "#/$defs/gatePolicySubcontract" },
+        "execution": { "$ref": "#/$defs/gatePolicySubcontract" },
+        "evidence": { "$ref": "#/$defs/gatePolicySubcontract" }
+      }
+    },
+    "gateChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "advisory"],
+      "properties": {
+        "required": { "$ref": "#/$defs/uniqueStrings" },
+        "advisory": { "$ref": "#/$defs/uniqueStrings" }
+      }
+    },
+    "gateBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total_seconds"],
+      "properties": {
+        "total_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "gatePolicySubcontract": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "activation",
+            "activated",
+            "allowed_environment",
+            "args",
+            "capabilities",
+            "client",
+            "command",
+            "commands",
+            "evidence_category",
+            "executable",
+            "hook",
+            "profile",
+            "profiles",
+            "receipt",
+            "runner",
+            "source_scope",
+            "trust",
+            "version",
+            "working_directory"
+          ]
+        }
+      },
+      "additionalProperties": { "$ref": "#/$defs/gatePolicyValue" }
+    },
+    "gatePolicyValue": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/gatePolicyValue" }
+        },
+        { "$ref": "#/$defs/gatePolicySubcontract" }
       ]
     },
     "history": {

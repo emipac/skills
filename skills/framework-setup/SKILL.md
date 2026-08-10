@@ -1,6 +1,6 @@
 ---
 name: framework-setup
-description: Discover and configure a Laravel or Express/TypeScript repository for AI Skills Framework without modifying AGENTS.md. Use before the first lifecycle run, when migrating the configuration schema, switching tracker adapters, or changing project conventions, source scopes, or verification commands.
+description: Discover and configure a Laravel or Express/TypeScript repository for AI Skills Framework without modifying AGENTS.md. Use before the first lifecycle run, when migrating the configuration schema, explicitly configuring optional Gate policy, switching tracker adapters, or changing project conventions, source scopes, or verification commands.
 ---
 
 # Framework Setup
@@ -131,7 +131,41 @@ tracker or profile and verifies every discovered `AGENTS.md` remains unchanged.
 
 Completion criterion: the command succeeds and reports the four managed files.
 
-### 5. Verify
+### 5. Configure the optional Gate only when selected
+
+Leave Gate configuration unselected during ordinary setup. Installed Gate assets
+never imply consent. Only schema v4 may add the policy, and it must contain
+exactly `checks`, `budget`, `bypass`, `execution`, and `evidence`. Check entries
+are required/advisory identities; Verification remains the sole command owner.
+
+Prepare the five-subcontract policy as JSON, then preview without `--confirm`:
+
+```bash
+node <skill-directory>/scripts/configure.mjs \
+  --project "$PWD" \
+  --configure-gate \
+  --policy <gate-policy-json>
+```
+
+Review `proposedConfiguration` and `previewHash`, then install only that preview:
+
+```bash
+node <skill-directory>/scripts/configure.mjs \
+  --project "$PWD" \
+  --configure-gate \
+  --policy <gate-policy-json> \
+  --confirm <preview-hash>
+```
+
+The transaction rejects schema v3, stale confirmation, missing or extra
+subcontracts, command ownership, and activation state. It writes only
+`.agent-framework.yaml`, atomically, and reports `activated: false`. It never
+creates a hook, receipt, trust decision, or evidence runtime.
+
+Completion criterion: the result reports `configured`, the exact preview was
+installed, and commit behavior remains unchanged.
+
+### 6. Verify
 
 Run discovery again, inspect the generated files, then rerun the identical
 configure command. The second run must produce byte-identical schema version 3

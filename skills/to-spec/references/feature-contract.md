@@ -36,5 +36,7 @@ product intent.
 - every in-scope requirement maps to detailed acceptance criteria;
 - public seams are confirmed;
 - safeguards, prohibited behavior, and non-goals are explicit;
+- relevant `RISK-NNN` and resolved `Q-NNN` identifiers retain explicit
+  dispositions, including an accepted response for every high-impact risk;
 - no gap, risk, dependency, assumption, or implicit decision blocks readiness;
 - the contract contains no volatile implementation inventory.

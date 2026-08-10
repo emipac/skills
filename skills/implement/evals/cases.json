@@ -6,7 +6,8 @@
       "id": "ready-contract-red-green",
       "prompt": "Implement this ready delivery contract at its agreed public seam.",
       "assertions": [
-        "Loads the ticket, parent feature contract, SRS IDs, safeguards, guidelines, and configured verification matrix.",
+        "Loads the ticket, parent feature contract, SRS IDs, safeguards, risks, resolved questions, guidelines, and configured verification matrix.",
+        "Reruns the ticket auditor and verification planner preflight before changing code.",
         "Produces a missing-behavior red result before the matching green result for each acceptance behavior.",
         "Implements one vertical behavior at a time without batch-generating components.",
         "Runs review and reports exact evidence without committing unless requested."

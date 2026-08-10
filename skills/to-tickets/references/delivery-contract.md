@@ -14,6 +14,7 @@ implementation choices to the red-green loop.
 - canonical domain concepts and respected ADR boundaries;
 - one agreed public seam and a describable first failing test;
 - explicit invariants, prohibited behavior, and non-goals;
+- relevant risk dispositions and resolved decision impacts from the parent;
 - acceptance criteria observable at that seam;
 - a verification matrix using configured commands or capabilities;
 - smoke or browser evidence for user-facing behavior;
@@ -27,7 +28,7 @@ implementation choices to the red-green loop.
 # TB-NNN — <Ticket title>
 
 **Status:** draft
-**Parent feature spec:** <Tracker reference>
+**Parent feature contract:** <Tracker reference>
 
 ## Outcome
 
@@ -38,6 +39,7 @@ implementation choices to the red-green loop.
 - <FR/NFR IDs>
 - <AC IDs>
 - <SG IDs where relevant>
+- <RISK/Q IDs where relevant>
 
 ## Domain Concepts
 
@@ -59,6 +61,10 @@ implementation choices to the red-green loop.
 
 <Negative-space constraints and explicit exclusions.>
 
+## Risk and Decision Impacts
+
+<Relevant RISK/Q IDs, their accepted dispositions, and their effect on this slice.>
+
 ## Acceptance Criteria
 
 - [ ] <AC-ID and observable pass/fail outcome.>
@@ -67,7 +73,7 @@ implementation choices to the red-green loop.
 
 | Layer | Scope | Evidence | Command or capability | Required |
 | --- | --- | --- | --- | --- |
-| <Targeted/static/affected/smoke/build/browser/broad> | <Backend/frontend/both> | <AC/SG IDs and what the row proves> | <Exact configured command or named capability> | <Yes/No with reason> |
+| <focused/format/static-analysis/affected-tests/smoke/build/browser/broad-tests> | <Backend/frontend/both> | <AC/SG IDs and what the row proves> | <Exact configured command or named capability> | <Yes/No with reason> |
 
 ## Blocked By
 
@@ -86,9 +92,10 @@ None.
 ## Readiness
 
 - [ ] The outcome is a complete vertical behavior.
-- [ ] Acceptance criteria trace to the SRS and feature spec.
+- [ ] Acceptance criteria trace to the SRS and feature contract.
 - [ ] The public seam and first red test are identified.
 - [ ] Safeguards and non-goals are explicit.
+- [ ] Risks and resolved decisions are traced to the parent contract.
 - [ ] Blocking edges exist and are acyclic.
 - [ ] No unresolved assumption blocks the start.
 - [ ] The ticket fits one fresh implementation context.

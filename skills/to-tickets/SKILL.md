@@ -35,12 +35,14 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
 
 4. **Write delivery contracts.** Assign temporary draft keys `TB-NNN` and use
    [the template](references/delivery-contract.md#template). Every contract
-   carries its SRS/AC/SG IDs, outcome, domain concepts, approach and tradeoffs,
-   architecture boundary, public seam, safeguards, prohibited behavior,
-   verification matrix, assumptions, and blockers. Give each verification row
-   a backend, frontend, or both scope. Use exact configured commands where
-   available and a named capability only when the final selector depends on the
-   slice.
+   carries its SRS/AC/SG IDs, relevant RISK/Q IDs and accepted dispositions,
+   outcome, domain concepts, approach and tradeoffs, architecture boundary,
+   public seam, safeguards, prohibited behavior, verification matrix,
+   assumptions, and blockers. Give each verification row a backend, frontend,
+   or both scope and use only the layer names defined by the delivery-contract
+   template. Use exact configured commands where available and a named
+   capability only when the final selector depends on the slice. Every Yes/No
+   requirement decision includes its reason.
 
 5. **Wire the graph.** Add only genuine start-blocking edges. Create all tracker
    issues first when native identifiers are needed, then wire native blocking
@@ -51,7 +53,7 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
 
    ```bash
    node <skill-directory>/scripts/audit-ticket-contracts.mjs \
-     <ticket-directory> --spec <feature-spec-path>
+     <ticket-directory> --contract <feature-contract-path>
    ```
 
    Apply the same gate to tracker-native contracts. A ticket is
@@ -59,7 +61,9 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    verifiable, sized for one context, has an agreed first red seam, has an
    explicit verification matrix, and has no unresolved start-blocking
    assumption. User-facing work requires smoke or browser evidence; frontend
-   work requires a production build when that capability is configured.
+   work requires a production build when that capability is configured. The
+   complete graph must cover every parent acceptance, safeguard, risk, and
+   resolved question ID at least once.
 
 7. **Confirm and publish.** Present titles, outcomes, blockers, and public seams
    as a numbered list. Ask the user to approve granularity and edges. Publish

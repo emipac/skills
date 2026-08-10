@@ -11,6 +11,11 @@ delivery contract in one fresh context and refuses coding when blockers,
 start-blocking assumptions, traceability, public seams, or evidence are
 incomplete.
 
+Before code changes, it reruns the ticket-contract audit and validates the
+approved verification matrix with the `verify-change` planner. A planning
+artifact that passed an older or incomplete gate is routed back instead of
+being reinterpreted during implementation.
+
 For every acceptance behavior it drives one vertical cycle:
 
 1. Produce a targeted failure caused by the missing behavior at the agreed

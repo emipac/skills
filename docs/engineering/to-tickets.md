@@ -12,7 +12,8 @@ acyclic graph of vertical tracer-bullet delivery contracts.
 Every ready contract includes:
 
 - one complete, independently verifiable outcome sized for a fresh context;
-- SRS requirement, acceptance, and safeguard traceability;
+- SRS requirement, acceptance, safeguard, risk, and resolved-question
+  traceability;
 - canonical domain concepts and architecture boundary;
 - an agreed public seam and describable first red test;
 - safeguards, invariants, prohibited behavior, and non-goals;
@@ -25,8 +26,9 @@ The upstream wide-refactor exception remains: mechanical blast-radius changes
 use expand–migrate–contract rather than artificial user-facing slices.
 
 Local Markdown contracts can be checked with the bundled auditor, which
-detects missing fields, references outside the feature contract, unresolved
-start-blocking assumptions, malformed verification rows, unknown blockers,
+detects an unready parent, missing parent-wide coverage, references outside the
+feature contract, unresolved start-blocking assumptions, verification layers
+unsupported by `verify-change`, missing requirement reasons, unknown blockers,
 self-blockers, and cycles. Real
 trackers use the same body gate plus native blocker relationships.
 

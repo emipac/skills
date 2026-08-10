@@ -79,7 +79,7 @@ and visible open questions. It never edits the SRS.
 Then review semantics in this order:
 
 1. **Ownership** — behavior is in the SRS, terms in the glossary, rationale in
-   ADRs, and implementation detail in code or feature specs.
+ADRs, and implementation detail in code or feature contracts.
 2. **Clarity** — each normative statement is singular, unambiguous, and uses
    canonical domain language.
 3. **Coverage** — actors, happy paths, boundary cases, failure paths,

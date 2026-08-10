@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -15,6 +15,7 @@ const agents = [
 ];
 const smokeSkills = [
   'audit-security',
+  'change-evaluation-gate',
   'curate-upstream-skills',
   'framework-router',
   'framework-setup',
@@ -53,6 +54,21 @@ try {
     },
   );
 
+  for (const dormantPath of [
+    '.agent-framework.yaml',
+    '.git/hooks/pre-commit',
+    '.git/ai-skills-framework/gate.json',
+  ]) {
+    try {
+      await access(path.join(temporaryRoot, dormantPath));
+      throw new Error(`Skill installation created Gate adoption state: ${dormantPath}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   const installedRootsByAgent = new Map([
     ['codex', '.agents/skills'],
     ['claude-code', '.claude/skills'],
@@ -62,6 +78,12 @@ try {
   ]);
 
   for (const [agent, installedRoot] of installedRootsByAgent) {
+    const gateDocument = path.join(
+      temporaryRoot,
+      installedRoot,
+      'change-evaluation-gate',
+      'SKILL.md',
+    );
     const routerDocument = path.join(
       temporaryRoot,
       installedRoot,
@@ -245,6 +267,15 @@ try {
       'references',
       'compatibility-policy.md',
     );
+
+    const installedGate = await readFile(gateDocument, 'utf8');
+
+    if (
+      !installedGate.includes('name: change-evaluation-gate')
+      || !installedGate.includes('Configuration does not activate the Gate')
+    ) {
+      throw new Error(`${agent}: dormant Change Evaluation Gate was not installed correctly`);
+    }
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);

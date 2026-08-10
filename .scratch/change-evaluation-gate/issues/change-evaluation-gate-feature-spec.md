@@ -11,7 +11,7 @@ Blocked by:
 | Field | Value |
 | --- | --- |
 | Status | ready-for-tickets |
-| SRS baseline | [Change Evaluation Gate SRS v0.2.1 — Approved](../../../docs/specifications/change-evaluation-gate-srs.md) |
+| SRS baseline | [Change Evaluation Gate SRS v0.2.2 — Approved](../../../docs/specifications/change-evaluation-gate-srs.md) |
 | Decision sources | [Completed Wayfinder map](change-evaluation-gate.md), its resolved decision tickets, and [readiness and handoff decision](set-spec-readiness-and-handoff-criteria.md) |
 
 ## Problem and Outcome
@@ -30,49 +30,48 @@ The Wayfinder decision map is the product and behavior source of truth. The appr
 
 Acceptance Criteria `Requirement IDs` are the canonical requirement-to-evidence mapping. Safeguards preserve the applicable negative-space constraints.
 
-| Requirement IDs | Acceptance IDs | Safeguard IDs | Scope |
-| --- | --- | --- | --- |
-| `FR-EVAL-001`, `FR-POL-001`, `FR-POL-003` | `AC-EVAL-001` | `SG-EVAL-001`, `SG-POL-001`, `SG-TRUST-001` | Authoritative Git commit authorization |
-| `FR-EVAL-002`, `FR-EVAL-006`, `NFR-AUD-002`, `NFR-OPER-001` | `AC-EVAL-002` | None | Versioned request and complete decision contract |
-| `FR-EVAL-003`, `FR-EVAL-005`, `NFR-REL-001` | `AC-EVAL-003` | `SG-OWNER-001` | Delegation through the existing Verification seam |
-| `FR-EVAL-004`, `NFR-SEC-001` | `AC-EVAL-004` | `SG-EVAL-001` | Exact-snapshot isolation and source immutability |
-| `FR-EVAL-007`, `FR-PROF-005` | `AC-EVAL-005` | `SG-SCOPE-001` | Delivery-contract coverage and regression-only scope |
-| `FR-EVAL-008`, `NFR-REL-003` | `AC-EVAL-006` | None | Attempt preservation and normalized unverified failures |
-| `FR-EVAL-009` | `AC-EVAL-007` | `SG-CFG-001` | Changed Grader-surface and integrity identities |
-| `FR-EVAL-010`, `NFR-SEC-001` | `AC-EVAL-008` | `SG-EVAL-002` | Served-runtime binding to the Evaluation snapshot |
-| `FR-POL-002`, `FR-POL-004` | `AC-POL-001` | `SG-POL-001` | Advisory policy and current-result authorization |
-| `FR-POL-005`, `NFR-PERF-001` | `AC-POL-002` | `SG-POL-001` | Per-check timeout and total-budget behavior |
-| `FR-POL-006`, `FR-POL-007`, `FR-POL-008` | `AC-POL-003` | `SG-BYP-001` | Disabled and explicit audited bypass behavior |
-| `FR-POL-009` | `AC-POL-004` | `SG-OWNER-001` | Separation of check-only evaluation and mutating fix |
-| `FR-ADAPT-001`, `FR-ADAPT-003` | `AC-ADAPT-001` | `SG-SUPPORT-001` | Shared decision mapping across Git and desktop adapters |
-| `FR-ADAPT-002`, `FR-ADAPT-004`, `FR-ADAPT-005`, `FR-ADAPT-006`, `FR-ADAPT-007`, `NFR-COMP-001` | `AC-ADAPT-002` | `SG-SUPPORT-001` | Capability-based client support and release evidence |
-| `FR-PROF-001`, `FR-PROF-002`, `NFR-MAINT-001` | `AC-PROF-001` | `SG-OWNER-001` | Stack-neutral provider contract |
-| `FR-PROF-003` | `AC-PROF-002` | `SG-OWNER-001` | Laravel check-descriptor mapping |
-| `FR-PROF-004` | `AC-PROF-003` | `SG-OWNER-001` | Visible capability gaps without guessed commands |
-| `FR-PROF-006`, `FR-PROF-007`, `FR-PROF-008` | `AC-PROF-004` | `SG-OWNER-001` | Ordered stages, normalized outcomes, and extension versioning |
-| `FR-PROF-009`, `FR-PROF-010` | `AC-PROF-005` | `SG-OWNER-001` | Proved Laravel defaults and explicit fix workflow |
-| `FR-LIFE-001`, `FR-LIFE-002`, `FR-LIFE-003` | `AC-LIFE-001` | `SG-DIST-001` | Installed, configured, and clone-local activated states |
-| `FR-LIFE-004`, `FR-LIFE-005`, `FR-LIFE-006`, `NFR-REL-002` | `AC-LIFE-002` | `SG-HOOK-001`, `SG-LIFE-001` | Transactional activation and receipt |
-| `FR-LIFE-007`, `NFR-COMP-002` | `AC-LIFE-003` | `SG-HOOK-001` | Existing hook preservation |
-| `FR-LIFE-008`, `FR-LIFE-009` | `AC-LIFE-004` | `SG-LIFE-001` | Atomic update and read-only health reconciliation |
-| `FR-LIFE-010`, `FR-LIFE-011` | `AC-LIFE-005` | `SG-LIFE-001` | Conservative deactivation and uninstall |
-| `FR-LIFE-012`, `FR-LIFE-013` | `AC-LIFE-006` | `SG-DIST-001` | Selective distribution without implied adoption |
-| `FR-LIFE-014` | `AC-LIFE-007` | `SG-LIFE-001` | Candidate release availability without implicit activation |
-| `FR-LIFE-015` | `AC-LIFE-008` | `SG-HOOK-001` | Non-interactive activation identity binding |
-| `FR-LIFE-016`, `FR-LIFE-017` | `AC-LIFE-009` | `SG-HOOK-001` | Trust resumption and ordered hook strategy |
-| `FR-LIFE-018`, `FR-LIFE-019` | `AC-LIFE-010` | `SG-LIFE-001` | Explicit cleanup and repair |
-| `FR-CFG-001`, `FR-CFG-002` | `AC-CFG-001` | `SG-CFG-001`, `SG-OWNER-001` | Schema v4 Gate policy ownership |
-| `FR-CFG-003`, `FR-CFG-004`, `FR-CFG-007`, `NFR-SEC-002` | `AC-CFG-002` | `SG-CMD-001` | Shell-free command descriptors and runner resolution |
-| `FR-CFG-005` | `AC-CFG-003` | `SG-CFG-001` | Trusted-to-candidate dual-policy transition |
-| `FR-CFG-006`, `NFR-SEC-003` | `AC-CFG-004` | `SG-SECRET-001` | Sensitive runtime-input handling and redaction |
-| `FR-CFG-008`, `FR-CFG-009` | `AC-CFG-005` | `SG-CFG-002` | Backward-compatible schema migration |
-| `FR-EVID-001`, `FR-EVID-002`, `FR-EVID-003`, `NFR-AUD-001` | `AC-EVID-001` | `SG-EVID-001`, `SG-SECRET-001` | Immutable bounded Evidence envelopes and output |
-| `FR-EVID-004`, `FR-EVID-005` | `AC-EVID-002` | `SG-EVID-001` | Manual preview-bound pruning and Lifecycle events |
-| `FR-COORD-001`, `FR-COORD-002`, `FR-COORD-003`, `FR-COORD-004`, `FR-COORD-005` | `AC-COORD-001` | `SG-COORD-001` | Serialized, shareable, role-aware evaluation coordination |
-| `NFR-PORT-001`, `NFR-PORT-002` | `AC-PORT-001` | `SG-CMD-001`, `SG-SUPPORT-001` | Release-blocking runtime portability |
-| `NFR-SEC-004` | `AC-SEC-001` | `SG-CFG-001`, `SG-TRUST-001` | Integrity drift and trusted-local-process limits |
-
-All `RISK-001` through `RISK-010` and resolved `Q-001`, `Q-002`, `Q-003`, `Q-004`, `Q-005`, `Q-006`, `Q-007`, and `Q-008` are carried in the risk and readiness sections below.
+| Requirement IDs | Acceptance IDs | Safeguard IDs | Scope | Risk IDs | Question IDs |
+| --- | --- | --- | --- | --- | --- |
+| `FR-EVAL-001`, `FR-POL-001`, `FR-POL-003` | `AC-EVAL-001` | `SG-EVAL-001`, `SG-POL-001`, `SG-TRUST-001` | Authoritative Git commit authorization | `RISK-001` | `Q-002` |
+| `FR-EVAL-002`, `FR-EVAL-006`, `NFR-AUD-002`, `NFR-OPER-001` | `AC-EVAL-002` | None | Versioned request and complete decision contract | None | None |
+| `FR-EVAL-003`, `FR-EVAL-005`, `NFR-REL-001` | `AC-EVAL-003` | `SG-OWNER-001` | Delegation through the existing Verification seam | None | None |
+| `FR-EVAL-004`, `NFR-SEC-001` | `AC-EVAL-004` | `SG-EVAL-001` | Exact-snapshot isolation and source immutability | `RISK-009` | None |
+| `FR-EVAL-007`, `FR-PROF-005` | `AC-EVAL-005` | `SG-SCOPE-001` | Delivery-contract coverage and regression-only scope | None | None |
+| `FR-EVAL-008`, `NFR-REL-003` | `AC-EVAL-006` | None | Attempt preservation and normalized unverified failures | `RISK-007` | None |
+| `FR-EVAL-009` | `AC-EVAL-007` | `SG-CFG-001` | Changed Grader-surface and integrity identities | `RISK-008` | None |
+| `FR-EVAL-010`, `NFR-SEC-001` | `AC-EVAL-008` | `SG-EVAL-002` | Served-runtime binding to the Evaluation snapshot | `RISK-009` | None |
+| `FR-POL-002`, `FR-POL-004` | `AC-POL-001` | `SG-POL-001` | Advisory policy and current-result authorization | None | None |
+| `FR-POL-005`, `NFR-PERF-001` | `AC-POL-002` | `SG-POL-001` | Per-check timeout and total-budget behavior | `RISK-003` | `Q-007` |
+| `FR-POL-006`, `FR-POL-007`, `FR-POL-008` | `AC-POL-003` | `SG-BYP-001` | Disabled and explicit audited bypass behavior | `RISK-001`, `RISK-003` | None |
+| `FR-POL-009` | `AC-POL-004` | `SG-OWNER-001` | Separation of check-only evaluation and mutating fix | None | None |
+| `FR-ADAPT-001`, `FR-ADAPT-003` | `AC-ADAPT-001` | `SG-SUPPORT-001` | Shared decision mapping across Git and desktop adapters | None | None |
+| `FR-ADAPT-002`, `FR-ADAPT-004`, `FR-ADAPT-005`, `FR-ADAPT-006`, `FR-ADAPT-007`, `NFR-COMP-001` | `AC-ADAPT-002` | `SG-SUPPORT-001` | Capability-based client support and release evidence | `RISK-004` | `Q-003`, `Q-004` |
+| `FR-PROF-001`, `FR-PROF-002`, `NFR-MAINT-001` | `AC-PROF-001` | `SG-OWNER-001` | Stack-neutral provider contract | None | None |
+| `FR-PROF-003` | `AC-PROF-002` | `SG-OWNER-001` | Laravel check-descriptor mapping | None | None |
+| `FR-PROF-004` | `AC-PROF-003` | `SG-OWNER-001` | Visible capability gaps without guessed commands | None | None |
+| `FR-PROF-006`, `FR-PROF-007`, `FR-PROF-008` | `AC-PROF-004` | `SG-OWNER-001` | Ordered stages, normalized outcomes, and extension versioning | None | None |
+| `FR-PROF-009`, `FR-PROF-010` | `AC-PROF-005` | `SG-OWNER-001` | Proved Laravel defaults and explicit fix workflow | None | None |
+| `FR-LIFE-001`, `FR-LIFE-002`, `FR-LIFE-003` | `AC-LIFE-001` | `SG-DIST-001` | Installed, configured, and clone-local activated states | None | None |
+| `FR-LIFE-004`, `FR-LIFE-005`, `FR-LIFE-006`, `NFR-REL-002` | `AC-LIFE-002` | `SG-HOOK-001`, `SG-LIFE-001` | Transactional activation and receipt | None | None |
+| `FR-LIFE-007`, `NFR-COMP-002` | `AC-LIFE-003` | `SG-HOOK-001` | Existing hook preservation | None | None |
+| `FR-LIFE-008`, `FR-LIFE-009` | `AC-LIFE-004` | `SG-LIFE-001` | Atomic update and read-only health reconciliation | None | None |
+| `FR-LIFE-010`, `FR-LIFE-011` | `AC-LIFE-005` | `SG-LIFE-001` | Conservative deactivation and uninstall | None | None |
+| `FR-LIFE-012`, `FR-LIFE-013` | `AC-LIFE-006` | `SG-DIST-001` | Selective distribution without implied adoption | None | None |
+| `FR-LIFE-014` | `AC-LIFE-007` | `SG-LIFE-001` | Candidate release availability without implicit activation | None | None |
+| `FR-LIFE-015` | `AC-LIFE-008` | `SG-HOOK-001` | Non-interactive activation identity binding | None | None |
+| `FR-LIFE-016`, `FR-LIFE-017` | `AC-LIFE-009` | `SG-HOOK-001` | Trust resumption and ordered hook strategy | None | None |
+| `FR-LIFE-018`, `FR-LIFE-019` | `AC-LIFE-010` | `SG-LIFE-001` | Explicit cleanup and repair | None | None |
+| `FR-CFG-001`, `FR-CFG-002` | `AC-CFG-001` | `SG-CFG-001`, `SG-OWNER-001` | Schema v4 Gate policy ownership | None | `Q-005` |
+| `FR-CFG-003`, `FR-CFG-004`, `FR-CFG-007`, `NFR-SEC-002` | `AC-CFG-002` | `SG-CMD-001` | Shell-free command descriptors and runner resolution | None | None |
+| `FR-CFG-005` | `AC-CFG-003` | `SG-CFG-001` | Trusted-to-candidate dual-policy transition | `RISK-008` | None |
+| `FR-CFG-006`, `NFR-SEC-003` | `AC-CFG-004` | `SG-SECRET-001` | Sensitive runtime-input handling and redaction | `RISK-006` | None |
+| `FR-CFG-008`, `FR-CFG-009` | `AC-CFG-005` | `SG-CFG-002` | Backward-compatible schema migration | `RISK-005` | `Q-005` |
+| `FR-EVID-001`, `FR-EVID-002`, `FR-EVID-003`, `NFR-AUD-001` | `AC-EVID-001` | `SG-EVID-001`, `SG-SECRET-001` | Immutable bounded Evidence envelopes and output | `RISK-006`, `RISK-010` | `Q-008` |
+| `FR-EVID-004`, `FR-EVID-005` | `AC-EVID-002` | `SG-EVID-001` | Manual preview-bound pruning and Lifecycle events | `RISK-010` | `Q-008` |
+| `FR-COORD-001`, `FR-COORD-002`, `FR-COORD-003`, `FR-COORD-004`, `FR-COORD-005` | `AC-COORD-001` | `SG-COORD-001` | Serialized, shareable, role-aware evaluation coordination | `RISK-002` | None |
+| `NFR-PORT-001`, `NFR-PORT-002` | `AC-PORT-001` | `SG-CMD-001`, `SG-SUPPORT-001` | Release-blocking runtime portability | `RISK-009` | `Q-004` |
+| `NFR-SEC-004` | `AC-SEC-001` | `SG-CFG-001`, `SG-TRUST-001` | Integrity drift and trusted-local-process limits | `RISK-001`, `RISK-008` | None |
+| None | None | None | Specification authority and contract-complete handoff | None | `Q-001`, `Q-006` |
 
 ## User Stories and Scenarios
 
@@ -163,9 +162,9 @@ All `RISK-001` through `RISK-010` and resolved `Q-001`, `Q-002`, `Q-003`, `Q-004
 65. As a reviewer, I want complex command behavior invoked only through an explicitly declared `repository-script` descriptor that is reported as a changed Grader surface when modified so that logic cannot hide outside the declared contract. (`FR-CFG-007`, `SG-CMD-001`, `AC-CFG-002`)
 66. As a repository maintainer, I want a candidate policy-surface change evaluated against the prior Trusted gate configuration, validated separately, approved by candidate hash, and required to satisfy both policies where they differ so that a change can never weaken the policy authorizing its own commit. (`FR-CFG-005`, `SG-CFG-001`, `AC-CFG-003`)
 67. As an activation operator, I want approved Sensitive runtime inputs confirmed at activation, copied only temporarily into the isolated materialization, recorded by name and source only, and removed afterwards so that secrets never enter repository configuration or evidence. (`FR-CFG-006`, `NFR-SEC-003`, `SG-SECRET-001`, `AC-CFG-004`)
-68. As an existing framework user, I want release `0.9.0` to read schema v3 and v4 while permitting Gate configuration only in v4, with v3 read support retained throughout `0.x` and removable no earlier than `1.0.0` with migration notice, so that adoption is backward compatible with a declared floor. (`FR-CFG-008`, `AC-CFG-005`)
-69. As a repository maintainer, I want v3-to-v4 migration previewed, atomic, and limited to unambiguous command conversions so that migration never guesses. (`FR-CFG-009`, `SG-CFG-002`, `AC-CFG-005`)
-70. As a repository maintainer, I want ambiguous migrations to require maintainer mapping and abort without writing while ambiguity remains so that no verification behavior is silently altered. (`FR-CFG-009`, `SG-CFG-002`, `AC-CFG-005`)
+68. As an existing framework user, I want release `0.9.0` to read schema v3 and v4 while permitting Gate configuration only in v4, with v3 read support retained throughout `0.x` and removable no earlier than `1.0.0` with migration notice, so that adoption is backward compatible with a declared floor. Schema v4 distinguishes proved-absent `none` profiles from conservative `unknown` profiles and supports backend-only, frontend-only, full-stack, and tooling-only repositories. (`FR-CFG-008`, `AC-CFG-005`)
+69. As a repository maintainer, I want v3-to-v4 migration previewed, atomic, and limited to unambiguous command and profile-presence conversions so that migration never guesses. (`FR-CFG-009`, `SG-CFG-002`, `AC-CFG-005`)
+70. As a repository maintainer, I want ambiguous commands or schema v3 `unknown` profiles to require maintainer mapping and abort without writing while ambiguity remains so that no verification behavior is silently altered. (`FR-CFG-009`, `SG-CFG-002`, `AC-CFG-005`)
 71. As a repository maintainer, I want migration to neither configure nor activate the Gate so that schema evolution does not expand enforcement authority. (`FR-CFG-009`, `SG-CFG-002`, `AC-CFG-005`)
 
 ### Evidence and audit
@@ -258,7 +257,7 @@ All `RISK-001` through `RISK-010` and resolved `Q-001`, `Q-002`, `Q-003`, `Q-004
 - `SG-HOOK-001`: activation never overwrites an existing hook, silently changes shared hook paths, resumes against changed identities, or leaves a partial adapter set active.
 - `SG-LIFE-001`: lifecycle operations never silently repair drift, delete shared configuration, delete historical evidence, or remove global assets.
 - `SG-CFG-001`: a candidate snapshot never weakens the policy used to authorize its own transition.
-- `SG-CFG-002`: upgrade or migration never guesses an ambiguous command, modifies v3 without confirmation, or configures or activates the Gate as a side effect.
+- `SG-CFG-002`: upgrade or migration never guesses an ambiguous command or profile presence, targets an inactive profile with scopes or commands, modifies v3 without confirmation, or configures or activates the Gate as a side effect.
 - `SG-CMD-001`: evaluation never shell-parses repository command text, accepts an unresolved executable identity, or hides complex behavior outside a declared `repository-script` Grader surface.
 - `SG-SECRET-001`: Sensitive values never persist in committed configuration, Evidence, retained output, or Lifecycle events.
 - `SG-EVID-001`: evaluation history is never silently replaced, automatically deleted, or pruned without a retained audit record.
@@ -269,22 +268,30 @@ All `RISK-001` through `RISK-010` and resolved `Q-001`, `Q-002`, `Q-003`, `Q-004
 
 ## Risks, Gaps, and Assumptions
 
-| ID | Type | Description | Blocks readiness | Resolution |
-| --- | --- | --- | --- | --- |
-| `RISK-001` | Risk | A machine owner may bypass or remove local enforcement and evidence. | No | Accepted for local v1 by the Product Owner; trust limits and observable drift remain explicit. |
-| `RISK-002` | Risk | Shared services or developer state may interfere across checks. | No | Conditionally accepted; serialization, declared prerequisites and writes, and the mandatory runtime release gate apply. |
-| `RISK-003` | Risk | Long required checks or queue contention may encourage unsupported bypass. | No | Open medium-impact delivery risk owned by the Product Owner; project-confirmed budgets, timing evidence, and explicit bypass policy remain required. |
-| `RISK-004` | Risk | Client hook, trust, or plugin changes may invalidate support claims. | No | Conditionally accepted; exact adapter compatibility fixtures are a mandatory release gate. |
-| `RISK-005` | Risk | Schema v4 or Command migration may change established verification behavior. | No | Conditionally accepted; backward compatibility and ambiguity-rejecting atomic migration are a mandatory release gate. |
-| `RISK-006` | Risk | Redaction may miss a secret in retained evidence. | No | Conditionally accepted; secret-canary and redaction evidence are a mandatory release gate, with unsafe capture returning `unverified`. |
-| `RISK-007` | Risk | A flaky required check may conflict across attempts and block delivery. | No | Open medium-impact delivery risk owned by the repository maintainer; attempts remain visible and conflict returns `unverified` until the check is stabilized or reconfigured. |
-| `RISK-008` | Risk | A changed Grader surface may weaken the evidence judging the same change. | No | Conditionally accepted; integrity identities and dual-policy transition fixtures are a mandatory release gate. |
-| `RISK-009` | Risk | Snapshot materialization may not safely reuse dependencies or inputs in every environment. | No | Conditionally accepted; runtime portability evidence is a mandatory release gate and unsafe binding returns `unverified`. |
-| `RISK-010` | Risk | Retained Evidence may consume excessive local storage. | No | Mitigated by fixed v1 ceilings and explicit preview-bound pruning. |
-| `DEP-001` | Dependency | Gate orchestration depends on the established `framework-setup` and `verify-change` Interfaces. | No | Ownership and public seams are confirmed; implementation must deepen rather than duplicate them. |
-| `DEP-002` | Dependency | Release support depends on exact Git, Node.js, client, and operating-system fixture evidence. | No | Implementation may start; missing or failed compatibility evidence blocks release rather than specification readiness. |
-| `ASM-001` | Assumption | V1 operates as a cooperative local process on a trusted developer machine. | No | Accepted scope boundary with explicit exclusions for hostile-code containment and tamper-proof enforcement. |
-| `DEC-001` | Resolved implicit decision | Wayfinder decisions govern if wording conflicts with the SRS projection. | No | Accepted by the readiness and handoff decision; the SRS must be corrected without changing stable IDs. |
+| ID | Type | Description | Impact | Blocks readiness | Resolution |
+| --- | --- | --- | --- | --- | --- |
+| `RISK-001` | Risk | A machine owner may bypass or remove local enforcement and evidence. | High | No | Accepted for local v1 by the Product Owner; trust limits and observable drift remain explicit. |
+| `RISK-002` | Risk | Shared services or developer state may interfere across checks. | High | No | Accepted conditionally; serialization, declared prerequisites and writes, and the mandatory runtime release gate apply. |
+| `RISK-003` | Risk | Long required checks or queue contention may encourage unsupported bypass. | Medium | No | Open medium-impact delivery risk owned by the Product Owner; project-confirmed budgets, timing evidence, and explicit bypass policy remain required. |
+| `RISK-004` | Risk | Client hook, trust, or plugin changes may invalidate support claims. | High | No | Accepted conditionally; exact adapter compatibility fixtures are a mandatory release gate. |
+| `RISK-005` | Risk | Schema v4 or Command migration may change established verification behavior. | High | No | Accepted conditionally; backward compatibility, profile-presence symmetry, and ambiguity-rejecting atomic migration are a mandatory release gate. |
+| `RISK-006` | Risk | Redaction may miss a secret in retained evidence. | High | No | Accepted conditionally; secret-canary and redaction evidence are a mandatory release gate, with unsafe capture returning `unverified`. |
+| `RISK-007` | Risk | A flaky required check may conflict across attempts and block delivery. | Medium | No | Open medium-impact delivery risk owned by the repository maintainer; attempts remain visible and conflict returns `unverified` until the check is stabilized or reconfigured. |
+| `RISK-008` | Risk | A changed Grader surface may weaken the evidence judging the same change. | High | No | Accepted conditionally; integrity identities and dual-policy transition fixtures are a mandatory release gate. |
+| `RISK-009` | Risk | Snapshot materialization may not safely reuse dependencies or inputs in every environment. | High | No | Accepted conditionally; runtime portability evidence is a mandatory release gate and unsafe binding returns `unverified`. |
+| `RISK-010` | Risk | Retained Evidence may consume excessive local storage. | Medium | No | Mitigated by fixed v1 ceilings and explicit preview-bound pruning. |
+| `Q-001` | Resolved decision | Durable SRS location and authority. | Specification authority | No | Resolved by promoting the stable-ID SRS projection to `docs/specifications/change-evaluation-gate-srs.md` while retaining the Wayfinder decision set as authoritative. |
+| `Q-002` | Resolved decision | SRS approval and residual-risk authority. | Approval authority | No | Resolved by assigning sole Product Owner accountability to the repository owner or lead maintainer. |
+| `Q-003` | Resolved decision | Additional client scope after the three v1 desktop surfaces. | V1 scope | No | Resolved with no additional v1 client; any later client requires a fresh Wayfinder effort and compatibility evidence. |
+| `Q-004` | Resolved decision | Evidence required to claim adapter and runtime support. | Support claims | No | Resolved with capability-based support and an exact release manifest of tested versions, environments, fixtures, and outcomes rather than a permanent allowlist. |
+| `Q-005` | Resolved decision | Gate release, schema migration, and compatibility boundary. | Release compatibility | No | Resolved with `0.9.0` as the first Gate-capable release, v3 and v4 reads, v4-only Gate configuration, explicit atomic migration, and v3 read support throughout `0.x`. |
+| `Q-006` | Resolved decision | Mandatory handoff evidence. | Handoff completeness | No | Resolved with the contract-complete Wayfinder, SRS traceability, interface, acceptance, safeguard, compatibility, lifecycle, ownership, and risk package; physical design remains for delivery tickets. |
+| `Q-007` | Resolved decision | Default evaluation budgets and timeouts. | Performance policy | No | Resolved with no universal duration; `framework-setup` requires project-confirmed per-check timeouts and a total evaluation budget. |
+| `Q-008` | Resolved decision | Retained-output bounds and pruning policy. | Evidence retention | No | Resolved with 32 KiB inline excerpts, 4 MiB blobs, 32 MiB per evaluation, lower project limits only, and manual preview-bound pruning without automatic deletion. |
+| `DEP-001` | Dependency | Gate orchestration depends on the established `framework-setup` and `verify-change` Interfaces. | Architecture ownership | No | Ownership and public seams are confirmed; implementation must deepen rather than duplicate them. |
+| `DEP-002` | Dependency | Release support depends on exact Git, Node.js, client, and operating-system fixture evidence. | Release qualification | No | Implementation may start; missing or failed compatibility evidence blocks release rather than specification readiness. |
+| `ASM-001` | Assumption | V1 operates as a cooperative local process on a trusted developer machine. | Security boundary | No | Accepted scope boundary with explicit exclusions for hostile-code containment and tamper-proof enforcement. |
+| `DEC-001` | Resolved implicit decision | Wayfinder decisions govern if wording conflicts with the SRS projection. | Traceability authority | No | Accepted by the readiness and handoff decision; the SRS must be corrected without changing stable IDs. |
 
 No blocking gap, dependency, assumption, architecture decision, authorization ambiguity, or unaccepted high-impact risk remains.
 
@@ -325,7 +332,7 @@ No blocking gap, dependency, assumption, architecture decision, authorization am
 | `AC-CFG-002` | Descriptor validation rejects shell syntax and unresolved runners, surfaces declared repository scripts as Grader surfaces, and activation resolves, versions, pins, and previews approved executables. | Lifecycle command Interface |
 | `AC-CFG-003` | A candidate weakening required policy cannot authorize itself; only candidate-hash approval after both trusted and candidate policies pass advances trust. | Lifecycle command Interface |
 | `AC-CFG-004` | Secret-canary fixtures copy only approved inputs into the isolated root, remove them, and find no raw secret in configuration, decisions, envelopes, blobs, or events. | Lifecycle command Interface |
-| `AC-CFG-005` | Upgrade fixtures prove `0.9.0` reads schema v3 and v4, only v4 configures the Gate, migration is previewed and atomic, ambiguity writes nothing until mapped, and migration does not configure or activate. | Lifecycle command Interface |
+| `AC-CFG-005` | Upgrade fixtures prove `0.9.0` reads schema v3 and v4; v4 accepts backend-only, frontend-only, full-stack, and tooling-only profiles; inactive profiles have no scopes or commands; only v4 configures the Gate; migration is previewed and atomic; command or profile ambiguity writes nothing until mapped; and migration does not configure or activate. | Lifecycle command Interface |
 | `AC-EVID-001` | Repeated evaluations append canonical content-addressed envelopes atomically at the Git-common location; all output ceilings, lower limits, excerpt boundaries, and omitted-byte counts are enforced. | Evaluation process Interface |
 | `AC-EVID-002` | No automatic deletion occurs; pruning previews exact blobs and bytes, mismatched confirmation removes nothing, and matched confirmation removes only selected blobs while preserving the audit trail. | Lifecycle command Interface |
 | `AC-COORD-001` | Concurrency fixtures prove repository serialization, matching in-flight sharing, role-specific decisions, Git priority over queued preflights, subscriber-local cancellation, audited stale-lock recovery, and `unverified` failure. | Evaluation process Interface |
@@ -360,17 +367,13 @@ No blocking gap, dependency, assumption, architecture decision, authorization am
 
 ## Readiness
 
-- [x] Every in-scope requirement maps to detailed acceptance evidence in the approved SRS and this contract.
-- [x] All 39 acceptance criteria map to one or more of the three confirmed public test seams.
-- [x] Public test seams and prior-art test patterns are agreed.
-- [x] All 17 safeguards and their prohibited outcomes are explicit.
-- [x] High-impact risks have Product Owner dispositions and mandatory release gates; open medium-impact risks are visible, owned, and nonblocking for specification readiness.
-- [x] Dependencies, assumptions, architecture ownership, and authorization boundaries are explicit with no blocking gap.
-- [x] Out-of-scope behavior and the trusted-local-process boundary are explicit.
-- [x] The contract preserves Wayfinder authority and all stable SRS IDs without adding a volatile implementation inventory.
-- [x] Wayfinder readiness is closed and `Q-001` through `Q-008` are resolved.
-- [x] The contract is ready for `to-tickets`; it is not an implementation issue and is not `ready-for-agent`.
+- [x] Every in-scope requirement maps to acceptance evidence.
+- [x] Public test seams are agreed.
+- [x] Safeguards and prohibited behavior are explicit.
+- [x] Risks and resolved decisions have explicit dispositions.
+- [x] Blocking gaps and assumptions are resolved.
+- [x] Out-of-scope behavior is explicit.
 
-Local publication remains intentional because `.agent-framework.yaml` is absent and must not be initialized as part of this planning handoff. Its absence does not block the semantic readiness of this contract.
+The approved SRS v0.2.2, completed Wayfinder decision set, all 39 acceptance criteria, all 17 safeguards, ten risk dispositions, eight resolved questions, and three confirmed public test seams support these checks. The contract is ready for `to-tickets`; it is not an implementation issue and is not `ready-for-agent`. The repository's `.agent-framework.yaml` now provides the configured local Markdown lifecycle workspace without configuring or activating the Gate.
 
 ## Comments

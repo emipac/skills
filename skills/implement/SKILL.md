@@ -13,9 +13,9 @@ single implementation orchestrator; `/tdd` supplies the red-green discipline,
 
 Read `.agent-framework.yaml`, the selected tracker adapter, the full ticket and
 comments, parent feature contract, linked SRS requirements/acceptance
-criteria/safeguards, glossary, ADRs, project guidelines, and configured
-backend/frontend profiles, source scopes, and verification commands. Inspect
-the working tree and relevant code.
+criteria/safeguards/risks/resolved questions, glossary, ADRs, project
+guidelines, and configured backend/frontend profiles, source scopes, and
+verification commands. Inspect the working tree and relevant code.
 
 If the user provides ad-hoc work without a ticket, establish the same minimal
 delivery contract in the conversation and get explicit approval before coding.
@@ -31,9 +31,29 @@ too large for one context, the public seam is undecided, or the verification
 matrix cannot prove the acceptance criteria. Report exact missing fields and
 route back to `/to-tickets`, `/to-spec`, or `/srs-modeling` as appropriate.
 
+For local Markdown, rerun the producer gate before changing code:
+
+```bash
+node <to-tickets-skill-directory>/scripts/audit-ticket-contracts.mjs \
+  <ticket-directory> --contract <feature-contract-path>
+```
+
+Extract the approved Verification Matrix without rewriting it, then run the
+verification preflight before the first red cycle:
+
+```bash
+node <verify-change-skill-directory>/scripts/verification-plan.mjs \
+  --config .agent-framework.yaml --ticket-matrix <matrix-json> --json
+```
+
+Apply the same checks directly to tracker-native contracts. Any parent-status,
+traceability, coverage, safeguard, risk/decision, verification-layer, or
+capability error routes back to `/to-tickets`; do not reinterpret the contract
+inside implementation.
+
 Completion criterion: status is `ready-for-agent`, every blocker is complete,
-and the first failing behavior at the agreed seam can be stated before code is
-changed.
+both preflights are valid, and the first failing behavior at the agreed seam
+can be stated before code is changed.
 
 ## 3. Establish the baseline
 

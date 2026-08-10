@@ -234,6 +234,9 @@ test('writes confirmed Express source scopes idempotently', async (context) => {
   assert.match(firstConfiguration, /^  backend:\n    - server$/m);
   assert.match(firstConfiguration, /^  frontend:\n    - src$/m);
   assert.match(firstConfiguration, /^  shared:\n    - shared$/m);
+  assert.doesNotMatch(firstConfiguration, /^evaluation_gate:/m);
+  await assert.rejects(access(path.join(projectRoot, '.git', 'hooks', 'pre-commit')));
+  await assert.rejects(access(path.join(projectRoot, '.git', 'ai-skills-framework', 'gate.json')));
 });
 
 test('migrates schema version 2 with confirmed source scopes', async (context) => {
@@ -770,7 +773,251 @@ test('defines distinct schema v3 and v4 verification contracts', async () => {
     'repository-script',
   ]);
   assert.equal(schemaV3.properties.evaluation_gate, undefined);
-  assert.equal(schemaV4.properties.evaluation_gate, undefined);
+  assert.equal(schemaV4.properties.evaluation_gate.$ref, '#/$defs/evaluationGate');
+  assert.deepEqual(schema.$defs.evaluationGate.required, [
+    'checks',
+    'budget',
+    'bypass',
+    'execution',
+    'evidence',
+  ]);
+  assert.equal(schema.$defs.evaluationGate.additionalProperties, false);
+  assert.deepEqual(schema.$defs.gateChecks.required, ['required', 'advisory']);
+  assert.equal(schema.$defs.gateChecks.additionalProperties, false);
+  assert.equal(schema.$defs.gateBudget.properties.total_seconds.minimum, 1);
+  assert.equal(
+    schema.$defs.evaluationGate.properties.execution.$ref,
+    '#/$defs/gatePolicySubcontract',
+  );
+  assert.match(JSON.stringify(schema.$defs.gatePolicySubcontract), /commands/);
+});
+
+test('previews explicit Gate configuration without activating or modifying the repository', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-gate-preview-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const originalConfiguration = `schema_version: 4
+backend: none
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: null
+  glossary: null
+  adrs: null
+guidelines: []
+source_scopes:
+  backend: []
+  frontend: []
+  shared: []
+verification:
+  profile: tooling
+  capabilities: []
+  commands: {}
+history:
+  path: null
+  required: false
+protected_files: []
+`;
+  const policy = {
+    checks: {
+      required: ['unit'],
+      advisory: ['review'],
+    },
+    budget: { total_seconds: 600 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+  await writeFile(configurationPath, originalConfiguration);
+
+  assert.equal(typeof frameworkSetup.previewGateConfiguration, 'function');
+  const preview = await frameworkSetup.previewGateConfiguration({ projectRoot, policy });
+
+  assert.equal(preview.status, 'ready');
+  assert.equal(preview.configured, false);
+  assert.match(preview.previewHash, /^[a-f0-9]{64}$/);
+  assert.match(preview.proposedConfiguration, /^evaluation_gate:$/m);
+  assert.match(preview.proposedConfiguration, /^  checks: /m);
+  assert.match(preview.proposedConfiguration, /^  budget: /m);
+  assert.match(preview.proposedConfiguration, /^  bypass: /m);
+  assert.match(preview.proposedConfiguration, /^  execution: /m);
+  assert.match(preview.proposedConfiguration, /^  evidence: /m);
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+  await assert.rejects(access(path.join(projectRoot, '.git', 'hooks', 'pre-commit')));
+  await assert.rejects(access(path.join(projectRoot, '.git', 'ai-skills-framework', 'gate.json')));
+});
+
+test('configures the dormant Gate only after exact preview confirmation', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-gate-configure-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const originalConfiguration = `schema_version: 4
+backend: none
+frontend: none
+tracker: local-markdown
+artifacts: {"srs":null,"glossary":null,"adrs":null}
+guidelines: []
+source_scopes: {"backend":[],"frontend":[],"shared":[]}
+verification: {"profile":"tooling","capabilities":[],"commands":{}}
+history: {"path":null,"required":false}
+protected_files: []
+`;
+  const policy = {
+    checks: { required: ['unit'], advisory: [] },
+    budget: { total_seconds: 300 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+  await writeFile(configurationPath, originalConfiguration);
+  const preview = await frameworkSetup.previewGateConfiguration({ projectRoot, policy });
+
+  assert.equal(typeof frameworkSetup.configureGate, 'function');
+  await assert.rejects(
+    frameworkSetup.configureGate({ projectRoot, policy, confirmation: 'stale-preview' }),
+    /Gate configuration confirmation does not match the current preview/,
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+
+  const result = await frameworkSetup.configureGate({
+    projectRoot,
+    policy,
+    confirmation: preview.previewHash,
+  });
+
+  assert.equal(result.status, 'configured');
+  assert.equal(result.activated, false);
+  assert.equal(result.previewHash, preview.previewHash);
+  assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  assert.deepEqual(
+    (await readdir(projectRoot)).filter((entry) => entry.startsWith('.agent-framework.yaml.')),
+    [],
+  );
+  await assert.rejects(access(path.join(projectRoot, '.git', 'hooks', 'pre-commit')));
+  await assert.rejects(access(path.join(projectRoot, '.git', 'ai-skills-framework', 'gate.json')));
+});
+
+test('rejects Gate configuration outside the strict schema v4 policy boundary', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-gate-invalid-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const policy = {
+    checks: { required: ['unit'], advisory: [] },
+    budget: { total_seconds: 300 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+  await writeFile(configurationPath, 'schema_version: 3\n');
+
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({ projectRoot, policy }),
+    /Gate configuration requires schema version 4, found 3/,
+  );
+
+  await writeFile(configurationPath, 'schema_version: 4\n');
+  const { evidence: _evidence, ...missingSubcontract } = policy;
+
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({ projectRoot, policy: missingSubcontract }),
+    /Missing Gate policy subcontract: evidence/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({
+      projectRoot,
+      policy: { ...policy, commands: ['npm test'] },
+    }),
+    /Unsupported Gate policy subcontract: commands/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({
+      projectRoot,
+      policy: { ...policy, activated: true },
+    }),
+    /Unsupported Gate policy subcontract: activated/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({
+      projectRoot,
+      policy: { ...policy, execution: { commands: ['npm test'] } },
+    }),
+    /Gate policy cannot own verification or activation field: commands/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({
+      projectRoot,
+      policy: {
+        ...policy,
+        checks: { required: [{ id: 'unit' }], advisory: [] },
+      },
+    }),
+    /Gate required check identities must be unique non-empty strings/,
+  );
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({
+      projectRoot,
+      policy: {
+        ...policy,
+        checks: { required: ['unit'], advisory: ['unit'] },
+      },
+    }),
+    /Gate check identity cannot be both required and advisory: unit/,
+  );
+  await writeFile(configurationPath, 'schema_version: 4\nevaluation_gate: {}\n');
+  await assert.rejects(
+    frameworkSetup.previewGateConfiguration({ projectRoot, policy }),
+    /The Gate is already configured/,
+  );
+  assert.equal(
+    await readFile(configurationPath, 'utf8'),
+    'schema_version: 4\nevaluation_gate: {}\n',
+  );
+});
+
+test('exposes dormant Gate configuration through an explicit previewed command', async (context) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-gate-cli-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
+  const policyPath = path.join(projectRoot, 'gate-policy.json');
+  const originalConfiguration = 'schema_version: 4\nhistory: {}\n';
+  const policy = {
+    checks: { required: ['unit'], advisory: [] },
+    budget: { total_seconds: 300 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+  await writeFile(configurationPath, originalConfiguration);
+  await writeFile(policyPath, `${JSON.stringify(policy)}\n`);
+
+  const previewOutput = await execFileAsync(process.execPath, [
+    configureScript,
+    '--configure-gate',
+    '--project',
+    projectRoot,
+    '--policy',
+    policyPath,
+  ]);
+  const preview = JSON.parse(previewOutput.stdout);
+
+  assert.equal(preview.status, 'ready');
+  assert.equal(await readFile(configurationPath, 'utf8'), originalConfiguration);
+
+  const configureOutput = await execFileAsync(process.execPath, [
+    configureScript,
+    '--configure-gate',
+    '--project',
+    projectRoot,
+    '--policy',
+    policyPath,
+    '--confirm',
+    preview.previewHash,
+  ]);
+  const result = JSON.parse(configureOutput.stdout);
+
+  assert.equal(result.status, 'configured');
+  assert.equal(result.activated, false);
+  assert.match(await readFile(configurationPath, 'utf8'), /^evaluation_gate:$/m);
 });
 
 test('rejects unsafe source roots', async (context) => {

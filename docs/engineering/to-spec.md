@@ -24,8 +24,9 @@ feature contract is not marked `ready-for-agent`; only its later delivery
 contracts are implementable.
 
 The bundled auditor checks local Markdown contracts for required sections, SRS
-reference integrity, acceptance detail, blocking gaps, placeholders, and
-readiness completion.
+reference integrity, acceptance-to-seam coverage, stable risk and resolved
+question dispositions, high-impact risk acceptance, blocking gaps,
+placeholders, and the canonical readiness checklist.
 
 ```text
 grill-with-docs → srs-modeling → to-spec → to-tickets → implement

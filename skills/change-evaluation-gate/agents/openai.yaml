@@ -1,0 +1,6 @@
+interface:
+  display_name: "Change Evaluation Gate"
+  short_description: "Configure the optional Gate without activation"
+  default_prompt: "Install or explicitly configure the dormant Change Evaluation Gate while keeping activation, hooks, trust, and receipts unchanged."
+policy:
+  allow_implicit_invocation: false

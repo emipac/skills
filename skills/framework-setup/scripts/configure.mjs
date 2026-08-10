@@ -587,6 +587,223 @@ export const migrateConfiguration = async ({
   };
 };
 
+const gatePolicyKeys = ['checks', 'budget', 'bypass', 'execution', 'evidence'];
+const gateForbiddenOwnershipFields = new Set([
+  'activation',
+  'activated',
+  'allowed_environment',
+  'args',
+  'capabilities',
+  'client',
+  'command',
+  'commands',
+  'evidence_category',
+  'executable',
+  'hook',
+  'profile',
+  'profiles',
+  'receipt',
+  'runner',
+  'source_scope',
+  'trust',
+  'version',
+  'working_directory',
+]);
+
+const gateForbiddenOwnershipField = (value) => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (gateForbiddenOwnershipFields.has(key)) {
+      return key;
+    }
+
+    const nestedField = gateForbiddenOwnershipField(nestedValue);
+
+    if (nestedField) {
+      return nestedField;
+    }
+  }
+
+  return null;
+};
+
+const validateGatePolicy = (policy) => {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('Gate policy must be an object');
+  }
+
+  const policyKeys = Object.keys(policy);
+  const unsupportedKey = policyKeys.find((key) => !gatePolicyKeys.includes(key));
+  const missingKey = gatePolicyKeys.find((key) => !policyKeys.includes(key));
+
+  if (unsupportedKey) {
+    throw new Error(`Unsupported Gate policy subcontract: ${unsupportedKey}`);
+  }
+
+  if (missingKey) {
+    throw new Error(`Missing Gate policy subcontract: ${missingKey}`);
+  }
+
+  if (policyKeys.length !== gatePolicyKeys.length) {
+    throw new Error('Gate policy must contain exactly five subcontracts');
+  }
+
+  const forbiddenOwnershipField = gateForbiddenOwnershipField(policy);
+
+  if (forbiddenOwnershipField) {
+    throw new Error(
+      `Gate policy cannot own verification or activation field: ${forbiddenOwnershipField}`,
+    );
+  }
+
+  const checks = policy.checks;
+
+  if (!checks || typeof checks !== 'object' || Array.isArray(checks)) {
+    throw new Error('Gate checks policy must be an object');
+  }
+
+  const checkKeys = Object.keys(checks);
+
+  if (
+    checkKeys.length !== 2
+    || !checkKeys.includes('required')
+    || !checkKeys.includes('advisory')
+  ) {
+    throw new Error('Gate checks policy must contain only required and advisory identities');
+  }
+
+  for (const category of ['required', 'advisory']) {
+    const identities = checks[category];
+
+    if (
+      !Array.isArray(identities)
+      || new Set(identities).size !== identities.length
+      || identities.some((identity) => typeof identity !== 'string' || !identity.trim())
+    ) {
+      throw new Error(`Gate ${category} check identities must be unique non-empty strings`);
+    }
+  }
+
+  const overlappingIdentity = checks.required.find((identity) => checks.advisory.includes(identity));
+
+  if (overlappingIdentity) {
+    throw new Error(
+      `Gate check identity cannot be both required and advisory: ${overlappingIdentity}`,
+    );
+  }
+
+  const budget = policy.budget;
+
+  if (
+    !budget
+    || typeof budget !== 'object'
+    || Array.isArray(budget)
+    || Object.keys(budget).length !== 1
+    || !Number.isInteger(budget.total_seconds)
+    || budget.total_seconds <= 0
+  ) {
+    throw new Error('Gate budget policy must contain a positive total_seconds integer');
+  }
+
+  for (const subcontract of ['bypass', 'execution', 'evidence']) {
+    const value = policy[subcontract];
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Gate ${subcontract} policy must be an object`);
+    }
+  }
+};
+
+const renderGateConfiguration = (contents, policy) => {
+  const gateLines = [
+    'evaluation_gate:',
+    ...gatePolicyKeys.map((key) => `  ${key}: ${JSON.stringify(policy[key])}`),
+  ];
+  const lines = contents.trimEnd().split(/\r?\n/);
+  const historyIndex = lines.findIndex((line) => line === 'history:');
+  const insertionIndex = historyIndex === -1 ? lines.length : historyIndex;
+
+  lines.splice(insertionIndex, 0, ...gateLines);
+
+  return `${lines.join('\n')}\n`;
+};
+
+export const previewGateConfiguration = async ({ projectRoot, policy }) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
+
+  if (!(await exists(configurationPath))) {
+    throw new Error('Cannot configure the Gate without .agent-framework.yaml');
+  }
+
+  const contents = await readFile(configurationPath, 'utf8');
+  const schemaVersion = Number(contents.match(/^schema_version:\s*(\d+)$/m)?.[1] ?? 0);
+
+  if (schemaVersion !== 4) {
+    throw new Error(`Gate configuration requires schema version 4, found ${schemaVersion}`);
+  }
+
+  if (/^evaluation_gate\s*:/m.test(contents)) {
+    throw new Error('The Gate is already configured');
+  }
+
+  validateGatePolicy(policy);
+  const proposedConfiguration = renderGateConfiguration(contents, policy);
+  const previewHash = createHash('sha256')
+    .update(contents)
+    .update('\0')
+    .update(proposedConfiguration)
+    .digest('hex');
+
+  return {
+    status: 'ready',
+    configured: false,
+    previewHash,
+    proposedConfiguration,
+  };
+};
+
+export const configureGate = async ({
+  projectRoot,
+  policy,
+  confirmation,
+}) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
+  const preview = await previewGateConfiguration({ projectRoot: resolvedProjectRoot, policy });
+
+  if (confirmation !== preview.previewHash) {
+    throw new Error('Gate configuration confirmation does not match the current preview');
+  }
+
+  const temporaryPath = path.join(
+    resolvedProjectRoot,
+    `.agent-framework.yaml.${randomUUID()}.tmp`,
+  );
+  const configurationStats = await stat(configurationPath);
+
+  try {
+    await writeFile(temporaryPath, preview.proposedConfiguration, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: configurationStats.mode,
+    });
+    await rename(temporaryPath, configurationPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+
+  return {
+    status: 'configured',
+    activated: false,
+    previewHash: preview.previewHash,
+  };
+};
+
 const readGitRemotes = async (projectRoot) => {
   const configPath = path.join(projectRoot, '.git', 'config');
 
@@ -1331,7 +1548,7 @@ const parseArguments = (argumentsList) => {
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
 
-    if (['--discover', '--migrate-v4'].includes(argument)) {
+    if (['--discover', '--migrate-v4', '--configure-gate'].includes(argument)) {
       options[argument.slice(2)] = true;
       continue;
     }
@@ -1386,6 +1603,21 @@ const runCli = async () => {
     const result = options.confirm
       ? await migrateConfiguration({ ...migrationOptions, confirmation: options.confirm })
       : await previewConfigurationMigration(migrationOptions);
+
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (options['configure-gate']) {
+    if (!options.policy) {
+      throw new Error('--policy is required when configuring the Gate');
+    }
+
+    const policy = JSON.parse(await readFile(path.resolve(options.policy), 'utf8'));
+    const gateOptions = { projectRoot, policy };
+    const result = options.confirm
+      ? await configureGate({ ...gateOptions, confirmation: options.confirm })
+      : await previewGateConfiguration(gateOptions);
 
     console.log(JSON.stringify(result, null, 2));
     return;

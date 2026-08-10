@@ -7,9 +7,9 @@
       "prompt": "Decompose a ready feature contract into independently verifiable tracer bullets.",
       "assertions": [
         "Every ticket delivers one complete end-to-end behavior and fits one fresh context.",
-        "Every ticket carries SRS, acceptance, safeguard, seam, and verification references.",
+        "Every ticket carries parent-approved SRS, acceptance, safeguard, risk, resolved-question, seam, and verification references.",
         "Blocking edges are genuine, complete, and acyclic.",
-        "Every parent acceptance ID is covered by at least one ready ticket."
+        "Every parent acceptance, safeguard, risk, and resolved-question ID is covered by at least one ready ticket using planner-supported verification layers."
       ]
     },
     {

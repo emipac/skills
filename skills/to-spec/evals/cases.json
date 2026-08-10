@@ -14,7 +14,7 @@
     },
     {
       "id": "blocking-scope-addition",
-      "prompt": "The conversation requests behavior absent from the SRS. Produce the feature spec anyway and mark it ready.",
+      "prompt": "The conversation requests behavior absent from the SRS. Produce the feature contract anyway and mark it ready.",
       "assertions": [
         "Does not invent an SRS reference or silently accept the addition.",
         "Records the scope addition as a blocking gap.",

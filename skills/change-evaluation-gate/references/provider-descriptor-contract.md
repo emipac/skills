@@ -1,0 +1,100 @@
+# Provider check descriptor contract (version 1)
+
+This is the seam between a stack Verification provider and Gate evaluation.
+A provider is a pure resolver: proved project facts in, normalized check
+descriptors out. Gate core consumes descriptors and never learns which stack
+produced them.
+
+Implementation: `../scripts/lib/check-descriptor.mjs`,
+`../scripts/lib/command-descriptor.mjs`, `../scripts/lib/gate-core.mjs`.
+
+## Provider interface
+
+```js
+{ id, contract_version, resolve(facts) }
+```
+
+`resolve` returns:
+
+```js
+{ provider, contract_version, descriptors: [...], capability_gaps: [...] }
+```
+
+Gate core rejects a provider whose `contract_version` it does not support,
+whose output is attributed to a different provider, or whose descriptors do not
+validate. It never repairs, guesses, or partially accepts one provider's output.
+
+## Check descriptor fields
+
+| Field | Contract |
+| --- | --- |
+| `id` | Stable dotted identifier namespaced by its provider, for example `laravel.format.formatter`. |
+| `provider` | The provider that emitted the descriptor. |
+| `stage` | One Evidence ladder stage. Controls ordering only. |
+| `capability` | Stack-neutral evidence kind, for example `formatter`, `rewrite-check`, `static-analysis`, `test`, `smoke`, `build`, `browser`. |
+| `scope` | `backend`, `frontend`, or `both`. |
+| `applicability` | `changed_path_globs` and `required_facts`: deterministic predicates only. |
+| `prerequisites` | Proved `executable`, `configuration`, `service`, or `environment` requirements. |
+| `policy` | The proposed `required` or `advisory` binding. |
+| `evaluate` | The only non-mutating invocation available to commit evaluation. |
+| `fix` | Optional explicitly mutating invocation; never reachable from evaluation. |
+| `timeout_seconds` | Per-check budget; must cover its evaluation command timeout. |
+| `declared_writes` | Repository-relative artifact paths evaluation may write. |
+| `evidence` | `claims`, `success_exit_codes`, and an optional machine-readable `report`. |
+| `order` | Stable ordering within a stage. |
+| `selection` | Deterministic test selection; required for `focused` and `affected-tests`, `null` elsewhere. |
+
+## Evidence ladder stages
+
+The eight ordered stages are owned by `verify-change` and imported, not
+restated: `focused`, `format`, `static-analysis`, `affected-tests`, `smoke`,
+`build`, `browser`, `broad-tests`.
+
+Stage answers *when* a check runs; capability answers *what evidence* it
+provides. A rewrite check therefore runs in `static-analysis` as a distinct
+capability rather than earning a stage of its own.
+
+## Outcomes and policy bindings
+
+Exactly four outcomes: `passed`, `failed`, `unverified`, and `not-applicable`.
+
+- `not-applicable` means the deterministic predicate did not match.
+- `unverified` means applicable evidence could not be produced — missing
+  executable, invalid configuration, timeout, or infrastructure error.
+
+`required` and `advisory` are policy bindings, not outcomes. They decide whether
+`failed` or `unverified` blocks a governed transition.
+
+## Extension rules
+
+- A provider may add a **capability** name freely; Gate core has no capability
+  list and needs no branch.
+- Adding an Evidence ladder **stage** or changing **outcome** semantics requires
+  a new contract version. A core that does not support that version rejects the
+  provider instead of reinterpreting it.
+
+## Command safety
+
+Command descriptors are the schema v4 shape: logical runner, argument array,
+repository-relative working directory, timeout, allowed environment names,
+evidence category, and source scope.
+
+- Only `composer-bin`, `php-script`, `package-script`, and `repository-script`
+  are accepted; any other runner is `runner-unresolved`.
+- Shell operators, pipes, redirection, substitutions, quotes, globs, escapes,
+  newlines, and inline environment assignments are rejected before execution.
+- Complex behavior belongs in an explicitly declared `repository-script`, which
+  is reported as a Grader surface.
+- Activation resolves each logical runner to a platform executable, records and
+  pins its identity and version, and previews the human-readable command. An
+  unresolved runner is reported, never looked up through a shell.
+
+## Capability gaps
+
+A plan entry with no proved command, or a focused/affected check with no
+deterministic selection, produces a visible capability gap instead of a
+descriptor. Recognized reasons: `command-not-proved`, `capability-not-proved`,
+`prerequisite-not-proved`, `selection-not-deterministic`, `runner-unresolved`.
+
+Test relevance is never inferred from filenames. A selection must come from a
+delivery matrix, an explicit filter, or a confirmed impact rule.

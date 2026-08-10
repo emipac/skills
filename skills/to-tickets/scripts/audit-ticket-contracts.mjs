@@ -11,11 +11,41 @@ const requiredSections = [
   'Architecture Boundary and Public Seam',
   'Safeguards and Invariants',
   'Prohibited Behavior and Non-goals',
+  'Risk and Decision Impacts',
   'Acceptance Criteria',
   'Verification Matrix',
   'Blocked By',
   'Unresolved Assumptions',
   'Readiness',
+];
+
+export const verificationLayers = [
+  'targeted',
+  'focused',
+  'format',
+  'static',
+  'static-analysis',
+  'affected',
+  'affected-tests',
+  'smoke',
+  'build',
+  'browser',
+  'e2e',
+  'broad',
+  'full',
+  'broad-tests',
+];
+
+const requiredReadinessItems = [
+  'The outcome is a complete vertical behavior.',
+  'Acceptance criteria trace to the SRS and feature contract.',
+  'The public seam and first red test are identified.',
+  'Safeguards and non-goals are explicit.',
+  'Risks and resolved decisions are traced to the parent contract.',
+  'Blocking edges exist and are acyclic.',
+  'No unresolved assumption blocks the start.',
+  'The ticket fits one fresh implementation context.',
+  'User-facing and frontend evidence requirements are covered or explicitly inapplicable.',
 ];
 
 const normalize = (value) => value
@@ -74,7 +104,7 @@ const columnIndex = (table, name) => table.header.findIndex(
 );
 
 const traceIds = (value) => [...value.matchAll(
-  /\b(?:FR|NFR|AC|SG)-[A-Z0-9]+-\d{3}\b/g,
+  /\b(?:(?:FR|NFR|AC|SG)-[A-Z0-9]+-\d{3}|RISK-\d{3}|Q-\d{3})\b/g,
 )].map((match) => match[0]);
 
 const blockerIds = (value) => [...value.matchAll(/\bTB-\d{3}\b/g)]
@@ -82,6 +112,10 @@ const blockerIds = (value) => [...value.matchAll(/\bTB-\d{3}\b/g)]
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 const addError = (errors, code, message) => errors.push({ code, message });
+
+const idsWithPrefix = (values, prefixes) => values.filter(
+  (id) => prefixes.some((prefix) => id.startsWith(prefix)),
+);
 
 const graphHasCycle = (graph) => {
   const visiting = new Set();
@@ -112,12 +146,44 @@ const graphHasCycle = (graph) => {
   return [...graph.keys()].some(visit);
 };
 
-export const auditTicketSet = (tickets, { specContents = null } = {}) => {
+export const auditTicketSet = (
+  tickets,
+  { contractContents = null, specContents = null } = {},
+) => {
+  const parentContents = contractContents ?? specContents;
   const errors = [];
   const warnings = [];
   const knownTicketIds = new Set(tickets.map((ticket) => ticket.id));
-  const knownSpecIds = specContents === null ? null : new Set(traceIds(specContents));
+  const contractSections = parentContents === null ? null : parseSections(parentContents);
+  const contractTable = parseFirstTable(contractSections?.get(normalize('Feature Contract')));
+  const parentStatus = contractTable?.rows.find(
+    (row) => normalize(row[0] ?? '') === 'status',
+  )?.[1]?.trim();
+  const parentTraceIds = contractSections === null ? null : uniqueSorted(traceIds(
+    contractSections.get(normalize('SRS Traceability'))?.lines.join('\n') ?? '',
+  ));
+  const knownContractIds = parentTraceIds === null ? null : new Set(parentTraceIds);
+  const parentAcceptanceIds = idsWithPrefix(parentTraceIds ?? [], ['AC-']);
+  const parentSafeguardIds = idsWithPrefix(parentTraceIds ?? [], ['SG-']);
+  const parentRiskDecisionIds = idsWithPrefix(parentTraceIds ?? [], ['RISK-', 'Q-']);
+  const coveredAcceptanceIds = new Set();
+  const coveredSafeguardIds = new Set();
+  const coveredRiskDecisionIds = new Set();
   const graph = new Map();
+
+  if (parentContents === null) {
+    addError(
+      errors,
+      'parent-not-loaded',
+      'Load the parent feature contract before auditing ready tickets',
+    );
+  } else if (parentStatus !== 'ready-for-tickets') {
+    addError(
+      errors,
+      'parent-not-ready',
+      'Parent feature contract status must be ready-for-tickets',
+    );
+  }
 
   for (const ticket of tickets) {
     if (!/^TB-\d{3}$/.test(ticket.id)) {
@@ -140,6 +206,9 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
 
     const status = ticket.contents.match(/^\*\*Status:\*\*\s*(.+)$/m)?.[1].trim();
     const parent = ticket.contents.match(
+      /^\*\*Parent feature contract:\*\*\s*(.+)$/m,
+    )?.[1].trim();
+    const legacyParent = ticket.contents.match(
       /^\*\*Parent feature spec:\*\*\s*(.+)$/m,
     )?.[1].trim();
 
@@ -147,8 +216,13 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
       addError(errors, 'not-ready', `${ticket.id} status must be ready-for-agent`);
     }
 
-    if (!parent) {
-      addError(errors, 'missing-parent-contract', `${ticket.id} must reference its feature spec`);
+    if (!parent && !legacyParent) {
+      addError(errors, 'missing-parent-contract', `${ticket.id} must reference its feature contract`);
+    } else if (!parent && legacyParent) {
+      warnings.push({
+        code: 'deprecated-parent-field',
+        message: `${ticket.id} should rename Parent feature spec to Parent feature contract`,
+      });
     }
 
     const ticketTraceIds = uniqueSorted(traceIds(
@@ -159,21 +233,24 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
       addError(errors, 'missing-traceability', `${ticket.id} has no SRS traceability`);
     }
 
-    if (knownSpecIds) {
+    if (idsWithPrefix(ticketTraceIds, ['FR-', 'NFR-']).length === 0) {
+      addError(errors, 'missing-requirement-trace', `${ticket.id} must trace an SRS requirement`);
+    }
+
+    if (idsWithPrefix(ticketTraceIds, ['AC-']).length === 0) {
+      addError(errors, 'missing-acceptance-trace', `${ticket.id} must trace a parent acceptance criterion`);
+    }
+
+    if (knownContractIds) {
       for (const reference of ticketTraceIds) {
-        if (!knownSpecIds.has(reference)) {
+        if (!knownContractIds.has(reference)) {
           addError(
             errors,
             'unknown-spec-reference',
-            `${ticket.id} references ${reference}, which is outside the feature spec`,
+            `${ticket.id} references ${reference}, which is outside the feature contract`,
           );
         }
       }
-    } else {
-      warnings.push({
-        code: 'spec-not-loaded',
-        message: `${ticket.id} traceability was not checked against a feature spec`,
-      });
     }
 
     const acceptanceLines = sections.get(normalize('Acceptance Criteria'))?.lines ?? [];
@@ -181,12 +258,93 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
       traceIds(acceptanceLines.join('\n')).filter((id) => id.startsWith('AC-')),
     );
 
+    for (const acceptanceId of ticketAcceptanceIds) {
+      coveredAcceptanceIds.add(acceptanceId);
+
+      if (!ticketTraceIds.includes(acceptanceId)) {
+        addError(
+          errors,
+          'acceptance-not-traced',
+          `${ticket.id} acceptance ${acceptanceId} is absent from SRS Traceability`,
+        );
+      }
+
+      if (knownContractIds && !knownContractIds.has(acceptanceId)) {
+        addError(
+          errors,
+          'unknown-parent-acceptance',
+          `${ticket.id} acceptance ${acceptanceId} is outside the parent feature contract`,
+        );
+      }
+    }
+
+    for (const acceptanceId of idsWithPrefix(ticketTraceIds, ['AC-'])) {
+      if (!ticketAcceptanceIds.includes(acceptanceId)) {
+        addError(
+          errors,
+          'missing-ticket-acceptance-detail',
+          `${ticket.id} traces ${acceptanceId} without an observable acceptance criterion`,
+        );
+      }
+    }
+
     if (!acceptanceLines.some((line) => /^\s*- \[[ xX]\].*\bAC-[A-Z0-9]+-\d{3}\b/.test(line))) {
       addError(
         errors,
         'missing-acceptance-criteria',
         `${ticket.id} must contain acceptance criteria linked by ID`,
       );
+    }
+
+    const safeguardSectionIds = uniqueSorted(idsWithPrefix(traceIds(
+      sections.get(normalize('Safeguards and Invariants'))?.lines.join('\n') ?? '',
+    ), ['SG-']));
+
+    for (const safeguardId of idsWithPrefix(ticketTraceIds, ['SG-'])) {
+      if (!safeguardSectionIds.includes(safeguardId)) {
+        addError(
+          errors,
+          'missing-safeguard-detail',
+          `${ticket.id} traces ${safeguardId} without a safeguard definition`,
+        );
+      } else {
+        coveredSafeguardIds.add(safeguardId);
+      }
+    }
+
+    const impactIds = uniqueSorted(idsWithPrefix(traceIds(
+      sections.get(normalize('Risk and Decision Impacts'))?.lines.join('\n') ?? '',
+    ), ['RISK-', 'Q-']));
+    const tracedRiskDecisionIds = idsWithPrefix(ticketTraceIds, ['RISK-', 'Q-']);
+
+    for (const impactId of impactIds) {
+      if (!ticketTraceIds.includes(impactId)) {
+        addError(
+          errors,
+          'risk-decision-not-traced',
+          `${ticket.id} impact ${impactId} is absent from SRS Traceability`,
+        );
+      }
+
+      if (knownContractIds && !knownContractIds.has(impactId)) {
+        addError(
+          errors,
+          'unknown-parent-risk-decision',
+          `${ticket.id} impact ${impactId} is outside the parent feature contract`,
+        );
+      }
+    }
+
+    for (const impactId of tracedRiskDecisionIds) {
+      if (!impactIds.includes(impactId)) {
+        addError(
+          errors,
+          'missing-risk-decision-impact',
+          `${ticket.id} traces ${impactId} without recording its delivery impact`,
+        );
+      } else {
+        coveredRiskDecisionIds.add(impactId);
+      }
     }
 
     const verificationTable = parseFirstTable(sections.get(normalize('Verification Matrix')));
@@ -229,6 +387,7 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
         const evidenceColumn = columnIndex(verificationTable, 'Evidence');
         const requiredColumn = columnIndex(verificationTable, 'Required');
         const scopeColumn = columnIndex(verificationTable, 'Scope');
+        const layerColumn = columnIndex(verificationTable, 'Layer');
 
         for (const row of verificationTable.rows) {
           if (!row[commandColumn]?.trim() || !row[evidenceColumn]?.trim()) {
@@ -239,7 +398,9 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
             );
           }
 
-          if (!/^(?:yes|no)(?:\b|\s)/i.test(row[requiredColumn] ?? '')) {
+          const requirement = row[requiredColumn] ?? '';
+
+          if (!/^(?:yes|no)\b(?:\s*[-—:]\s*|\s+).+/i.test(requirement)) {
             addError(
               errors,
               'invalid-verification-requirement',
@@ -252,6 +413,14 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
               errors,
               'invalid-verification-scope',
               `${ticket.id} verification rows must use backend, frontend, or both scope`,
+            );
+          }
+
+          if (!verificationLayers.includes((row[layerColumn] ?? '').toLowerCase())) {
+            addError(
+              errors,
+              'invalid-verification-layer',
+              `${ticket.id} uses unsupported verification layer ${row[layerColumn] ?? ''}`,
             );
           }
         }
@@ -313,6 +482,20 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
       }
     }
 
+    const readinessText = new Set(readinessItems.map(
+      (line) => line.replace(/^\s*- \[[ xX]\]\s*/, '').trim(),
+    ));
+
+    for (const requiredItem of requiredReadinessItems) {
+      if (!readinessText.has(requiredItem)) {
+        addError(
+          errors,
+          'missing-readiness-item',
+          `${ticket.id} readiness is missing: ${requiredItem}`,
+        );
+      }
+    }
+
     if (/<[^>]+>/.test(ticket.contents.replace(/<!--[\s\S]*?-->/g, ''))) {
       addError(errors, 'unresolved-placeholder', `${ticket.id} contains template placeholders`);
     }
@@ -320,6 +503,24 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
 
   if (graphHasCycle(graph)) {
     addError(errors, 'blocker-cycle', 'Ticket blocker graph contains a cycle');
+  }
+
+  const coverageChecks = [
+    ['acceptance', parentAcceptanceIds, coveredAcceptanceIds],
+    ['safeguard', parentSafeguardIds, coveredSafeguardIds],
+    ['risk or decision', parentRiskDecisionIds, coveredRiskDecisionIds],
+  ];
+
+  for (const [kind, parentIds, coveredIds] of coverageChecks) {
+    for (const parentId of parentIds) {
+      if (!coveredIds.has(parentId)) {
+        addError(
+          errors,
+          `missing-parent-${kind.replaceAll(' ', '-')}-coverage`,
+          `Parent ${kind} ${parentId} is not covered by a ready ticket`,
+        );
+      }
+    }
   }
 
   return {
@@ -339,11 +540,14 @@ export const auditTicketSet = (tickets, { specContents = null } = {}) => {
 const runCli = async () => {
   const argumentsList = process.argv.slice(2);
   const directory = argumentsList.find((argument) => !argument.startsWith('--'));
-  const specFlag = argumentsList.indexOf('--spec');
-  const specPath = specFlag === -1 ? null : argumentsList[specFlag + 1];
+  const contractFlag = argumentsList.indexOf('--contract');
+  const legacySpecFlag = argumentsList.indexOf('--spec');
+  const contractPath = contractFlag !== -1
+    ? argumentsList[contractFlag + 1]
+    : legacySpecFlag === -1 ? null : argumentsList[legacySpecFlag + 1];
 
-  if (!directory) {
-    console.error('Usage: node audit-ticket-contracts.mjs <ticket-directory> [--spec <path>]');
+  if (!directory || !contractPath) {
+    console.error('Usage: node audit-ticket-contracts.mjs <ticket-directory> --contract <path>');
     process.exitCode = 2;
     return;
   }
@@ -361,7 +565,7 @@ const runCli = async () => {
     };
   }));
   const result = auditTicketSet(tickets, {
-    specContents: specPath ? await readFile(path.resolve(specPath), 'utf8') : null,
+    contractContents: contractPath ? await readFile(path.resolve(contractPath), 'utf8') : null,
   });
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

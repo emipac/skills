@@ -1,0 +1,57 @@
+schema_version: 3
+backend: unknown
+frontend: none
+tracker: local-markdown
+artifacts:
+  srs: docs/specifications/change-evaluation-gate-srs.md
+  glossary: CONTEXT.md
+  adrs: .agents/adr
+guidelines:
+  - AGENTS.md
+  - CLAUDE.md
+source_scopes:
+  backend: []
+  frontend: []
+  shared:
+    - fixtures
+    - scripts
+    - skills
+    - tests
+verification:
+  profile: unknown
+  capabilities:
+    - gate-runtime-binding-smoke
+    - gate-fix-smoke
+    - gate-evidence-prune-smoke
+  commands:
+    format:
+      backend: []
+      frontend: []
+      both: []
+    static_analysis:
+      backend: []
+      frontend: []
+      both: []
+    test:
+      backend: []
+      frontend: []
+      both:
+        - "npm run test:unit"
+        - "npm run test:install"
+    smoke:
+      backend: []
+      frontend: []
+      both: []
+    build:
+      backend: []
+      frontend: []
+      both: []
+    e2e:
+      backend: []
+      frontend: []
+      both: []
+history:
+  path: docs/history
+  required: true
+protected_files:
+  - AGENTS.md

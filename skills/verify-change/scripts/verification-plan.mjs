@@ -3,16 +3,20 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-const stageOrder = new Map([
-  ['focused', 10],
-  ['format', 20],
-  ['static-analysis', 30],
-  ['affected-tests', 40],
-  ['smoke', 50],
-  ['build', 60],
-  ['browser', 70],
-  ['broad-tests', 80],
+export const evidenceLadderStages = Object.freeze([
+  'focused',
+  'format',
+  'static-analysis',
+  'affected-tests',
+  'smoke',
+  'build',
+  'browser',
+  'broad-tests',
 ]);
+
+const stageOrder = new Map(
+  evidenceLadderStages.map((stage, index) => [stage, (index + 1) * 10]),
+);
 
 const configuredStages = {
   format: 'format',
@@ -23,9 +27,10 @@ const configuredStages = {
   test: 'broad-tests',
 };
 
-const ticketStages = new Map([
+export const ticketLayerStages = [
   ['targeted', 'focused'],
   ['focused', 'focused'],
+  ['format', 'format'],
   ['static', 'static-analysis'],
   ['static-analysis', 'static-analysis'],
   ['affected', 'affected-tests'],
@@ -37,7 +42,9 @@ const ticketStages = new Map([
   ['broad', 'broad-tests'],
   ['full', 'broad-tests'],
   ['broad-tests', 'broad-tests'],
-]);
+];
+
+const ticketStages = new Map(ticketLayerStages);
 
 const acceptanceIds = (value) => [...value.matchAll(/\bAC-[A-Z0-9]+-\d{3}\b/g)]
   .map((match) => match[0]);

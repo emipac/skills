@@ -31,6 +31,12 @@ documents it points to.
   exist, discovery prefers the non-mutating check. Script-name scope markers
   take precedence, followed by confirmed source-root references in the command,
   then the conservative profile default.
+- Optional schema v4 `evaluation_gate` records repository-owned Gate policy.
+  Its absence means unconfigured; its presence means configured but inactive.
+  It contains exactly five subcontracts: required/advisory check identities,
+  total budget, bypass, execution, and evidence. It never owns Verification
+  commands, profiles, scopes, or capabilities, and never stores client, hook,
+  executable, trust, version, receipt, or activation state.
 - `history` records the project completion-log convention.
 - `protected_files` lists instruction files setup must preserve byte-for-byte.
 

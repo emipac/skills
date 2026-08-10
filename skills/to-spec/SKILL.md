@@ -36,7 +36,9 @@ Read `.agent-framework.yaml` and the configured tracker document. Run
    paths, acceptance coverage, authorization, safeguards, risk, dependencies,
    architecture boundaries, public test seams, implicit decisions, and scope
    additions. Record each finding in Risks, Gaps, and Assumptions with whether
-   it blocks readiness.
+   it blocks readiness. Preserve relevant `RISK-NNN` and resolved `Q-NNN`
+   identifiers rather than replacing them with feature-local IDs. Give every
+   high-impact risk an explicit accepted disposition.
 
    Completion criterion: every analysis dimension has evidence or a visible
    gap; no blocking row remains unresolved.
@@ -60,7 +62,9 @@ Read `.agent-framework.yaml` and the configured tracker document. Run
 
    Apply the same gate to tracker-native drafts. Status is
    `ready-for-tickets` only when traceability resolves, seams are agreed,
-   safeguards and non-goals are explicit, and no blocking gap remains.
+   safeguards and non-goals are explicit, risk and decision dispositions are
+   recorded, and no blocking gap remains. Every acceptance ID must appear in
+   both the Acceptance Criteria and public-seam mappings.
 
 6. **Publish.** Publish the approved feature contract through the configured
    tracker adapter. It is a parent planning artifact, not an implementation
