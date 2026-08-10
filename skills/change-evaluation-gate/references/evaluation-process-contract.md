@@ -114,13 +114,20 @@ completed decision: `bypass` carries the bypass record or `null`, and the
 outcome becomes `bypassed` only when an explicit, snapshot-bound, one-shot
 grant is accepted. A bypass never rewrites a check and never removes a failure.
 
-## Declared but not yet implemented
+## Coordination
 
-These decision fields are part of the contract and are returned so no adapter
-has to guess. Their behavior belongs to later slices:
+A host may bind a coordination seam around `evaluate`. It serializes execution
+per resolved Git common directory, shares only matching in-flight bindings, lets
+authoritative Git advance ahead of queued preflights, keeps cancellation
+subscriber-local, and requires explicit audited stale-lock recovery. A lease that
+cannot be obtained ends the evaluation before anything is materialized or
+executed: the decision is `unverified` with the `coordination-failure` reason
+code, which an authoritative role can only ever turn into `deny`. The rules are
+defined by the
+[evaluation coordination contract](evaluation-coordination-contract.md).
 
-- Coordination and locking are not implemented; `coordination-failure` exists
-  as a classification only.
+A gate with no coordination bound is a single-client gate and never claims to
+have serialized anything.
 
 ## Evidence persistence
 

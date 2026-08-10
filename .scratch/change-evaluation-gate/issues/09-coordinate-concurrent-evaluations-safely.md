@@ -1,6 +1,6 @@
 # TB-009 — Coordinate concurrent evaluations safely
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -49,7 +49,7 @@ No persistent pass cache, cross-repository lock, implicit stale-lock deletion, r
 
 ## Acceptance Criteria
 
-- [ ] `AC-COORD-001`: fixtures prove serialization, identical in-flight sharing, role-specific decisions, Git queue priority, subscriber-local cancellation, audited stale recovery, and `unverified` failure.
+- [x] `AC-COORD-001`: fixtures prove serialization, identical in-flight sharing, role-specific decisions, Git queue priority, subscriber-local cancellation, audited stale recovery, and `unverified` failure.
 
 ## Verification Matrix
 

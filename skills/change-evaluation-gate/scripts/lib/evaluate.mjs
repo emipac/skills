@@ -30,6 +30,7 @@ import {
   resolveDeliveryContract,
   resolveScope,
 } from './delivery-contract.mjs';
+import { coordinationFailureDiagnostic } from './coordination.mjs';
 import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
 import {
@@ -321,7 +322,7 @@ const resultFor = (descriptor, attempts, { override = null, acceptanceIds = new 
  * @param {object} request versioned evaluation request
  * @param {object} dependencies resolved gate inputs and the delegated executor
  */
-export const evaluate = async (request, dependencies = {}) => {
+const evaluateSnapshot = async (request, dependencies = {}) => {
   const profile = dependencies.profile ?? null;
   const policy = dependencies.policy ?? null;
   const runnerVersion = dependencies.runnerVersion ?? UNKNOWN_RUNNER_VERSION;
@@ -596,6 +597,61 @@ export const evaluate = async (request, dependencies = {}) => {
     buildDecision(graded),
     { store: dependencies.evidenceStore ?? null, outputs: capturedOutputs, graded },
   );
+};
+
+/**
+ * Grade one exact snapshot under the bound coordination seam.
+ *
+ * A host that binds coordination serializes evaluation per Git common
+ * directory. A lease that cannot be obtained ends the evaluation before
+ * anything is materialized or executed: the decision is `unverified` with the
+ * `coordination-failure` reason, which an authoritative role can only ever turn
+ * into `deny` (FR-COORD-001, FR-COORD-005, NFR-REL-003, SG-COORD-001).
+ *
+ * A gate with no coordination bound is a single-client gate; it never pretends
+ * to have serialized anything.
+ *
+ * @param {object} request versioned evaluation request
+ * @param {object} dependencies resolved gate inputs, executor, and coordination
+ */
+export const evaluate = async (request, dependencies = {}) => {
+  if (typeof dependencies.coordination?.acquire !== 'function') {
+    return evaluateSnapshot(request, dependencies);
+  }
+
+  let lease;
+
+  try {
+    lease = await dependencies.coordination.acquire({ request });
+  } catch (error) {
+    lease = { acquired: false, reasonCode: 'lock-unavailable', detail: error.message };
+  }
+
+  if (lease?.acquired !== true) {
+    return buildDecision({
+      request,
+      snapshot: null,
+      checks: [],
+      diagnostics: [coordinationFailureDiagnostic(
+        `${lease?.reasonCode ?? 'lock-unavailable'}: ${lease?.detail ?? 'the evaluation lock could not be acquired.'}`,
+      )],
+      outcome: 'unverified',
+      profile: dependencies.profile ?? null,
+      policy: dependencies.policy ?? null,
+      runnerVersion: dependencies.runnerVersion ?? UNKNOWN_RUNNER_VERSION,
+      providerVersions: dependencies.providerVersions ?? {},
+      scope: await scopeOf(request, null),
+      delegation: delegateResolution({ checks: [], changedPaths: [] }).delegation,
+    });
+  }
+
+  try {
+    return await evaluateSnapshot(request, dependencies);
+  } finally {
+    if (typeof lease.release === 'function') {
+      await lease.release();
+    }
+  }
 };
 
 /**

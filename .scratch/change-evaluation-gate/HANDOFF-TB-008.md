@@ -1,8 +1,8 @@
-# Handoff — Change Evaluation Gate, resume at TB-009
+# Handoff — Change Evaluation Gate, resume at TB-010
 
-> **Updated 2026-08-10 (second pass).** TB-008 is now DONE and verified. The
-> resume point is **TB-009**. The filename still says TB-008 for link stability;
-> trust this heading and the state table below.
+> **Updated 2026-08-10 (third pass).** TB-008 and TB-009 are now DONE and
+> verified. The resume point is **TB-010**. The filename still says TB-008 for
+> link stability; trust this heading and the state table below.
 
 Written 2026-08-10 by the orchestrating Tech Lead session. Read this before
 touching the Gate. It records only what is NOT already in the tickets, the SRS,
@@ -15,11 +15,15 @@ killed mid-run (its work had already landed, verified after the fact). Work was
 stopped at a clean ticket boundary rather than risking a half-written slice.
 Nothing is in a partial state.
 
-## State: 8 of 15 tickets done
+## State: 9 of 15 tickets done
 
 | Done | Open |
 | --- | --- |
-| TB-001 … TB-008 | TB-009 … TB-015 |
+| TB-001 … TB-009 | TB-010 … TB-015 |
+
+**TB-001 … TB-008 are COMMITTED** as `07574ef` on branch
+`agent/change-evaluation-gate-planning` (not pushed). **TB-009 is uncommitted**
+working-tree work.
 
 Ticket status lines in `.scratch/change-evaluation-gate/issues/` are accurate —
 trust them. TB-001 is committed (`247247d`); **TB-002 … TB-007 are uncommitted
@@ -33,8 +37,8 @@ directly by the Tech Lead, not taken from agent self-reports:
 
 | Gate | Result |
 | --- | --- |
-| `npm run test:unit` | **165 pass, 0 fail** (session baseline was 92) |
-| `npm run validate` | OK — 29 released skills, 184 Markdown files |
+| `npm run test:unit` | **177 pass, 0 fail** (session baseline was 92) |
+| `npm run validate` | OK — 29 released skills, 187 Markdown files |
 | `npm run test:install` | OK — 12 skills across 5 clients |
 | `npm run gate-runtime-binding-smoke` | exit 0 (added by TB-006) |
 | `npm run gate-fix-smoke` | exit 0 (added by TB-007) |
@@ -52,8 +56,9 @@ TB-009 ──┴─────────────────────�
 TB-005/006/008 ─> TB-014 ───────────────────┘
 ```
 
-Concrete sequence: ~~TB-008~~ → **TB-009** → TB-010 → TB-011 → TB-012 → TB-013 →
-TB-014 → TB-015. TB-008 is done; **TB-009 is the correct next ticket.**
+Concrete sequence: ~~TB-008~~ → ~~TB-009~~ → **TB-010** → TB-011 → TB-012 →
+TB-013 → TB-014 → TB-015. **TB-010 is the correct next ticket** (its blockers
+TB-002, TB-004, and TB-008 are all done).
 TB-012 and TB-013 are the only genuinely parallel pair, but they share
 `skills/change-evaluation-gate/` and `tests/`, so this session ran everything
 sequentially to avoid write collisions. Recommend keeping that.
@@ -137,6 +142,7 @@ Remaining capabilities to create: `gate-evidence-prune-smoke` (TB-008),
 | `delivery-contract.mjs`, `grader-surface.mjs`, `runtime-binding.mjs` | TB-006 | `regression-only` scope, changed Grader surfaces, served-source binding |
 | `fix.mjs`, `mutation.mjs` | TB-007 | Explicit `gate fix`, provider-declared `fix_order`, forced reevaluation |
 | `evidence-store.mjs`, `evidence-bounds.mjs`, `redaction.mjs`, `lifecycle-event.mjs` | TB-008 | Append-only content-addressed store under the Git common dir, v1 ceilings, redaction, 11 Lifecycle event types, durable bypass ledger |
+| `coordination.mjs` | TB-009 | Per-Git-common-directory lock, identical in-flight sharing, role-specific decisions, Git queue priority, subscriber-local cancellation, audited stale recovery |
 
 The Evidence ladder stage order is exported from
 `skills/verify-change/scripts/verification-plan.mjs` as `evidenceLadderStages`.
@@ -149,10 +155,17 @@ restates stage names (SG-OWNER-001).
 not create a parallel decision shape:
 
 - ~~`evidence.persisted` is always `false`~~ → **DONE in TB-008**, filled in place.
-- Coordination: `coordination-failure` exists as a reason classification only,
-  with no locking implementation → **TB-009 owns this.** TB-008 designed the
-  store so a lock layers on cleanly: every mutation is one rename or one append,
-  and the canonical Git common directory path is the natural lock key.
+- ~~Coordination: `coordination-failure` is a reason classification only~~ →
+  **DONE in TB-009.** `coordination.mjs` imports `resolveGitCommonDirectory`
+  from `evidence-store.mjs` (verified) so the lock key reuses TB-008's
+  canonicalization — do not reimplement that resolution anywhere else.
+  Coordination reports through `diagnostics` rather than a new top-level
+  decision field, because `validateDecision` rejects unknown top-level fields.
+- **No periodic heartbeat timer.** TB-009's heartbeat is called explicitly and
+  staleness leans on process liveness. If a later slice needs a background
+  heartbeat, that is new work — see `references/evaluation-coordination-contract.md`.
+- **No operator-facing lock command.** Like `gate prune`, it belongs with
+  **TB-012**'s lifecycle commands.
 - No user-facing `gate prune` operator command exists. TB-008 built the library
   seam plus its capability script (what its matrix required); the operator
   command surface belongs with **TB-012**'s lifecycle commands.

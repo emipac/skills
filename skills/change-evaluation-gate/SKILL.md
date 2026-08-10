@@ -59,6 +59,10 @@ Where evidence is stored, what it may retain, how Sensitive values are redacted
 before persistence, and how an operator previews and confirms selective blob
 pruning without losing the audit trail are defined by the
 [bounded Evidence and Lifecycle event contract](references/bounded-evidence-contract.md).
+How concurrent evaluations across clients and linked worktrees serialize per Git
+common directory, when in-flight work may be shared, and why coordination that
+cannot be trusted is `unverified` are defined by the
+[evaluation coordination contract](references/evaluation-coordination-contract.md).
 Configuring policy never runs an evaluation. Show the complete candidate policy before invoking
 the `framework-setup` Gate configuration command, and install it only after the
 maintainer explicitly confirms that preview.
