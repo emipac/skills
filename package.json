@@ -19,7 +19,8 @@
     "gate-runtime-binding-smoke": "node skills/change-evaluation-gate/scripts/runtime-binding-smoke.mjs",
     "gate-fix-smoke": "node skills/change-evaluation-gate/scripts/gate-fix-smoke.mjs",
     "gate-evidence-prune-smoke": "node skills/change-evaluation-gate/scripts/gate-evidence-prune-smoke.mjs",
-    "gate-activation-smoke": "node skills/change-evaluation-gate/scripts/gate-activation-smoke.mjs"
+    "gate-activation-smoke": "node skills/change-evaluation-gate/scripts/gate-activation-smoke.mjs",
+    "gate-hook-conformance-smoke": "node skills/change-evaluation-gate/scripts/gate-hook-conformance-smoke.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

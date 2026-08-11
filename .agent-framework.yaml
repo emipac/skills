@@ -24,6 +24,7 @@ verification:
     - gate-fix-smoke
     - gate-evidence-prune-smoke
     - gate-activation-smoke
+    - gate-hook-conformance-smoke
   commands:
     format:
       backend: []

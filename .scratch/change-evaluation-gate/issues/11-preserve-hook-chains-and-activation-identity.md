@@ -1,6 +1,6 @@
 # TB-011 — Preserve hook chains and activation identity
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -49,9 +49,9 @@ Do not replace existing hook content, automatically modify shared or global `cor
 
 ## Acceptance Criteria
 
-- [ ] `AC-LIFE-003`: activation preserves and executes the prior hook chain, refuses unsafe shared-hook changes, and requires manual resolution after marker drift.
-- [ ] `AC-LIFE-008`: missing or mismatched non-interactive identities write nothing; an exact match may continue.
-- [ ] `AC-LIFE-009`: trust pause/resume requires identical transaction identities and hook strategy selection follows the declared order without partial activation.
+- [x] `AC-LIFE-003`: activation preserves and executes the prior hook chain, refuses unsafe shared-hook changes, and requires manual resolution after marker drift.
+- [x] `AC-LIFE-008`: missing or mismatched non-interactive identities write nothing; an exact match may continue.
+- [x] `AC-LIFE-009`: trust pause/resume requires identical transaction identities and hook strategy selection follows the declared order without partial activation.
 
 ## Verification Matrix
 

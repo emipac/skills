@@ -44,6 +44,41 @@ export const ACTIVATION_RECEIPT_VERSION = 'change-evaluation-gate/activation/v1'
 export const AUTHORITATIVE_HOOK = 'pre-commit';
 
 /**
+ * The declared hook composition order (FR-LIFE-017).
+ *
+ * Registration always prefers the least invasive thing that works: a hook
+ * manager's own integration point first, then a confirmed marker-delimited
+ * block inside an existing repository-local hook, and only where no hook exists
+ * at all a clearly owned shim. Nothing in this list overwrites a hook or moves
+ * a hooks path.
+ */
+export const HOOK_STRATEGIES = Object.freeze([
+  'native-hook-manager',
+  'marker-delimited-block',
+  'gate-owned-shim',
+]);
+
+/** The delimiters of the gate-owned block inside an existing hook. */
+export const HOOK_BLOCK_BEGIN = '# >>> change-evaluation-gate managed block >>>';
+export const HOOK_BLOCK_END = '# <<< change-evaluation-gate managed block <<<';
+
+/** The directory a Husky-managed clone keeps its project hooks in. */
+const MANAGED_HOOK_DIRECTORY = '.husky';
+
+/**
+ * Hook managers whose integration point is a declaration rather than a file the
+ * gate could add. Editing somebody's `lefthook.yml` on their behalf is exactly
+ * the silent change SG-HOOK-001 forbids, so these require manual registration.
+ */
+const DECLARATIVE_HOOK_MANAGERS = Object.freeze([
+  { id: 'lefthook', files: ['lefthook.yml', 'lefthook.yaml', '.lefthook.yml', '.lefthook.yaml'] },
+  { id: 'pre-commit', files: ['.pre-commit-config.yaml', '.pre-commit-config.yml'] },
+]);
+
+/** Interpreters whose scripts the gate can safely compose a `/bin/sh` block into. */
+const COMPOSABLE_INTERPRETERS = /^#!\s*\S*\/(?:env\s+)?(?:sh|bash|dash|ksh|zsh)\b/;
+
+/**
  * A clone identity. It names one clone's resolved Git metadata, which is
  * exactly the scope activation is bound to; it is not a project identity and
  * never travels between machines.
@@ -56,6 +91,36 @@ export const configurationIdentity = (configuration) => contentIdentity({
   policy: configuration?.policy ?? null,
 });
 
+/**
+ * The identity of the selected adapter set.
+ *
+ * A transaction that paused with one adapter set may not resume with another:
+ * the operator consented to self-testing and activating exactly these
+ * integrations (FR-LIFE-016).
+ */
+export const adapterIdentity = (adapters = []) => contentIdentity(
+  adapters.map((adapter) => ({
+    id: adapter?.id ?? null,
+    version: adapter?.version ?? null,
+    authoritative: adapter?.authoritative === true,
+  })),
+);
+
+/**
+ * The identity of one Activation transaction.
+ *
+ * It binds the four things a resumption may never change: the clone, the
+ * approved policy, the selected adapters, and the exact preview consent was
+ * granted against. Trust prompts are the one legitimate reason to pause, and
+ * the machine may have changed while the operator was answering one.
+ */
+export const activationTransactionIdentity = ({
+  repositoryIdentity: repository = null,
+  configurationIdentity: configuration = null,
+  adapterIdentity: adapters = null,
+  previewId = null,
+}) => contentIdentity({ repository, configuration, adapters, previewId });
+
 const refusal = (step, reasonCode, errors = []) => ({
   activated: false,
   state: 'configured',
@@ -65,6 +130,7 @@ const refusal = (step, reasonCode, errors = []) => ({
   receipt: null,
   order: [],
   rollback: { performed: false, actions: [], failures: [] },
+  resumption: null,
 });
 
 /** Describe one already-registered hook without interpreting or changing it. */
@@ -75,9 +141,66 @@ const existingHook = async (hookPath) => {
     return null;
   }
 
-  const contents = await readFile(hookPath).catch(() => Buffer.alloc(0));
+  const contents = (await readFile(hookPath).catch(() => Buffer.alloc(0))).toString('utf8');
 
-  return { path: hookPath, bytes: stats.size, identity: contentIdentity(contents.toString('utf8')) };
+  return {
+    contents,
+    descriptor: { path: hookPath, bytes: stats.size, identity: contentIdentity(contents) },
+  };
+};
+
+/**
+ * Find this clone's hook manager, if it has one.
+ *
+ * Detection is by layout only: no manager is executed, no network is touched,
+ * and an absent manager is an ordinary answer rather than a failure. It is a
+ * dependency so a fixture can state exactly which manager it is standing in.
+ */
+export const detectHookManager = async ({ repositoryRoot, hooksPath }) => {
+  if (hooksPath?.configured && !hooksPath.shared) {
+    // Husky owns `.husky`. From v9 Git is pointed at the generated `_` runner
+    // directory inside it, which is the manager's own file to write; either way
+    // the manager's integration point for a project hook is `.husky` itself.
+    const directory = hooksPath.directory;
+    const candidate = path.basename(directory) === '_' ? path.dirname(directory) : directory;
+
+    if (path.basename(candidate) === MANAGED_HOOK_DIRECTORY) {
+      const stats = await stat(candidate).catch(() => null);
+
+      if (stats?.isDirectory()) {
+        return { id: 'husky', registration: 'managed-directory', directory: candidate, configuration: null };
+      }
+    }
+  }
+
+  for (const manager of DECLARATIVE_HOOK_MANAGERS) {
+    for (const file of manager.files) {
+      const stats = await stat(path.join(repositoryRoot, file)).catch(() => null);
+
+      if (stats?.isFile()) {
+        return { id: manager.id, registration: 'declarative', directory: null, configuration: file };
+      }
+    }
+  }
+
+  return null;
+};
+
+/** The pinned runtime invocation, quoted for `/bin/sh`. */
+const quotedProgram = ({ program, repositoryRoot }) => {
+  const argv = [
+    program.interpreter,
+    repositoryRoot === undefined ? program.script : path.resolve(repositoryRoot, program.script),
+    ...(program.args ?? []),
+  ];
+
+  for (const value of argv) {
+    if (typeof value !== 'string' || /["\\\n\r]/.test(value)) {
+      throw new Error(`A hook program argument is not safely quotable: ${JSON.stringify(value)}.`);
+    }
+  }
+
+  return argv.map((value) => `"${value}"`).join(' ');
 };
 
 /**
@@ -87,22 +210,86 @@ const existingHook = async (hookPath) => {
  * runtime and does nothing else, so a maintainer reading their hook directory
  * can see at a glance what owns the file and what it runs.
  */
-const shimContents = ({ hook, program, receipt }) => {
-  const argv = [program.interpreter, program.script, ...(program.args ?? [])];
+const shimContents = ({ hook, program, receipt }) => [
+  '#!/bin/sh',
+  `# change-evaluation-gate: owned ${hook} shim. Managed by the Gate; do not edit.`,
+  `# activation-receipt: ${receipt.receiptId}`,
+  `exec ${quotedProgram({ program })} "$@"`,
+  '',
+].join('\n');
 
-  for (const value of argv) {
-    if (typeof value !== 'string' || /["\\\n\r]/.test(value)) {
-      throw new Error(`A hook program argument is not safely quotable: ${JSON.stringify(value)}.`);
-    }
+/**
+ * The gate-owned block placed inside a hook the repository already had.
+ *
+ * It runs the pinned runtime and stops the commit when the gate refuses it;
+ * otherwise control falls straight through to the hook's original body, which
+ * is why the block is placed at the top rather than appended. A hook that ends
+ * in `exit 0` — most of them do — would never reach an appended block.
+ */
+const managedBlockContents = ({ program, receipt, repositoryRoot }) => [
+  HOOK_BLOCK_BEGIN,
+  '# Managed by the Gate; do not edit inside these markers.',
+  `# activation-receipt: ${receipt.receiptId}`,
+  `${quotedProgram({ program, repositoryRoot })} "$@" || exit $?`,
+  HOOK_BLOCK_END,
+].join('\n');
+
+/**
+ * Locate the gate-owned block in a hook, and say whether it is intact.
+ *
+ * Anything other than exactly one well-formed block is drift: the gate cannot
+ * tell what a half-removed or duplicated block was meant to be, and guessing is
+ * precisely what SG-HOOK-001 forbids.
+ */
+const managedBlockIn = (contents) => {
+  const begin = contents.indexOf(HOOK_BLOCK_BEGIN);
+  const end = contents.indexOf(HOOK_BLOCK_END);
+
+  if (begin === -1 && end === -1) {
+    return { present: false, wellFormed: true, block: null, begin: -1, end: -1 };
   }
 
-  return [
-    '#!/bin/sh',
-    `# change-evaluation-gate: owned ${hook} shim. Managed by the Gate; do not edit.`,
-    `# activation-receipt: ${receipt.receiptId}`,
-    `exec ${argv.map((value) => `"${value}"`).join(' ')} "$@"`,
-    '',
-  ].join('\n');
+  const duplicated = begin !== -1 && contents.indexOf(HOOK_BLOCK_BEGIN, begin + 1) !== -1;
+  const repeated = end !== -1 && contents.indexOf(HOOK_BLOCK_END, end + 1) !== -1;
+
+  if (begin === -1 || end === -1 || end < begin || duplicated || repeated) {
+    return { present: true, wellFormed: false, block: null, begin, end };
+  }
+
+  return {
+    present: true,
+    wellFormed: true,
+    block: contents.slice(begin, end + HOOK_BLOCK_END.length),
+    begin,
+    end,
+  };
+};
+
+/** Place the block where control actually reaches it: directly after the shebang. */
+const composeManagedBlock = (contents, block) => {
+  const newline = contents.indexOf('\n');
+
+  if (contents.startsWith('#!') && newline !== -1) {
+    return `${contents.slice(0, newline + 1)}${block}\n${contents.slice(newline + 1)}`;
+  }
+
+  return `${block}\n${contents}`;
+};
+
+/** Publish hook contents by one atomic rename, preserving the file's mode. */
+const publishHook = async ({ path: hookPath, directory, contents, mode }) => {
+  const staged = path.join(directory, `.${AUTHORITATIVE_HOOK}.${randomUUID()}.part`);
+
+  await mkdir(directory, { recursive: true });
+  await writeFile(staged, contents, { mode });
+
+  try {
+    await rename(staged, hookPath);
+  } catch (error) {
+    await rm(staged, { force: true });
+
+    throw error;
+  }
 };
 
 /**
@@ -122,18 +309,8 @@ export const registerOwnedHook = async ({ hook, path: hookPath, directory, repos
     program: { ...program, script: path.resolve(repositoryRoot, program.script) },
     receipt,
   });
-  const staged = path.join(directory, `.${hook}.${randomUUID()}.part`);
 
-  await mkdir(directory, { recursive: true });
-  await writeFile(staged, contents, { mode: 0o755 });
-
-  try {
-    await rename(staged, hookPath);
-  } catch (error) {
-    await rm(staged, { force: true });
-
-    throw error;
-  }
+  await publishHook({ path: hookPath, directory, contents, mode: 0o755 });
 
   return { path: hookPath, ownership: 'gate-owned-shim', identity: contentIdentity(contents) };
 };
@@ -167,6 +344,105 @@ export const removeOwnedHook = async ({ path: hookPath, identity = null }) => {
   }
 
   await rm(hookPath, { force: true });
+
+  return { removed: true, reason: null };
+};
+
+/**
+ * Compose the gate into a hook the repository already had.
+ *
+ * The surrounding chain is preserved byte for byte: the only change is one
+ * clearly delimited block, and the file is re-confirmed immediately before it is
+ * written so a hook edited since the operator looked at it is never composed
+ * into (FR-LIFE-007, FR-LIFE-017, NFR-COMP-002).
+ */
+export const registerManagedBlock = async ({
+  path: hookPath,
+  directory,
+  repositoryRoot,
+  program,
+  receipt,
+  existing,
+}) => {
+  if (!program?.interpreter || !program?.script) {
+    throw new Error('Activation requires a hook program to register.');
+  }
+
+  const contents = await readFile(hookPath, 'utf8');
+
+  if (contentIdentity(contents) !== existing?.identity) {
+    throw new Error(`The hook at ${hookPath} changed after it was confirmed; nothing was composed into it.`);
+  }
+
+  const block = managedBlockContents({ program, receipt, repositoryRoot });
+  const composed = composeManagedBlock(contents, block);
+  const mode = (await stat(hookPath)).mode & 0o777;
+
+  await publishHook({ path: hookPath, directory, contents: composed, mode });
+
+  return {
+    path: hookPath,
+    ownership: 'marker-delimited-block',
+    identity: contentIdentity(composed),
+    block: contentIdentity(block),
+    priorIdentity: existing.identity,
+  };
+};
+
+/**
+ * Withdraw a composed block — and restore exactly the hook that was there.
+ *
+ * Both the whole file and the block itself must still be what this transaction
+ * wrote, and removing the block must reproduce the preserved chain exactly.
+ * Anything else means somebody owns that file now, and rollback says so rather
+ * than editing their hook (SG-HOOK-001, SG-LIFE-001).
+ */
+export const removeManagedBlock = async ({
+  path: hookPath,
+  directory,
+  identity = null,
+  block = null,
+  priorIdentity = null,
+}) => {
+  if (identity === null) {
+    return { removed: false, reason: 'unknown-registration' };
+  }
+
+  const contents = await readFile(hookPath, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  });
+
+  if (contents === null) {
+    return { removed: false, reason: 'already-absent' };
+  }
+
+  if (contentIdentity(contents) !== identity) {
+    throw new Error(`The composed hook at ${hookPath} changed on disk; rollback left it in place rather than repairing drift it did not cause.`);
+  }
+
+  const found = managedBlockIn(contents);
+
+  if (!found.wellFormed || contentIdentity(found.block) !== block) {
+    throw new Error(`The gate-owned block in ${hookPath} changed on disk; rollback left it in place rather than repairing drift it did not cause.`);
+  }
+
+  const restored = contents.slice(0, found.begin)
+    + contents.slice(found.end + HOOK_BLOCK_END.length + 1);
+
+  if (contentIdentity(restored) !== priorIdentity) {
+    throw new Error(`Removing the gate-owned block from ${hookPath} would not restore the hook chain this activation preserved; it was left in place.`);
+  }
+
+  await publishHook({
+    path: hookPath,
+    directory,
+    contents: restored,
+    mode: (await stat(hookPath)).mode & 0o777,
+  });
 
   return { removed: true, reason: null };
 };
@@ -220,9 +496,160 @@ const resolveHooksPath = async ({ repositoryRoot, gitCommonDirectory, runGit }) 
   };
 };
 
+/**
+ * Choose the hook composition strategy in the declared order (FR-LIFE-017).
+ *
+ * The order is not a preference, it is a safety ranking: the manager's own
+ * integration point disturbs least, a marker-delimited block inside an existing
+ * hook disturbs the surrounding chain not at all but needs the operator to
+ * confirm that exact hook, and an owned shim is only ever created where there is
+ * no hook to preserve. Every branch that cannot be taken safely carries the
+ * reason code the transaction will refuse with; none of them writes anything.
+ */
+const resolveHookStrategy = async ({ request, repositoryRoot, gitCommonDirectory, hooksPath, detect }) => {
+  const fallbackPath = path.join(hooksPath.directory, AUTHORITATIVE_HOOK);
+  const refuse = (fields) => ({
+    manager: null,
+    strategy: null,
+    directory: hooksPath.directory,
+    path: fallbackPath,
+    existing: null,
+    contents: null,
+    priorIdentity: null,
+    ...fields,
+  });
+
+  // A hooks path that governs other repositories is never registered into and
+  // never rewritten to escape, whatever else is true of this clone.
+  if (hooksPath.shared) {
+    return refuse({
+      action: 'refuse-shared-hooks-path',
+      ownership: 'gate-owned-shim',
+      reasonCode: 'hooks-path-shared',
+      errors: [hooksPath],
+    });
+  }
+
+  const manager = await detect({ repositoryRoot, gitCommonDirectory, hooksPath });
+
+  if (manager?.registration === 'declarative') {
+    return refuse({
+      manager,
+      action: 'refuse-hook-manager-manual',
+      ownership: 'native-hook-manager',
+      reasonCode: 'hook-manager-manual-registration',
+      errors: [{ manager: manager.id, configuration: manager.configuration }],
+    });
+  }
+
+  const native = manager?.registration === 'managed-directory';
+  const directory = native ? manager.directory : hooksPath.directory;
+  const hookPath = path.join(directory, AUTHORITATIVE_HOOK);
+  const found = await existingHook(hookPath);
+  const ownership = native ? 'native-hook-manager' : 'gate-owned-shim';
+  const base = {
+    manager: manager ?? null,
+    directory,
+    path: hookPath,
+    existing: found?.descriptor ?? null,
+    contents: found?.contents ?? null,
+    priorIdentity: found?.descriptor.identity ?? null,
+    errors: [],
+  };
+
+  if (found === null) {
+    return {
+      ...base,
+      strategy: native ? 'native-hook-manager' : 'gate-owned-shim',
+      action: native ? 'create-native-registration' : 'create-owned-shim',
+      ownership,
+      reasonCode: null,
+    };
+  }
+
+  // Gate-owned content already inside somebody's hook is never quietly reused,
+  // repaired, or replaced. The operator resolves it (AC-LIFE-003).
+  const block = managedBlockIn(found.contents);
+
+  if (block.present) {
+    return {
+      ...base,
+      strategy: null,
+      action: 'refuse-marker-drift',
+      ownership: 'marker-delimited-block',
+      reasonCode: 'hook-marker-drift',
+      errors: [{
+        path: hookPath,
+        marker: block.wellFormed ? 'already-registered' : 'unbalanced',
+        resolution: 'manual',
+      }],
+    };
+  }
+
+  const confirmation = request.hookConfirmation ?? null;
+
+  if (confirmation === null) {
+    return {
+      ...base,
+      strategy: null,
+      action: 'refuse-existing-hook',
+      ownership,
+      reasonCode: 'hook-exists',
+      errors: [found.descriptor],
+    };
+  }
+
+  // A confirmation is for one exact hook, as the operator read it. A hook edited
+  // since then is a different hook and has to be looked at again.
+  if (confirmation.strategy !== 'marker-delimited-block'
+    || path.resolve(confirmation.path ?? '') !== hookPath
+    || confirmation.hookIdentity !== found.descriptor.identity) {
+    return {
+      ...base,
+      strategy: null,
+      action: 'refuse-existing-hook',
+      ownership,
+      reasonCode: 'hook-confirmation-mismatch',
+      errors: [{
+        expected: {
+          strategy: 'marker-delimited-block',
+          path: hookPath,
+          hookIdentity: found.descriptor.identity,
+        },
+        actual: {
+          strategy: confirmation.strategy ?? null,
+          path: confirmation.path ?? null,
+          hookIdentity: confirmation.hookIdentity ?? null,
+        },
+      }],
+    };
+  }
+
+  // The block is `/bin/sh`. Composing it into a hook written in something else
+  // would break the chain rather than preserve it.
+  if (!COMPOSABLE_INTERPRETERS.test(found.contents)) {
+    return {
+      ...base,
+      strategy: null,
+      action: 'refuse-uncomposable-chain',
+      ownership,
+      reasonCode: 'hook-chain-uncomposable',
+      errors: [{ path: hookPath, resolution: 'manual' }],
+    };
+  }
+
+  return {
+    ...base,
+    strategy: 'marker-delimited-block',
+    action: 'compose-marker-block',
+    ownership: 'marker-delimited-block',
+    reasonCode: null,
+  };
+};
+
 /** Resolve the identities, locations, and commands one activation would use. */
 const describeActivation = async (request, dependencies) => {
-  const { runGit, resolveExecutable } = dependencies;
+  const { runGit, resolveExecutable, detectHookManager: detect = detectHookManager } = dependencies;
   const gitCommonDirectory = await resolveGitCommonDirectory({
     repositoryRoot: request.repository.root,
     runGit,
@@ -234,17 +661,26 @@ const describeActivation = async (request, dependencies) => {
     runGit,
   });
   const hooksDirectory = hooksPath.directory;
-  const hookPath = path.join(hooksDirectory, AUTHORITATIVE_HOOK);
-  const existing = hooksPath.shared ? null : await existingHook(hookPath);
-  const action = hooksPath.shared
-    ? 'refuse-shared-hooks-path'
-    : (existing === null ? 'create-owned-shim' : 'refuse-existing-hook');
+  const hook = await resolveHookStrategy({
+    request,
+    repositoryRoot: request.repository.root,
+    gitCommonDirectory,
+    hooksPath,
+    detect,
+  });
+  const hookPath = hook.path;
+  const existing = hook.existing;
+  const action = hook.action;
 
   return {
     gitCommonDirectory,
     hooksPath,
     hooksDirectory,
     hookPath,
+    hook,
+    hookManager: hook.manager
+      ? { id: hook.manager.id, registration: hook.manager.registration, configuration: hook.manager.configuration ?? null }
+      : null,
     runners,
     repository: {
       root: request.repository.root,
@@ -260,7 +696,9 @@ const describeActivation = async (request, dependencies) => {
       hook: AUTHORITATIVE_HOOK,
       path: hookPath,
       action,
-      ownership: 'gate-owned-shim',
+      // The ownership label is the strategy: it says who owns the file the gate
+      // would touch, which is exactly what distinguishes the three strategies.
+      ownership: hook.ownership,
       existing,
     }],
     commands: runners.resolved.map((entry) => ({
@@ -297,6 +735,7 @@ export const previewActivation = async (request, dependencies = {}) => {
     repository: described.repository,
     configuration: described.configuration,
     hooksPath: described.hooksPath,
+    hookManager: described.hookManager,
     hooks: described.hooks,
     commands: described.commands,
     unresolved: described.runners.unresolved,
@@ -325,6 +764,8 @@ export const activate = async (request, dependencies = {}) => {
     unregisterAdapter = null,
     registerHook = registerOwnedHook,
     unregisterHook = removeOwnedHook,
+    composeHook = registerManagedBlock,
+    decomposeHook = removeManagedBlock,
     evidenceStore = null,
     clock = () => new Date(),
   } = dependencies;
@@ -333,16 +774,36 @@ export const activate = async (request, dependencies = {}) => {
   const journal = [];
   const order = [];
 
+  const outcomeOf = (result) => {
+    if (result.activated) {
+      return 'succeeded';
+    }
+
+    // A pause is not a failure: the transaction is intact and may be resumed
+    // with the identities it recorded.
+    return result.state === 'paused' ? 'refused' : 'failed';
+  };
+
+  const reasonOf = (result) => {
+    if (result.activated) {
+      return `Activation completed through ${result.step}; authoritative Git was enabled last.`;
+    }
+
+    if (result.state === 'paused') {
+      return `Activation paused at ${result.step} (${result.reasonCode}); no gate integration is active and it may be resumed only with the identities it recorded.`;
+    }
+
+    return `Activation failed at ${result.step} (${result.reasonCode}); every gate-owned change was rolled back and the clone remains configured.`;
+  };
+
   const record = async (result) => {
     if (evidenceStore) {
       await evidenceStore.appendLifecycleEvent({
         type: 'activation',
-        before: result.receipt?.previewId ?? null,
-        after: result.receipt?.receiptId ?? null,
-        outcome: result.activated ? 'succeeded' : 'failed',
-        reason: result.activated
-          ? `Activation completed through ${result.step}; authoritative Git was enabled last.`
-          : `Activation failed at ${result.step} (${result.reasonCode}); every gate-owned change was rolled back and the clone remains configured.`,
+        before: result.resumption?.previewId ?? result.receipt?.previewId ?? null,
+        after: result.resumption?.transactionId ?? result.receipt?.receiptId ?? null,
+        outcome: outcomeOf(result),
+        reason: reasonOf(result),
       });
     }
 
@@ -373,6 +834,25 @@ export const activate = async (request, dependencies = {}) => {
     return record(result).catch(() => result);
   };
 
+  /**
+   * Suspend the transaction without activating anything.
+   *
+   * Everything gate-owned is still unwound, so a paused transaction leaves no
+   * integration active anywhere; what survives is the identity it may be
+   * resumed against, and nothing else (FR-LIFE-016, SG-HOOK-001).
+   */
+  const suspend = async (step, reasonCode, errors, resumption) => {
+    const result = {
+      ...refusal(step, reasonCode, errors),
+      state: 'paused',
+      order,
+      rollback: await rollback(),
+      resumption,
+    };
+
+    return record(result).catch(() => result);
+  };
+
   // 1. Repository identity, and the entry points that may never reach it.
   order.push('repository-identity');
 
@@ -396,6 +876,21 @@ export const activate = async (request, dependencies = {}) => {
 
   const described = await describeActivation(request, dependencies);
 
+  // A non-interactive run has nobody to look at the preview, so the caller must
+  // say in advance which clone and which approved policy it means. A flag alone
+  // is never enough: it says "do not ask", not "this is the right repository"
+  // (FR-LIFE-015).
+  if (request.interactive === false) {
+    const missing = [
+      ...(request.repository.expectedIdentity ? [] : ['repository.expectedIdentity']),
+      ...(request.configuration?.expectedIdentity ? [] : ['configuration.expectedIdentity']),
+    ];
+
+    if (missing.length > 0) {
+      return fail('repository-identity', 'non-interactive-identity-missing', [{ missing }]);
+    }
+  }
+
   // A non-interactive activation must name the clone and the policy it expects.
   if (request.repository.expectedIdentity
     && request.repository.expectedIdentity !== described.repository.identity) {
@@ -413,10 +908,62 @@ export const activate = async (request, dependencies = {}) => {
     }]);
   }
 
+  // A resumed transaction must be the same transaction. Every identity is
+  // checked here, before consent is even read and long before anything on the
+  // machine changes, so a resumption that no longer applies writes nothing
+  // (FR-LIFE-016, SG-HOOK-001).
+  const resume = request.resume ?? null;
+  const selectedAdapters = adapterIdentity(described.adapters);
+
+  if (resume) {
+    if (resume.repositoryIdentity !== described.repository.identity) {
+      return fail('repository-identity', 'resume-repository-mismatch', [{
+        expected: resume.repositoryIdentity ?? null,
+        actual: described.repository.identity,
+      }]);
+    }
+
+    if (resume.configurationIdentity !== described.configuration.identity) {
+      return fail('repository-identity', 'resume-configuration-mismatch', [{
+        expected: resume.configurationIdentity ?? null,
+        actual: described.configuration.identity,
+      }]);
+    }
+
+    if (resume.adapterIdentity !== selectedAdapters) {
+      return fail('repository-identity', 'resume-adapter-mismatch', [{
+        expected: resume.adapterIdentity ?? null,
+        actual: selectedAdapters,
+      }]);
+    }
+  }
+
   // 2. Preview: the transaction restates exactly what it is about to do.
   order.push('preview');
 
   const preview = await previewActivation(request, dependencies);
+  const transactionId = activationTransactionIdentity({
+    repositoryIdentity: described.repository.identity,
+    configurationIdentity: described.configuration.identity,
+    adapterIdentity: selectedAdapters,
+    previewId: preview.previewId,
+  });
+
+  if (resume) {
+    if (resume.previewId !== preview.previewId) {
+      return fail('preview', 'resume-preview-mismatch', [{
+        expected: resume.previewId ?? null,
+        actual: preview.previewId,
+      }]);
+    }
+
+    if (resume.transactionId !== transactionId) {
+      return fail('preview', 'resume-transaction-mismatch', [{
+        expected: resume.transactionId ?? null,
+        actual: transactionId,
+      }]);
+    }
+  }
 
   // 3. Consent, bound to this repository and this preview. Consent is never
   //    implied by configuration, never reusable, and never for another clone.
@@ -456,6 +1003,21 @@ export const activate = async (request, dependencies = {}) => {
 
   const trust = await establishTrust({ client: request.client, repository: described.repository });
 
+  // The client may need the operator to answer a trust prompt first. That is a
+  // pause, not a refusal: the transaction states the identities it may be
+  // resumed against and leaves the clone exactly as it found it.
+  if (trust?.established !== true && trust?.pending === true) {
+    return suspend('trust', 'trust-pending', [{ reason: trust.reason ?? null }], {
+      transactionId,
+      previewId: preview.previewId,
+      repositoryIdentity: described.repository.identity,
+      configurationIdentity: described.configuration.identity,
+      adapterIdentity: selectedAdapters,
+      client: request.client?.id ?? null,
+      pausedAt: clock().toISOString(),
+    });
+  }
+
   if (!trust?.established) {
     return fail('trust', 'trust-not-established', [trust ?? null]);
   }
@@ -473,12 +1035,8 @@ export const activate = async (request, dependencies = {}) => {
   //    proceed at all. Nothing here rewrites, relocates, or takes over a hook.
   order.push('hook-chain-validation');
 
-  if (described.hooksPath.shared) {
-    return fail('hook-chain-validation', 'hooks-path-shared', [described.hooksPath]);
-  }
-
-  if (described.hooks[0].existing !== null) {
-    return fail('hook-chain-validation', 'hook-exists', [described.hooks[0].existing]);
+  if (described.hook.reasonCode !== null) {
+    return fail('hook-chain-validation', described.hook.reasonCode, described.hook.errors);
   }
 
   // 7. Self-test: the evaluation process and every selected adapter.
@@ -558,6 +1116,15 @@ export const activate = async (request, dependencies = {}) => {
       path: hook.path,
       ownership: hook.ownership,
     })),
+    // Which strategy the declared order selected, and what chain it composed
+    // with. `priorIdentity` is the pre-existing hook this activation promised to
+    // preserve; rollback and later drift checks compare against it.
+    hookChain: {
+      strategy: described.hook.strategy,
+      manager: described.hook.manager?.id ?? null,
+      path: described.hook.path,
+      priorIdentity: described.hook.priorIdentity,
+    },
     trust: {
       client: request.client?.id ?? null,
       established: true,
@@ -587,22 +1154,34 @@ export const activate = async (request, dependencies = {}) => {
 
   let registration = null;
 
+  // The strategy the declared order selected decides how Git is enabled: a
+  // composed block into a hook that already exists, or a whole owned file where
+  // there is none — never both, and never a replacement.
+  const composing = described.hook.strategy === 'marker-delimited-block';
+  const target = {
+    hook: AUTHORITATIVE_HOOK,
+    path: described.hook.path,
+    directory: described.hook.directory,
+    repositoryRoot: request.repository.root,
+    program: request.runtime?.hookProgram ?? null,
+    receipt,
+  };
+
   try {
-    registration = await registerHook({
-      hook: AUTHORITATIVE_HOOK,
-      path: described.hookPath,
-      directory: described.hooksDirectory,
-      repositoryRoot: request.repository.root,
-      program: request.runtime?.hookProgram ?? null,
-      receipt,
-    });
+    registration = composing
+      ? await composeHook({ ...target, existing: described.hook.existing })
+      : await registerHook(target);
   } catch (error) {
     return fail('git-enablement', 'hook-registration-failed', [{ message: error.message }]);
   }
 
   journal.push({
     name: 'git-enablement',
-    undo: () => unregisterHook({ path: described.hookPath, ...(registration ?? {}) }),
+    undo: () => (composing ? decomposeHook : unregisterHook)({
+      path: described.hook.path,
+      directory: described.hook.directory,
+      ...(registration ?? {}),
+    }),
   });
 
   const result = {
@@ -614,6 +1193,7 @@ export const activate = async (request, dependencies = {}) => {
     receipt,
     order,
     rollback: { performed: false, actions: [], failures: [] },
+    resumption: null,
   };
 
   // An activation nobody can audit is not an activation. If the transition
