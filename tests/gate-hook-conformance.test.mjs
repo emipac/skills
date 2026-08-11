@@ -12,6 +12,7 @@ import {
   HOOK_BLOCK_END,
   HOOK_STRATEGIES,
   activate,
+  hookBlockIdentity,
   previewActivation,
 } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
@@ -424,6 +425,10 @@ test('hook registration uses a native hook manager before any other strategy and
     manager: 'husky',
     path: path.join(root, '.husky', 'pre-commit'),
     priorIdentity: null,
+    // TB-012 pins the durable identity of the registration the gate wrote.
+    blockIdentity: hookBlockIdentity(
+      await readFile(path.join(root, '.husky', 'pre-commit'), 'utf8'),
+    ),
   });
 
   // The manager's generated runner and the clone's own hook directory are
@@ -511,6 +516,14 @@ test('a confirmed marker-delimited block preserves the prior hook and both the c
     manager: null,
     path: hookPath,
     priorIdentity: unconfirmed.hooks[0].existing.identity,
+    // TB-012 pins the durable identity of the gate-written block itself, hashed
+    // with its own receipt-id line elided so it can be computed before the
+    // receipt that names it exists.
+    blockIdentity: hookBlockIdentity(
+      (await readFile(hookPath, 'utf8')).match(
+        /^# >>> change-evaluation-gate managed block >>>[\s\S]*?^# <<< change-evaluation-gate managed block <<</m,
+      )[0],
+    ),
   });
 
   // The surrounding hook content is preserved byte for byte: removing the

@@ -1,6 +1,6 @@
 # TB-012 — Manage the active release and removal lifecycle
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -49,10 +49,10 @@ No automatic update, repair, removal, background cleanup, global uninstall, evid
 
 ## Acceptance Criteria
 
-- [ ] `AC-LIFE-004`: update failure preserves the prior release; adapter loss may be degraded, authoritative loss is broken, and neither status repairs.
-- [ ] `AC-LIFE-005`: deactivation and uninstall remove only unchanged Gate-owned state while preserving configuration, global assets, and Evidence.
-- [ ] `AC-LIFE-007`: ordinary distribution exposes a candidate only; explicit successful update advances the active release.
-- [ ] `AC-LIFE-010`: cleanup removes only previewed Gate keys and drift remains until confirmed repair or activation.
+- [x] `AC-LIFE-004`: update failure preserves the prior release; adapter loss may be degraded, authoritative loss is broken, and neither status repairs.
+- [x] `AC-LIFE-005`: deactivation and uninstall remove only unchanged Gate-owned state while preserving configuration, global assets, and Evidence.
+- [x] `AC-LIFE-007`: ordinary distribution exposes a candidate only; explicit successful update advances the active release.
+- [x] `AC-LIFE-010`: cleanup removes only previewed Gate keys and drift remains until confirmed repair or activation.
 
 ## Verification Matrix
 

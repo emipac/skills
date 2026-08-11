@@ -62,6 +62,25 @@ export const HOOK_STRATEGIES = Object.freeze([
 export const HOOK_BLOCK_BEGIN = '# >>> change-evaluation-gate managed block >>>';
 export const HOOK_BLOCK_END = '# <<< change-evaluation-gate managed block <<<';
 
+/** The line by which a gate-owned registration names the activation that wrote it. */
+export const HOOK_RECEIPT_PREFIX = '# activation-receipt: ';
+
+/**
+ * The stand-in for the receipt id inside a normalized registration.
+ *
+ * A gate-owned registration names the receipt that authorized it, and the
+ * receipt names the registration it authorized — a cycle no hash can close. It
+ * is broken by hashing the registration with exactly that one self-referential
+ * value replaced by a constant. What remains is a *receipt-independent* content
+ * identity: it can be computed before the receipt exists, pinned inside it, and
+ * recomputed from the file on disk at any later time.
+ *
+ * The elided value is not lost. It is the receipt's own `receiptId`, so a
+ * reader compares the literal line against the receipt it came from. The two
+ * checks together cover every byte of the registration with no circularity.
+ */
+export const HOOK_RECEIPT_PLACEHOLDER = '<activation-receipt>';
+
 /** The directory a Husky-managed clone keeps its project hooks in. */
 const MANAGED_HOOK_DIRECTORY = '.husky';
 
@@ -213,7 +232,7 @@ const quotedProgram = ({ program, repositoryRoot }) => {
 const shimContents = ({ hook, program, receipt }) => [
   '#!/bin/sh',
   `# change-evaluation-gate: owned ${hook} shim. Managed by the Gate; do not edit.`,
-  `# activation-receipt: ${receipt.receiptId}`,
+  `${HOOK_RECEIPT_PREFIX}${receipt.receiptId}`,
   `exec ${quotedProgram({ program })} "$@"`,
   '',
 ].join('\n');
@@ -229,7 +248,7 @@ const shimContents = ({ hook, program, receipt }) => [
 const managedBlockContents = ({ program, receipt, repositoryRoot }) => [
   HOOK_BLOCK_BEGIN,
   '# Managed by the Gate; do not edit inside these markers.',
-  `# activation-receipt: ${receipt.receiptId}`,
+  `${HOOK_RECEIPT_PREFIX}${receipt.receiptId}`,
   `${quotedProgram({ program, repositoryRoot })} "$@" || exit $?`,
   HOOK_BLOCK_END,
 ].join('\n');
@@ -262,6 +281,109 @@ const managedBlockIn = (contents) => {
     block: contents.slice(begin, end + HOOK_BLOCK_END.length),
     begin,
     end,
+  };
+};
+
+/**
+ * Rewrite the one self-referential line so a registration can be hashed.
+ *
+ * Everything else is preserved byte for byte, so any edit anywhere else in the
+ * registration changes the resulting identity.
+ */
+export const normalizeHookRegistration = (contents) => (contents ?? '')
+  .split('\n')
+  .map((line) => (line.startsWith(HOOK_RECEIPT_PREFIX)
+    ? `${HOOK_RECEIPT_PREFIX}${HOOK_RECEIPT_PLACEHOLDER}`
+    : line))
+  .join('\n');
+
+/**
+ * The durable, receipt-independent content identity of a gate-owned
+ * registration (FR-LIFE-009, FR-LIFE-019).
+ */
+export const hookBlockIdentity = (contents) => contentIdentity(
+  normalizeHookRegistration(contents),
+);
+
+/** The receipt id a gate-owned registration names, if it still names one. */
+export const hookRegistrationReceiptId = (contents) => {
+  const line = (contents ?? '')
+    .split('\n')
+    .find((candidate) => candidate.startsWith(HOOK_RECEIPT_PREFIX));
+
+  return line === undefined ? null : line.slice(HOOK_RECEIPT_PREFIX.length).trim();
+};
+
+/**
+ * The exact bytes a given strategy would register, with the receipt id elided.
+ *
+ * This is what makes the identity pinnable: the contents depend only on the
+ * strategy, the pinned hook program, and the clone root — never on the receipt
+ * that is about to name them — so the receipt can carry the identity of the
+ * registration it authorizes.
+ */
+export const plannedHookRegistration = ({ strategy, hook, program, repositoryRoot }) => {
+  const receipt = { receiptId: HOOK_RECEIPT_PLACEHOLDER };
+
+  if (strategy === 'marker-delimited-block') {
+    return managedBlockContents({ program, receipt, repositoryRoot });
+  }
+
+  return shimContents({
+    hook,
+    program: { ...program, script: path.resolve(repositoryRoot, program.script) },
+    receipt,
+  });
+};
+
+/**
+ * Read back a gate-owned registration from disk, without judging it.
+ *
+ * A composed block is exactly the delimited region; an owned shim is the whole
+ * file, because the gate wrote all of it. The caller compares what is returned
+ * against what its receipt pinned; nothing here repairs, rewrites, or removes.
+ */
+export const readHookRegistration = async (hookPath, ownership = 'gate-owned-shim') => {
+  const contents = await readFile(hookPath, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  });
+
+  if (contents === null) {
+    return { present: false, region: null, blockIdentity: null, receiptId: null, wellFormed: true };
+  }
+
+  if (ownership !== 'marker-delimited-block') {
+    return {
+      present: true,
+      region: contents,
+      blockIdentity: hookBlockIdentity(contents),
+      receiptId: hookRegistrationReceiptId(contents),
+      wellFormed: true,
+    };
+  }
+
+  const found = managedBlockIn(contents);
+
+  if (!found.present || !found.wellFormed) {
+    return {
+      present: found.present,
+      region: null,
+      blockIdentity: null,
+      receiptId: null,
+      wellFormed: found.wellFormed,
+    };
+  }
+
+  return {
+    present: true,
+    region: found.block,
+    blockIdentity: hookBlockIdentity(found.block),
+    receiptId: hookRegistrationReceiptId(found.block),
+    wellFormed: true,
   };
 };
 
@@ -445,6 +567,205 @@ export const removeManagedBlock = async ({
   });
 
   return { removed: true, reason: null };
+};
+
+/**
+ * Withdraw a gate-owned registration using only what a receipt durably pins.
+ *
+ * Rollback inside a transaction can bind to its in-flight journal. Removal
+ * cannot: `gate deactivate` runs in a later process, possibly on a later day,
+ * and has nothing but the published receipt. It therefore proves ownership from
+ * the durable identities instead — the registration's own content identity and
+ * the receipt id it names — and, for a composed block, that removing it really
+ * does reproduce the chain the activation promised to preserve.
+ *
+ * Every mismatch is reported, never repaired and never forced. `dryRun` answers
+ * the same question without touching the file, so a caller can prove every
+ * registration is safe to remove before it removes the first one (FR-LIFE-010,
+ * SG-HOOK-001, SG-LIFE-001).
+ */
+export const withdrawHookRegistration = async ({
+  path: hookPath,
+  directory = null,
+  ownership = 'gate-owned-shim',
+  blockIdentity = null,
+  receiptId = null,
+  priorIdentity = null,
+  dryRun = false,
+}) => {
+  const refuse = (reason) => ({ removable: false, removed: false, reason });
+
+  if (blockIdentity === null) {
+    // Nothing pinned the registration, so nothing can prove the gate wrote it.
+    return refuse('unknown-registration');
+  }
+
+  const contents = await readFile(hookPath, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  });
+
+  if (contents === null) {
+    return refuse('already-absent');
+  }
+
+  const registration = await readHookRegistration(hookPath, ownership);
+
+  if (!registration.present) {
+    return refuse('registration-absent');
+  }
+
+  if (!registration.wellFormed) {
+    return refuse('registration-malformed');
+  }
+
+  if (registration.blockIdentity !== blockIdentity) {
+    return refuse('registration-drifted');
+  }
+
+  if (receiptId !== null && registration.receiptId !== receiptId) {
+    return refuse('receipt-mismatch');
+  }
+
+  const composed = ownership === 'marker-delimited-block';
+  let restored = null;
+
+  if (composed) {
+    const found = managedBlockIn(contents);
+
+    restored = contents.slice(0, found.begin)
+      + contents.slice(found.end + HOOK_BLOCK_END.length + 1);
+
+    if (priorIdentity !== null && contentIdentity(restored) !== priorIdentity) {
+      // Removing the block would not give back the hook that was there. The
+      // surrounding chain is somebody else's, so it stays exactly as it is.
+      return refuse('chain-not-restorable');
+    }
+  }
+
+  if (dryRun) {
+    return { removable: true, removed: false, reason: null };
+  }
+
+  if (composed) {
+    await publishHook({
+      path: hookPath,
+      directory: directory ?? path.dirname(hookPath),
+      contents: restored,
+      mode: (await stat(hookPath)).mode & 0o777,
+    });
+  } else {
+    await rm(hookPath, { force: true });
+  }
+
+  return { removable: true, removed: true, reason: null };
+};
+
+/**
+ * Restore a gate-owned registration to exactly what the receipt authorizes.
+ *
+ * This is the *only* write that recovers from drift, and it is reached only by
+ * an explicit, confirmed `gate repair` — never by status and never by an
+ * ordinary update (FR-LIFE-019).
+ *
+ * It refuses unless the registration it is about to write reproduces the
+ * durable identity the receipt pinned, and — for a composed block — unless the
+ * surrounding chain is still the chain the activation promised to preserve. A
+ * repair that would take over somebody else's hook is not a repair
+ * (SG-HOOK-001, SG-LIFE-001).
+ */
+export const restoreHookRegistration = async ({
+  path: hookPath,
+  directory = null,
+  hook = AUTHORITATIVE_HOOK,
+  ownership = 'gate-owned-shim',
+  program = null,
+  repositoryRoot = null,
+  receiptId = null,
+  blockIdentity = null,
+  priorIdentity = null,
+  dryRun = false,
+}) => {
+  const refuse = (reason) => ({ restorable: false, restored: false, reason });
+
+  if (blockIdentity === null || receiptId === null) {
+    return refuse('unknown-registration');
+  }
+
+  let planned = null;
+
+  try {
+    planned = plannedHookRegistration({ strategy: ownership, hook, program, repositoryRoot });
+  } catch (error) {
+    return refuse('program-unquotable');
+  }
+
+  // The registration this repair would write must be the registration the
+  // receipt authorized. Anything else is a new activation, not a repair.
+  if (hookBlockIdentity(planned) !== blockIdentity) {
+    return refuse('registration-not-reproducible');
+  }
+
+  const authorized = planned.split(HOOK_RECEIPT_PLACEHOLDER).join(receiptId);
+  const composed = ownership === 'marker-delimited-block';
+  const contents = await readFile(hookPath, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  });
+
+  if (!composed) {
+    if (dryRun) {
+      return { restorable: true, restored: false, reason: null };
+    }
+
+    await publishHook({
+      path: hookPath,
+      directory: directory ?? path.dirname(hookPath),
+      contents: authorized,
+      mode: 0o755,
+    });
+
+    return { restorable: true, restored: true, reason: null };
+  }
+
+  if (contents === null) {
+    // There is no chain left to compose into, and inventing one would create a
+    // hook this repair cannot claim to have preserved.
+    return refuse('chain-absent');
+  }
+
+  const found = managedBlockIn(contents);
+
+  if (found.present && !found.wellFormed) {
+    return refuse('registration-malformed');
+  }
+
+  const chain = found.present
+    ? contents.slice(0, found.begin) + contents.slice(found.end + HOOK_BLOCK_END.length + 1)
+    : contents;
+
+  if (priorIdentity !== null && contentIdentity(chain) !== priorIdentity) {
+    return refuse('chain-not-restorable');
+  }
+
+  if (dryRun) {
+    return { restorable: true, restored: false, reason: null };
+  }
+
+  await publishHook({
+    path: hookPath,
+    directory: directory ?? path.dirname(hookPath),
+    contents: composeManagedBlock(chain, authorized),
+    mode: (await stat(hookPath)).mode & 0o777,
+  });
+
+  return { restorable: true, restored: true, reason: null };
 };
 
 const samePath = async (left, right) => {
@@ -1089,6 +1410,23 @@ export const activate = async (request, dependencies = {}) => {
   // 8. Receipt: everything the activation is pinned to, published atomically.
   order.push('receipt');
 
+  // The exact registration this transaction is about to write, with its own
+  // receipt-id line elided so its identity can be pinned by the receipt that
+  // will name it. A program the gate cannot safely quote has no plannable
+  // registration; `git-enablement` refuses it a moment later, on its own terms.
+  let plannedRegistration = null;
+
+  try {
+    plannedRegistration = plannedHookRegistration({
+      strategy: described.hook.strategy,
+      hook: AUTHORITATIVE_HOOK,
+      program: request.runtime?.hookProgram ?? null,
+      repositoryRoot: request.repository.root,
+    });
+  } catch {
+    plannedRegistration = null;
+  }
+
   const body = {
     receiptVersion: ACTIVATION_RECEIPT_VERSION,
     activatedAt: clock().toISOString(),
@@ -1119,11 +1457,18 @@ export const activate = async (request, dependencies = {}) => {
     // Which strategy the declared order selected, and what chain it composed
     // with. `priorIdentity` is the pre-existing hook this activation promised to
     // preserve; rollback and later drift checks compare against it.
+    //
+    // `blockIdentity` is the durable identity of the gate-owned registration
+    // itself, hashed with its own receipt-id line elided so it can be computed
+    // here — before the receipt that will name it exists — and recomputed from
+    // disk at any later time. It is what lets `gate status` and `gate repair`
+    // detect tampering without depending on an in-flight journal.
     hookChain: {
       strategy: described.hook.strategy,
       manager: described.hook.manager?.id ?? null,
       path: described.hook.path,
       priorIdentity: described.hook.priorIdentity,
+      blockIdentity: plannedRegistration === null ? null : hookBlockIdentity(plannedRegistration),
     },
     trust: {
       client: request.client?.id ?? null,

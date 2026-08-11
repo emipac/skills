@@ -85,6 +85,15 @@ and enables authoritative Git last. Configuring policy never starts it, and a
 failed transaction leaves the clone configured with no receipt and no
 registration.
 
+Everything that happens to a clone *after* it is activated — taking a candidate
+release through an explicit atomic `gate update`, observing health without
+repairing anything, recovering drift through a confirmed `gate repair`, and
+deactivating, uninstalling, or cleaning up configuration without removing shared
+state or historical Evidence — belongs to the
+[lifecycle command contract](references/lifecycle-command-contract.md). Never
+update, repair, remove, or clean up implicitly, and never mutate anything while
+merely reporting status.
+
 Report the repository as `configured`, never `activated`, and name activation
 as a separate future action.
 

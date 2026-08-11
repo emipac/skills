@@ -1,7 +1,7 @@
-# Handoff — Change Evaluation Gate, resume at TB-012
+# Handoff — Change Evaluation Gate, resume at TB-013
 
-> **Updated 2026-08-11 (fifth pass).** TB-008 … TB-011 are now DONE and
-> verified. The resume point is **TB-012**. The filename still says TB-008
+> **Updated 2026-08-11 (sixth pass).** TB-008 … TB-012 are now DONE and
+> verified. The resume point is **TB-013**. The filename still says TB-008
 > for link stability; trust this heading and the state table below.
 
 Written 2026-08-10 by the orchestrating Tech Lead session. Read this before
@@ -15,15 +15,15 @@ killed mid-run (its work had already landed, verified after the fact). Work was
 stopped at a clean ticket boundary rather than risking a half-written slice.
 Nothing is in a partial state.
 
-## State: 11 of 15 tickets done
+## State: 12 of 15 tickets done
 
 | Done | Open |
 | --- | --- |
-| TB-001 … TB-011 | TB-012 … TB-015 |
+| TB-001 … TB-012 | TB-013 … TB-015 |
 
-**TB-001 … TB-010 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
-(`07574ef` = TB-002…TB-008, `371609b` = TB-009, `eb01d11` = TB-010; not pushed).
-**TB-011 is uncommitted** working-tree work.
+**TB-001 … TB-011 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
+(`07574ef` = TB-002…TB-008, `371609b` = TB-009, `eb01d11` = TB-010,
+`cfe36c3` = TB-011; not pushed). **TB-012 is uncommitted** working-tree work.
 
 Ticket status lines in `.scratch/change-evaluation-gate/issues/` are accurate —
 trust them. TB-001 is committed (`247247d`); **TB-002 … TB-007 are uncommitted
@@ -37,14 +37,15 @@ directly by the Tech Lead, not taken from agent self-reports:
 
 | Gate | Result |
 | --- | --- |
-| `npm run test:unit` | **200 pass, 0 fail** (session baseline was 92) |
-| `npm run validate` | OK — 29 released skills, 192 Markdown files |
+| `npm run test:unit` | **213 pass, 0 fail** (session baseline was 92) |
+| `npm run validate` | OK — 29 released skills, 195 Markdown files |
 | `npm run test:install` | OK — 12 skills across 5 clients |
 | `npm run gate-runtime-binding-smoke` | exit 0 (added by TB-006) |
 | `npm run gate-fix-smoke` | exit 0 (added by TB-007) |
 | `npm run gate-evidence-prune-smoke` | exit 0 (added by TB-008) |
 | `npm run gate-activation-smoke` | exit 0 (added by TB-010) |
 | `npm run gate-hook-conformance-smoke` | exit 0 (added by TB-011) |
+| `npm run gate-lifecycle-smoke` | exit 0 (added by TB-012) |
 
 If any of these is red before you change anything, stop and investigate — it
 means something drifted after this handoff was written.
@@ -59,8 +60,8 @@ TB-005/006/008 ─> TB-014 ─────────────────�
 ```
 
 Concrete sequence: ~~TB-008~~ → ~~TB-009~~ → ~~TB-010~~ → ~~TB-011~~ →
-**TB-012** → TB-013 → TB-014 → TB-015. **TB-012 is the correct next ticket.**
-TB-012 and TB-013 are the only genuinely parallel pair, but they share
+~~TB-012~~ → **TB-013** → TB-014 → TB-015. **TB-013 is the correct next
+ticket.** Only TB-013, TB-014 and TB-015 remain; they share
 `skills/change-evaluation-gate/` and `tests/`, so this session ran everything
 sequentially to avoid write collisions. Recommend keeping that.
 
@@ -172,11 +173,16 @@ not create a parallel decision shape:
   ordered strategy (native manager → confirmed marker block → owned shim) and
   pause/resume identity binding now live in `activation.mjs`. Strategy is
   carried on `ownership`; the prior chain is recorded in `receipt.hookChain`.
-- **Known gap TB-012 should close:** `receipt.hookChain` records the *prior*
-  chain identity but NOT the gate-written block's own content identity — the
-  block embeds the receipt id, so it cannot be hashed into the receipt that
-  names it. Rollback currently binds via the in-flight journal. A durable
-  content identity for the written block belongs with `gate status`/`repair`.
+- ~~Known gap: no durable identity for the gate-written hook block~~ →
+  **CLOSED by TB-012.** The circular hash (block names the receipt, receipt must
+  name the block) is broken by hashing the block with that one self-referential
+  line replaced by `HOOK_RECEIPT_PLACEHOLDER`, pinned as
+  `receipt.hookChain.blockIdentity` and computable *before* the receipt exists.
+  The elided value is checked literally against `receiptId`. Together the two
+  checks cover every byte: tampering inside the block →`hook-block-tampered`;
+  a registration from a superseded activation → `hook-receipt-mismatch`.
+- ~~Operator-facing `gate prune` and lock inspection commands~~ → **DONE in
+  TB-012**, alongside `update`/`status`/`repair`/`deactivate`/`uninstall`/`cleanup`.
 - **`git-enablement` must stay LAST in `ACTIVATION_STEPS`** (frozen array in
   `activation.mjs`). FR-LIFE-004 requires it; verified by the Tech Lead.
 - No user-facing `gate prune` operator command exists. TB-008 built the library
