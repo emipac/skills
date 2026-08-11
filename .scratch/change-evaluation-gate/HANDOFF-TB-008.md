@@ -1,8 +1,9 @@
-# Handoff — Change Evaluation Gate, resume at TB-013
+# Handoff — Change Evaluation Gate, resume at TB-014
 
-> **Updated 2026-08-11 (sixth pass).** TB-008 … TB-012 are now DONE and
-> verified. The resume point is **TB-013**. The filename still says TB-008
-> for link stability; trust this heading and the state table below.
+> **Updated 2026-08-11 (seventh pass).** TB-008 … TB-013 are now DONE and
+> verified. The resume point is **TB-014**, then TB-015 closes the feature.
+> The filename still says TB-008 for link stability; trust this heading and
+> the state table below.
 
 Written 2026-08-10 by the orchestrating Tech Lead session. Read this before
 touching the Gate. It records only what is NOT already in the tickets, the SRS,
@@ -15,15 +16,16 @@ killed mid-run (its work had already landed, verified after the fact). Work was
 stopped at a clean ticket boundary rather than risking a half-written slice.
 Nothing is in a partial state.
 
-## State: 12 of 15 tickets done
+## State: 13 of 15 tickets done
 
 | Done | Open |
 | --- | --- |
-| TB-001 … TB-012 | TB-013 … TB-015 |
+| TB-001 … TB-013 | TB-014, TB-015 |
 
-**TB-001 … TB-011 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
+**TB-001 … TB-012 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
 (`07574ef` = TB-002…TB-008, `371609b` = TB-009, `eb01d11` = TB-010,
-`cfe36c3` = TB-011; not pushed). **TB-012 is uncommitted** working-tree work.
+`cfe36c3` = TB-011, `e0bbe45` = TB-012; not pushed). **TB-013 is uncommitted**
+working-tree work.
 
 Ticket status lines in `.scratch/change-evaluation-gate/issues/` are accurate —
 trust them. TB-001 is committed (`247247d`); **TB-002 … TB-007 are uncommitted
@@ -37,8 +39,8 @@ directly by the Tech Lead, not taken from agent self-reports:
 
 | Gate | Result |
 | --- | --- |
-| `npm run test:unit` | **213 pass, 0 fail** (session baseline was 92) |
-| `npm run validate` | OK — 29 released skills, 195 Markdown files |
+| `npm run test:unit` | **221 pass, 0 fail** (session baseline was 92) |
+| `npm run validate` | OK — 29 released skills, 198 Markdown files |
 | `npm run test:install` | OK — 12 skills across 5 clients |
 | `npm run gate-runtime-binding-smoke` | exit 0 (added by TB-006) |
 | `npm run gate-fix-smoke` | exit 0 (added by TB-007) |
@@ -46,6 +48,7 @@ directly by the Tech Lead, not taken from agent self-reports:
 | `npm run gate-activation-smoke` | exit 0 (added by TB-010) |
 | `npm run gate-hook-conformance-smoke` | exit 0 (added by TB-011) |
 | `npm run gate-lifecycle-smoke` | exit 0 (added by TB-012) |
+| `npm run gate-adapter-conformance` | exit 0 (added by TB-013) |
 
 If any of these is red before you change anything, stop and investigate — it
 means something drifted after this handoff was written.
@@ -146,6 +149,8 @@ Remaining capabilities to create: `gate-evidence-prune-smoke` (TB-008),
 | `evidence-store.mjs`, `evidence-bounds.mjs`, `redaction.mjs`, `lifecycle-event.mjs` | TB-008 | Append-only content-addressed store under the Git common dir, v1 ceilings, redaction, 11 Lifecycle event types, durable bypass ledger |
 | `coordination.mjs` | TB-009 | Per-Git-common-directory lock, identical in-flight sharing, role-specific decisions, Git queue priority, subscriber-local cancellation, audited stale recovery |
 | `activation.mjs` | TB-010, TB-011 | Previewed, consent-bound Activation transaction with LIFO rollback; `ACTIVATION_STEPS` ends at `git-enablement` so Git is enabled last; pinned receipt at `<store-root>/activation/receipt.json`. TB-011 added ordered hook composition (native manager → confirmed marker block → owned shim), non-interactive identity rejection, and trust pause/resume identity binding |
+| `lifecycle.mjs` | TB-012 | `update`/`status`/`repair`/`deactivate`/`uninstall`/`cleanup` plus operator `prune` and lock inspection; candidate-vs-active release, read-only health, conservative removal, `receipt.hookChain.blockIdentity` |
+| `adapters.mjs` | TB-013 | Git + three desktop preflight adapters, eight declared capability categories, trigger normalization, support tiers, shared compatibility baseline. Added WITHOUT modifying any existing lib file |
 
 The Evidence ladder stage order is exported from
 `skills/verify-change/scripts/verification-plan.mjs` as `evidenceLadderStages`.
@@ -237,7 +242,16 @@ not create a parallel decision shape:
    Whether TB-015 performs the bump or leaves it to a release step is
    **unresolved** — decide with the user.
 2. **Durable store for the one-shot bypass ledger** (see above).
-3. **TB-015 scope reality check.** Its matrix demands a runtime portability
+3. **TB-013's native event mappings are UNVERIFIED against real clients.**
+   The adapter native event names and identity field paths (e.g.
+   `code-tab.turn-completed`, `workspace.path`) are declared v1 mappings driven
+   by injected payloads — no real Claude Code Desktop, Codex Desktop, or Cursor
+   was ever launched or probed, by design (the suite must pass on a clean
+   machine). Under `Q-004` that is legitimate: untested versions stay
+   `unverified` rather than denied. **But TB-015 must not silently promote
+   these to "supported" without real-client evidence.** This is the single
+   biggest honesty risk left in the feature.
+4. **TB-015 scope reality check.** Its matrix demands a runtime portability
    matrix across "every claimed environment" (exact Git, Node, client, OS
    versions). A single local machine cannot produce multi-OS evidence. Expect to
    either narrow the support claims to what is actually testable here, or record

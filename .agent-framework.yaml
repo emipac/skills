@@ -26,6 +26,7 @@ verification:
     - gate-activation-smoke
     - gate-hook-conformance-smoke
     - gate-lifecycle-smoke
+    - gate-adapter-conformance
   commands:
     format:
       backend: []

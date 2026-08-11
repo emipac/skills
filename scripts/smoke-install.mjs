@@ -58,6 +58,11 @@ try {
     '.agent-framework.yaml',
     '.git/hooks/pre-commit',
     '.git/ai-skills-framework/gate.json',
+    // Adapters are self-tested and registered by the Activation transaction,
+    // which pins this receipt. Installing the plugin must never create it:
+    // an installed adapter is a dormant asset, not a registered integration
+    // (SG-DIST-001, FR-ADAPT-002).
+    '.git/change-evaluation-gate/evidence/activation/receipt.json',
   ]) {
     try {
       await access(path.join(temporaryRoot, dormantPath));
@@ -276,6 +281,37 @@ try {
     ) {
       throw new Error(`${agent}: dormant Change Evaluation Gate was not installed correctly`);
     }
+
+    // The three supported desktop preflight surfaces ship with the plugin and
+    // are documented as dormant until an explicit Activation registers them.
+    if (
+      !installedGate.includes('Supported preflight adapters')
+      || !installedGate.includes('Installing an adapter never registers it')
+    ) {
+      throw new Error(`${agent}: installed Gate does not document its dormant preflight adapters`);
+    }
+
+    const installedAdapters = await readFile(
+      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters.mjs'),
+      'utf8',
+    );
+
+    for (const surface of ['claude-code-desktop', 'codex-desktop', 'cursor']) {
+      if (!installedAdapters.includes(surface)) {
+        throw new Error(`${agent}: the installed adapter library is missing the ${surface} surface`);
+      }
+    }
+
+    await readFile(
+      path.join(
+        temporaryRoot,
+        installedRoot,
+        'change-evaluation-gate',
+        'references',
+        'adapter-conformance-contract.md',
+      ),
+      'utf8',
+    );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {
       throw new Error(`${agent}: framework-router was not installed correctly`);

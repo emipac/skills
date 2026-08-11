@@ -1,6 +1,6 @@
 # TB-013 — Deliver supported desktop preflight adapters
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -51,8 +51,8 @@ No client-specific policy, native payload leakage into core, support claim for r
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-001`: the same decision blocks Git on deny while desktop adapters normalize triggers and present structured `not-authoritative` feedback.
-- [ ] `AC-ADAPT-002`: every named desktop target passes the shared baseline; defined failures are `unverified`; unsupported contexts cannot claim support; exact versions and outcomes are recorded.
+- [x] `AC-ADAPT-001`: the same decision blocks Git on deny while desktop adapters normalize triggers and present structured `not-authoritative` feedback.
+- [x] `AC-ADAPT-002`: every named desktop target passes the shared baseline; defined failures are `unverified`; unsupported contexts cannot claim support; exact versions and outcomes are recorded.
 
 ## Verification Matrix
 

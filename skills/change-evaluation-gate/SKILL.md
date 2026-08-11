@@ -97,5 +97,26 @@ merely reporting status.
 Report the repository as `configured`, never `activated`, and name activation
 as a separate future action.
 
+## Supported preflight adapters
+
+The Gate ships one authoritative integration and three supported v1 preflight
+surfaces: local Git `pre-commit`, Claude Code Desktop's local Code tab, Codex
+Desktop with a local project, and Cursor IDE's local Agent. Which native events
+each surface normalizes, what each declares about its own event, blocking,
+trust, repository, session, filesystem, Git, and invocation capabilities, how
+every trust, invocation, timeout, capability, and malformed-output failure
+becomes `unverified`, and what a surface must prove before it may be called
+supported are defined by the
+[adapter conformance contract](references/adapter-conformance-contract.md).
+
+Only authoritative Git authorizes a change. A desktop surface presents the same
+decision as structured `not-authoritative` preflight feedback and blocks
+nothing, and lacking native blocking never disqualifies it. CLI, SSH, remote,
+cloud, and background-agent variants are experimental; chat-only or hosted
+surfaces without repository, process, and Git access are unsupported.
+
+Installing an adapter never registers it. Adapters are dormant assets until the
+Activation transaction self-tests and registers them.
+
 Completion criterion: repository policy may be configured, but the clone has
 no Gate-owned operational state and commit behavior is unchanged.
