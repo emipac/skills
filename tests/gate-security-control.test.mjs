@@ -693,19 +693,42 @@ const FORBIDDEN_CLAIMS = Object.freeze([
   'hostile code containment',
 ]);
 
-/** A claim is acceptable only where the same line denies it. */
-const NEGATORS = Object.freeze([
+/**
+ * A claim is acceptable only where the same line denies it.
+ *
+ * These match as whole words. Substring matching would let an ordinary word
+ * that merely contains a negator — "another", "note", "nothing" — suppress a
+ * real claim, so `Another sandbox protects the runtime` would pass unnoticed.
+ */
+const NEGATOR_WORDS = Object.freeze([
   'not',
   'never',
-  'no ',
+  'no',
+  'nothing',
+  'none',
   'neither',
-  'nor ',
-  "n't",
+  'nor',
   'false',
   'rather than',
   'without',
   'cannot',
 ]);
+
+/**
+ * Contraction suffixes, matched as substrings on purpose: `n't` is bounded by
+ * its own apostrophe and must still be found inside "doesn't".
+ */
+const NEGATOR_SUFFIXES = Object.freeze(["n't"]);
+
+const escapeForRegExp = (value) => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+const NEGATOR_PATTERNS = Object.freeze(
+  NEGATOR_WORDS.map((word) => new RegExp(`\\b${escapeForRegExp(word)}\\b`)),
+);
+
+/** True when the line denies the claim it contains. */
+const denies = (line) => NEGATOR_PATTERNS.some((pattern) => pattern.test(line))
+  || NEGATOR_SUFFIXES.some((suffix) => line.includes(suffix));
 
 const gateSourceFiles = async (root) => {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -745,7 +768,7 @@ test('the trust boundary is stated honestly and nothing claims resistance', asyn
       const lowered = line.toLowerCase();
       const claimed = FORBIDDEN_CLAIMS.filter((claim) => lowered.includes(claim));
 
-      if (claimed.length === 0 || NEGATORS.some((negator) => lowered.includes(negator))) {
+      if (claimed.length === 0 || denies(lowered)) {
         return;
       }
 
