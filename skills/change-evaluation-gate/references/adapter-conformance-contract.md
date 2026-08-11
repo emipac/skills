@@ -1,6 +1,6 @@
 # Adapter conformance contract
 
-How the authoritative Git integration and the three supported v1 desktop
+How the authoritative Git integration and the three declared v1 desktop
 preflight surfaces consume one decision, what each of them must declare about
 itself, and what has to be proved before any of them may be called *supported*.
 
@@ -68,26 +68,91 @@ assumed contract.
 | Adapter | Surface | `work-complete` | `commit-attempt` |
 | --- | --- | --- | --- |
 | `git` | `git-pre-commit` | — | `pre-commit` |
-| `claude-code-desktop` | local Code tab | `code-tab.turn-completed` | `code-tab.before-commit` |
-| `codex-desktop` | local project | `project.task-finished` | *(surface provides none)* |
-| `cursor` | local Agent | `agent.run-finished` | `agent.before-commit` |
+| `claude-code-desktop` | local Code tab | `Stop` | *(no such client event)* |
+| `codex-desktop` | local project | `Stop` | *(no such client event)* |
+| `cursor` | local Agent | `stop` | *(unverified — see below)* |
 
-`work-complete` is mandatory for a desktop surface. The `before-commit-attempt`
-mapping is used where the surface provides one and is otherwise simply absent.
+`work-complete` is mandatory for a desktop surface. No desktop surface declares
+a `commit-attempt` mapping: none of them emits a deterministic before-commit
+event, and deriving one would be a guessed trigger.
 
-These native event identifiers and the native identity field paths beside them
-are the *declared* v1 mapping. They are release-qualified per client version:
-an untested client version has no verified support claim until the baseline
-passes against it (`Q-004`).
+**Event-name casing is per client.** Claude Code and Codex send `Stop`; Cursor
+sends `stop`. Trigger matching is exact-string, deliberately: a
+case-insensitive compare would erase a real distinction between two clients and
+let one adapter accept another's event.
+
+### Unverified triggers
+
+A trigger that is *unobserved* is not the same as one that is *known absent*,
+so each adapter records which it has in `unverifiedTriggers`:
+
+| Adapter | `unverifiedTriggers` | Why |
+| --- | --- | --- |
+| `git` | *(none)* | the hook contract is specified |
+| `claude-code-desktop` | *(none)* | the client's event set is enumerated and holds no before-commit event |
+| `codex-desktop` | *(none)* | the surface exposes no deterministic pre-commit event |
+| `cursor` | `commit-attempt` | never observed, never disproven |
+
+An unverified trigger is recorded and never claimed. It is absent from
+`nativeEvents` and from `capabilities.event.normalizedTriggers`, so nothing can
+normalize to it, while the open question stays visible to release
+qualification instead of being silently deleted (`Q-004`).
+
+These native event identifiers and the native identity fields beside them are
+the *declared* v1 mapping. They are release-qualified per client version: an
+untested client version has no verified support claim until the baseline passes
+against it (`Q-004`).
 
 ## 5. The native boundary
 
-`normalizeNativeInvocation` reads exactly three values out of a native payload —
-the native event, the repository root, and the client's session identity —
-through that adapter's own declared dotted field paths. Nothing else is ever
-copied, so nothing else has a way past the boundary. A payload whose declared
-paths do not resolve belongs to some other client and is reported as a
-capability failure rather than guessed at.
+`normalizeNativeInvocation` reads at most four values out of a native payload —
+the native event, the repository-root candidate, the client's session identity,
+and, where the client self-reports it, its exact version — through that
+adapter's own declared fields. Nothing else is ever copied, so nothing else has
+a way past the boundary. A payload whose declared fields do not resolve belongs
+to some other client and is reported as a capability failure rather than guessed
+at.
+
+| Adapter | event | session | repository root | client version |
+| --- | --- | --- | --- | --- |
+| `git` | `hook` | `commitProcessId` | `repositoryRoot` (`path`, `declared-root`) | — |
+| `claude-code-desktop` | `hook_event_name` | `session_id` | `cwd` (`path`, `resolve-upward`) | — |
+| `codex-desktop` | `hook_event_name` | `session_id` | `cwd` (`path`, `resolve-upward`) | — |
+| `cursor` | `hook_event_name` | `session_id` | `workspace_roots` (`path-array`, `resolve-upward`) | `cursor_version` |
+
+Three declarations, not one shared mapping. Today's convergence on
+`hook_event_name` and `session_id` is an observation, not a guarantee, and
+`FR-ADAPT-004` requires each adapter to own its contract so one client's change
+cannot silently redefine another's. Cursor already diverges on event casing,
+field name, and field shape.
+
+Client-native payloads carry conversation content and personal data —
+`last_assistant_message`, `transcript_path`, `user_email`. That is exactly why
+this boundary copies a fixed, tiny set of values and nothing else
+(`SG-SECRET-001`). Any fixture derived from a real capture must use synthetic
+values with the real shape; real captured values never enter this repository.
+
+### The repository root is resolved, never assumed
+
+The path a client sends is a *candidate*, not a repository root. The same field
+has been observed carrying a repository root under one client and a directory
+that is not one under another, so each adapter declares its own rule:
+
+- `shape: 'path'` — one path value.
+- `shape: 'path-array'` — an array of workspace roots. Exactly one element
+  yields a candidate; zero or several yield none, because a multi-root
+  workspace has no single repository root and selecting an element would be a
+  guess.
+- `resolution: 'resolve-upward'` — walk up from the candidate to the first real
+  repository root. When no repository contains it, the answer is `unverified`;
+  it never falls back to the candidate.
+- `resolution: 'declared-root'` — the value already is a repository root. Only
+  authoritative Git declares this, because Git's own contract guarantees it.
+
+Resolution only walks *upward*. A client whose path sits above the repository —
+observed in the wild — therefore resolves to nothing and reports `unverified`,
+which is correct: choosing among the subdirectories below it would be a guess,
+and the surface genuinely does not know which repository the user meant.
 
 The request that reaches gate core is exactly the process contract's shape.
 `validateEvaluationRequest` rejects unknown fields, so a leak would be refused
@@ -126,9 +191,21 @@ real Git. None of them is inferred from the declaration.
 - `parallel-session-isolation`
 - `declared-native-blocking`
 
-Each run records its per-check outcome and the exact Gate, Git, Node.js,
-client, and operating-system versions it was observed under. Those versions are
-an evidence snapshot, never a permanent runtime allowlist.
+Each surface is driven through the field names *and the field shapes* its own
+declaration states, so a fixture cannot pass by being written in the Gate's
+preferred shape rather than the client's.
+
+Each run records its per-check outcome, the exact Gate, Git, Node.js, client,
+and operating-system versions it was observed under, and **how it was driven**.
+Those versions are an evidence snapshot, never a permanent runtime allowlist.
+
+| `evidence.payloadSource` | Means |
+| --- | --- |
+| `captured-client-invocation` | a real client invocation drove this run |
+| `synthetic-fixture` | payloads were built from the adapter's own declaration |
+
+An unstated source records as `synthetic-fixture`. A caller that does not say a
+real client drove the run has not shown that one did.
 
 ## 8. Support tiers
 
@@ -136,17 +213,31 @@ Enforcement role and Support tier are independent axes.
 
 | Tier | Applies to |
 | --- | --- |
-| `supported` | a v1 client, on its local `desktop` variant, whose baseline was run and passed |
-| `experimental` | CLI, SSH, remote, cloud, and background-agent variants, and any surface whose baseline has not been run or did not pass |
+| `supported` | a v1 client, on its local `desktop` variant, whose baseline was run, passed, and was driven by a real client invocation |
+| `experimental` | CLI, SSH, remote, cloud, and background-agent variants; any surface whose baseline has not been run or did not pass; and any surface proved only by injected payloads |
 | `unsupported` | any context without repository filesystem, process execution, and Git access, and any client outside the v1 set |
 
-Two consequences are deliberate:
+Three consequences are deliberate:
 
 - **Lack of native blocking never disqualifies a conforming preflight adapter.**
-  All three desktop surfaces declare no native blocking and are supported
-  anyway; authorization stays with Git (`FR-ADAPT-007`, `SG-SUPPORT-001`).
+  All three desktop surfaces declare no native blocking, and that alone never
+  costs them a tier; authorization stays with Git (`FR-ADAPT-007`,
+  `SG-SUPPORT-001`).
 - **A declaration alone never earns the label.** Remove the baseline evidence
   and the same surface drops to `experimental` (`SG-SUPPORT-001`).
+- **A baseline the declaration itself supplied the fixtures for never earns the
+  label either.** The fixture and the thing under test come from the same
+  source, so a pass proves the declaration is coherent and executable, not that
+  it matches the client. Every one of the fourteen mappings declared for v1 on
+  fixture evidence was later refuted or left unverified by real captures; that
+  is what this rule exists to prevent (`SG-SUPPORT-001`, `Q-004`).
+
+**Current tier: all three desktop surfaces are `experimental`, with reason
+`client-invocation-not-observed`.** Their declared fields and event values now
+come from real captured payloads, and the offline baseline passes for each —
+but no adapter has yet been driven end to end by a real client invocation.
+Recording that honestly is the spec-blessed outcome, and producing the missing
+evidence is release qualification's job.
 
 `Q-003` closed the question of additional clients: no client beyond
 authoritative Git and these three local desktop surfaces enters v1, and a later

@@ -129,10 +129,22 @@ const ADAPTER_REGISTRY = Object.freeze({
     surface: 'git-pre-commit',
     role: 'authoritative',
     nativeEvents: Object.freeze({ 'commit-attempt': 'pre-commit' }),
+    // Nothing here is pending observation: Git's hook contract is specified,
+    // and this surface is driven by the Gate's own hook program.
+    unverifiedTriggers: Object.freeze([]),
     nativeIdentity: Object.freeze({
       event: 'hook',
-      repositoryRoot: 'repositoryRoot',
       sessionId: 'commitProcessId',
+      clientVersion: null,
+      // Git invokes `pre-commit` at the repository root by its own contract, so
+      // this surface receives a root rather than a path that might be inside
+      // one. It declares that, instead of inheriting a desktop client's
+      // resolution rule.
+      repositoryRoot: Object.freeze({
+        field: 'repositoryRoot',
+        shape: 'path',
+        resolution: 'declared-root',
+      }),
     }),
     capabilities: Object.freeze({
       event: Object.freeze({ deterministic: true, normalizedTriggers: Object.freeze(['commit-attempt']) }),
@@ -155,19 +167,32 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'claude-code-desktop-local-code-tab',
     role: 'preflight',
-    nativeEvents: Object.freeze({
-      'work-complete': 'code-tab.turn-completed',
-      'commit-attempt': 'code-tab.before-commit',
-    }),
+    // Observed from a real client payload: `hook_event_name: "Stop"`.
+    //
+    // This client's hook events are fully enumerated and NONE of them is a
+    // before-commit event, so the optional `commit-attempt` mapping is simply
+    // absent — the same conservative non-declaration `codex-desktop` makes.
+    // Deriving one from a tool-use event and a matcher would be a guessed
+    // trigger, which FR-ADAPT-003 forbids.
+    nativeEvents: Object.freeze({ 'work-complete': 'Stop' }),
+    unverifiedTriggers: Object.freeze([]),
     nativeIdentity: Object.freeze({
-      event: 'event',
-      repositoryRoot: 'workspace.path',
-      sessionId: 'session.id',
+      event: 'hook_event_name',
+      sessionId: 'session_id',
+      clientVersion: null,
+      // Observed `cwd` was NOT a repository root, while another client's `cwd`
+      // was. Neither assumption is safe, so this surface declares that its
+      // value is a path *within* a repository and must be resolved upward.
+      repositoryRoot: Object.freeze({
+        field: 'cwd',
+        shape: 'path',
+        resolution: 'resolve-upward',
+      }),
     }),
     capabilities: Object.freeze({
       event: Object.freeze({
         deterministic: true,
-        normalizedTriggers: Object.freeze(['work-complete', 'commit-attempt']),
+        normalizedTriggers: Object.freeze(['work-complete']),
       }),
       blocking: Object.freeze({ native: false }),
       trust: Object.freeze({ model: 'explicit-workspace-grant', failureIsUnverified: true }),
@@ -191,11 +216,21 @@ const ADAPTER_REGISTRY = Object.freeze({
     // This surface exposes no deterministic pre-commit event. The optional
     // `before-commit-attempt` mapping is therefore simply absent; the adapter
     // does not invent one (FR-ADAPT-003).
-    nativeEvents: Object.freeze({ 'work-complete': 'project.task-finished' }),
+    // Observed from a real client payload: `hook_event_name: "Stop"`.
+    nativeEvents: Object.freeze({ 'work-complete': 'Stop' }),
+    unverifiedTriggers: Object.freeze([]),
     nativeIdentity: Object.freeze({
-      event: 'type',
-      repositoryRoot: 'project.root',
-      sessionId: 'conversationId',
+      event: 'hook_event_name',
+      sessionId: 'session_id',
+      clientVersion: null,
+      // Observed as a repository root here and NOT one under another client.
+      // Same field name, same shape, different truth — so this surface
+      // declares its own resolution rule rather than sharing one.
+      repositoryRoot: Object.freeze({
+        field: 'cwd',
+        shape: 'path',
+        resolution: 'resolve-upward',
+      }),
     }),
     capabilities: Object.freeze({
       event: Object.freeze({
@@ -221,19 +256,36 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'cursor-ide-local-agent',
     role: 'preflight',
-    nativeEvents: Object.freeze({
-      'work-complete': 'agent.run-finished',
-      'commit-attempt': 'agent.before-commit',
-    }),
+    // Observed from a real client payload: `hook_event_name: "stop"`, in
+    // lowercase, where the other two surfaces send `"Stop"`.
+    nativeEvents: Object.freeze({ 'work-complete': 'stop' }),
+    // Not observed and not disproven. No capture has yet shown whether this
+    // surface emits a deterministic pre-commit event, so it is neither claimed
+    // nor forgotten: it is absent from `nativeEvents` and from
+    // `capabilities.event.normalizedTriggers`, so nothing can normalize to it,
+    // and recorded here so release qualification knows what is still open.
+    // This is a different absence from the other two surfaces', whose client
+    // event sets are enumerated and contain no such event (FR-ADAPT-003,
+    // Q-004).
+    unverifiedTriggers: Object.freeze(['commit-attempt']),
     nativeIdentity: Object.freeze({
-      event: 'name',
-      repositoryRoot: 'folder.path',
-      sessionId: 'agentRunId',
+      event: 'hook_event_name',
+      sessionId: 'session_id',
+      // This client self-reports its exact version in every payload.
+      clientVersion: 'cursor_version',
+      // This surface sends an ARRAY of workspace roots and supports multi-root
+      // workspaces, so its declaration differs in shape from both other
+      // desktop surfaces.
+      repositoryRoot: Object.freeze({
+        field: 'workspace_roots',
+        shape: 'path-array',
+        resolution: 'resolve-upward',
+      }),
     }),
     capabilities: Object.freeze({
       event: Object.freeze({
         deterministic: true,
-        normalizedTriggers: Object.freeze(['work-complete', 'commit-attempt']),
+        normalizedTriggers: Object.freeze(['work-complete']),
       }),
       blocking: Object.freeze({ native: false }),
       trust: Object.freeze({ model: 'explicit-workspace-grant', failureIsUnverified: true }),
@@ -268,24 +320,78 @@ export const describeAdapter = (adapterId) => ADAPTER_REGISTRY[adapterId] ?? nul
  * event name — is never guessed into a trigger, because a guessed trigger is
  * an assumed contract (FR-ADAPT-003, FR-ADAPT-004).
  */
-/** Read one declared dotted path out of a native payload, or `null`. */
-const readNativePath = (payload, dottedPath) => dottedPath
-  .split('.')
-  .reduce(
-    (value, segment) => (isPlainObject(value) ? value[segment] ?? null : null),
-    payload,
-  );
+/** Read one declared top-level field out of a native payload, or `null`. */
+const readNativeField = (payload, field) => (
+  typeof field === 'string' && isPlainObject(payload) ? payload[field] ?? null : null
+);
+
+/** Read a declared field that must be a non-empty string, or `null`. */
+const readNativeString = (payload, field) => {
+  const value = readNativeField(payload, field);
+
+  return typeof value === 'string' && value.length > 0 ? value : null;
+};
+
+/**
+ * Read the repository-root CANDIDATE one adapter's declaration yields.
+ *
+ * A candidate is not a repository root. It is whatever this client put in its
+ * declared field, which real captures show may be a repository root, a path
+ * inside one, a path inside none at all, or — on a multi-root client — a set of
+ * roots with no single answer. Resolving that into an actual root is a separate
+ * step; this one only reads, and says exactly why it read nothing.
+ */
+const readRepositoryRootCandidate = (adapter, native) => {
+  const declaration = adapter.nativeIdentity.repositoryRoot;
+  const value = readNativeField(native, declaration.field);
+
+  // A client that declares an array of workspace roots needs an explicit rule:
+  // the dotted-scalar reader cannot resolve one, and a multi-root workspace has
+  // no single repository root at all.
+  if (declaration.shape === 'path-array') {
+    if (!Array.isArray(value)) {
+      return {
+        candidate: null,
+        detail: `${adapter.id} declares ${declaration.field} as an array of workspace roots, and this payload does not carry one.`,
+      };
+    }
+
+    const roots = value.filter((entry) => typeof entry === 'string' && entry.length > 0);
+
+    if (roots.length === 1) {
+      return { candidate: roots[0], detail: null };
+    }
+
+    // Selecting an element would be a guess (FR-ADAPT-005, SG-EVAL-001).
+    return {
+      candidate: null,
+      detail: roots.length === 0
+        ? `${adapter.id} read no workspace root from ${declaration.field}.`
+        : `${adapter.id} read ${roots.length} workspace roots from ${declaration.field}: a multi-root workspace has no single repository root.`,
+    };
+  }
+
+  const candidate = typeof value === 'string' && value.length > 0 ? value : null;
+
+  return {
+    candidate,
+    detail: candidate === null
+      ? `${adapter.id} read no repository path from ${declaration.field}.`
+      : null,
+  };
+};
 
 /**
  * Normalize one native client payload into the identity the gate contract
- * names, using the adapter's *own* declared field paths.
+ * names, using the adapter's *own* declared fields.
  *
- * This is the entire native boundary. Three values are read out — the native
- * event, the repository root, and the client's session identity — and the rest
- * of the payload is left where it was. Nothing client-native has a way past
- * this function, because nothing else is ever copied (FR-ADAPT-003).
+ * This is the entire native boundary. At most four values are read out — the
+ * native event, the repository-root candidate, the client's session identity,
+ * and, where the client self-reports it, its exact version — and the rest of
+ * the payload is left where it was. Nothing client-native has a way past this
+ * function, because nothing else is ever copied (FR-ADAPT-003).
  *
- * A payload whose declared paths do not resolve belongs to some other client.
+ * A payload whose declared fields do not resolve belongs to some other client.
  * The adapter reports that it cannot read it rather than guessing.
  */
 export const normalizeNativeInvocation = ({ adapterId, native } = {}) => {
@@ -295,18 +401,65 @@ export const normalizeNativeInvocation = ({ adapterId, native } = {}) => {
     return null;
   }
 
-  const read = (field) => {
-    const value = readNativePath(native, adapter.nativeIdentity[field]);
-
-    return typeof value === 'string' && value.length > 0 ? value : null;
-  };
+  const repositoryRoot = readRepositoryRootCandidate(adapter, native);
 
   return {
     adapterId: adapter.id,
-    nativeEvent: read('event'),
-    repositoryRoot: read('repositoryRoot'),
-    sessionId: read('sessionId'),
+    nativeEvent: readNativeString(native, adapter.nativeIdentity.event),
+    repositoryRootCandidate: repositoryRoot.candidate,
+    repositoryRootDetail: repositoryRoot.detail,
+    sessionId: readNativeString(native, adapter.nativeIdentity.sessionId),
+    clientVersion: readNativeString(native, adapter.nativeIdentity.clientVersion),
   };
+};
+
+/** Whether one directory is a repository root, by the only marker Git guarantees. */
+const hasRepositoryMarker = async (directory) => {
+  try {
+    // A worktree or submodule carries `.git` as a file rather than a directory,
+    // so the marker's kind is deliberately not inspected.
+    await stat(path.join(directory, '.git'));
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Resolve the repository root that contains one path, or `null`.
+ *
+ * The path a client sends is not a repository root. Real captures show the same
+ * field carrying a repository root under one client and a directory *above* the
+ * repository under another, so neither assumption is safe. This walks upward
+ * from the given path and returns the first real repository root it finds.
+ *
+ * When no repository contains the path, the answer is `null` and the caller
+ * reports `unverified`. It never falls back to the path it was given: a
+ * repository root the Gate guessed is worse than one it admits it lacks
+ * (FR-ADAPT-005, SG-EVAL-001).
+ */
+export const resolveRepositoryRoot = async (candidate, { isRepositoryRoot } = {}) => {
+  if (typeof candidate !== 'string' || candidate.length === 0) {
+    return null;
+  }
+
+  const test = typeof isRepositoryRoot === 'function' ? isRepositoryRoot : hasRepositoryMarker;
+  let directory = path.resolve(candidate);
+
+  for (;;) {
+    if (await test(directory) === true) {
+      return directory;
+    }
+
+    const parent = path.dirname(directory);
+
+    if (parent === directory) {
+      return null;
+    }
+
+    directory = parent;
+  }
 };
 
 export const normalizeTrigger = ({ adapterId, nativeEvent } = {}) => {
@@ -462,11 +615,6 @@ export const runAdapterEvaluation = async (
   // dropped; only the three normalized values continue.
   const identity = native === null ? null : normalizeNativeInvocation({ adapterId, native });
   const event = identity === null ? nativeEvent : identity.nativeEvent;
-  const invocationContext = identity === null ? context : {
-    ...context,
-    repository: { root: identity.repositoryRoot },
-    session: { id: identity.sessionId },
-  };
   const trigger = normalizeTrigger({ adapterId, nativeEvent: event });
 
   if (trigger === null) {
@@ -477,12 +625,43 @@ export const runAdapterEvaluation = async (
     });
   }
 
-  if (identity !== null && (identity.repositoryRoot === null || identity.sessionId === null)) {
+  if (identity !== null && identity.sessionId === null) {
     return failedPresentation({
       adapter,
       family: 'capability',
-      detail: `${adapter.id} could not read a repository root and a session identity from this native payload.`,
+      detail: `${adapter.id} could not read a session identity from this native payload.`,
     });
+  }
+
+  if (identity !== null && identity.repositoryRootCandidate === null) {
+    return failedPresentation({
+      adapter,
+      family: 'capability',
+      detail: identity.repositoryRootDetail,
+    });
+  }
+
+  let invocationContext = context;
+
+  if (identity !== null) {
+    const declaration = adapter.nativeIdentity.repositoryRoot;
+    const repositoryRoot = declaration.resolution === 'resolve-upward'
+      ? await resolveRepositoryRoot(identity.repositoryRootCandidate, dependencies)
+      : identity.repositoryRootCandidate;
+
+    if (repositoryRoot === null) {
+      return failedPresentation({
+        adapter,
+        family: 'capability',
+        detail: `${adapter.id} resolved no repository root from the ${declaration.field} path this client sent: ${JSON.stringify(identity.repositoryRootCandidate)}.`,
+      });
+    }
+
+    invocationContext = {
+      ...context,
+      repository: { root: repositoryRoot },
+      session: { id: identity.sessionId },
+    };
   }
 
   const trust = typeof dependencies.establishTrust === 'function'
@@ -548,6 +727,21 @@ export const runAdapterEvaluation = async (
  * supported because it declares a capability; it is supported because these
  * checks were *run against it* and held. That is SG-SUPPORT-001 in one list.
  */
+/**
+ * How the payloads that drove one baseline run were obtained.
+ *
+ * This is the difference between "the declaration is internally coherent" and
+ * "a real client actually invoked this adapter". A baseline can be executed
+ * offline by injecting payloads built from the adapter's own declaration, which
+ * proves a great deal — but it cannot prove the declaration matches the client,
+ * because the same declaration wrote the fixture. Only a run driven by a real
+ * client invocation proves that (SG-SUPPORT-001, AC-ADAPT-002, Q-004).
+ */
+export const BASELINE_PAYLOAD_SOURCES = Object.freeze([
+  'captured-client-invocation',
+  'synthetic-fixture',
+]);
+
 export const BASELINE_CHECKS = Object.freeze([
   'deterministic-event',
   'non-interactive-invocation',
@@ -561,36 +755,22 @@ export const BASELINE_CHECKS = Object.freeze([
   'declared-native-blocking',
 ]);
 
-/** Write one value at a declared dotted path, building intermediate objects. */
-const writeNativePath = (payload, dottedPath, value) => {
-  const segments = dottedPath.split('.');
-  const leaf = segments.pop();
-  const container = segments.reduce((node, segment) => {
-    node[segment] = node[segment] ?? {};
-
-    return node[segment];
-  }, payload);
-
-  container[leaf] = value;
-
-  return payload;
-};
-
 /**
  * Build a native payload in *this* adapter's declared shape.
  *
- * The baseline drives each surface through the same field paths the adapter
- * says its client uses, so a fixture cannot pass by being written in the
- * gate's preferred shape rather than the client's.
+ * The baseline drives each surface through the same field names, and the same
+ * field *shapes*, the adapter says its client uses, so a fixture cannot pass by
+ * being written in the gate's preferred shape rather than the client's. Every
+ * value here is synthetic; only the shape comes from the client.
  */
-const baselineNativePayload = (adapter, { nativeEvent, repositoryRoot, sessionId }) => {
-  const payload = {};
+export const buildNativePayload = (adapter, { nativeEvent, repositoryRoot, sessionId }) => {
+  const declaration = adapter.nativeIdentity.repositoryRoot;
 
-  writeNativePath(payload, adapter.nativeIdentity.event, nativeEvent);
-  writeNativePath(payload, adapter.nativeIdentity.repositoryRoot, repositoryRoot);
-  writeNativePath(payload, adapter.nativeIdentity.sessionId, sessionId);
-
-  return payload;
+  return {
+    [adapter.nativeIdentity.event]: nativeEvent,
+    [adapter.nativeIdentity.sessionId]: sessionId,
+    [declaration.field]: declaration.shape === 'path-array' ? [repositoryRoot] : repositoryRoot,
+  };
 };
 
 /**
@@ -614,6 +794,11 @@ export const runCompatibilityBaseline = async (
   }
 
   const clock = dependencies.clock ?? (() => new Date());
+  // An unstated source is the conservative one. A caller that does not say a
+  // real client drove this run has not shown that one did.
+  const payloadSource = BASELINE_PAYLOAD_SOURCES.includes(dependencies.evidence?.payloadSource)
+    ? dependencies.evidence.payloadSource
+    : 'synthetic-fixture';
   const checks = [];
   const record = (id, ok, detail) => {
     checks.push({ id, ok, detail });
@@ -630,7 +815,7 @@ export const runCompatibilityBaseline = async (
   /** One baseline invocation, capturing exactly what gate core was handed. */
   const invoke = async ({ sessionId, overrides = {}, nativeEvent = null }) => {
     const seen = [];
-    const native = baselineNativePayload(adapter, {
+    const native = buildNativePayload(adapter, {
       nativeEvent: nativeEvent ?? adapter.nativeEvents['work-complete'] ?? adapter.nativeEvents['commit-attempt'],
       repositoryRoot,
       sessionId,
@@ -782,6 +967,7 @@ export const runCompatibilityBaseline = async (
     role: adapter.role,
     passed: checks.every((check) => check.ok),
     checks,
+    evidence: { payloadSource },
     versions: {
       gate: dependencies.versions?.gate ?? null,
       git: gitVersion,
@@ -872,6 +1058,21 @@ export const classifySupport = ({
       tier: 'experimental',
       reason: 'baseline-failed',
       failedChecks: baseline.failedChecks ?? [],
+    };
+  }
+
+  // A baseline driven by payloads this repository built from its own
+  // declaration cannot establish that the declaration matches the client: the
+  // fixture and the thing under test came from the same source. Real captures
+  // corrected every declared field on every surface precisely because injected
+  // fixtures could not (SG-SUPPORT-001).
+  if (baseline.evidence?.payloadSource !== 'captured-client-invocation') {
+    return {
+      adapterId: adapter.id,
+      variant,
+      tier: 'experimental',
+      reason: 'client-invocation-not-observed',
+      versions: baseline.versions ?? null,
     };
   }
 

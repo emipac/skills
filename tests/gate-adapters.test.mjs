@@ -219,9 +219,7 @@ test('AC-ADAPT-001: the same deny decision blocks the Git fixture while every de
   }
 });
 
-test('AC-ADAPT-001 / FR-ADAPT-003: every desktop adapter normalizes its own deterministic completion event to work-complete, maps before-commit-attempt only where its surface provides one, and refuses every other native event', () => {
-  const withCommitAttempt = [];
-
+test('AC-ADAPT-001 / FR-ADAPT-003: every desktop adapter normalizes its own deterministic completion event to work-complete and refuses every other native event, including another client\'s and its own in the wrong case', () => {
   for (const adapterId of DESKTOP_ADAPTER_IDS) {
     const adapter = describeAdapter(adapterId);
     const nativeEvents = adapter.nativeEvents ?? {};
@@ -238,28 +236,27 @@ test('AC-ADAPT-001 / FR-ADAPT-003: every desktop adapter normalizes its own dete
       `${adapterId} must normalize ${completion} to work-complete.`,
     );
 
-    const beforeCommit = nativeEvents['commit-attempt'] ?? null;
-
-    if (beforeCommit === null) {
-      // The before-commit-attempt mapping is optional. A surface that does not
-      // provide one must not invent it.
-      assert.equal(
-        normalizeTrigger({ adapterId, nativeEvent: 'before-commit-attempt' }),
-        null,
-        `${adapterId} does not provide a before-commit event and must not claim one.`,
-      );
-    } else {
-      withCommitAttempt.push(adapterId);
-      assert.equal(
-        normalizeTrigger({ adapterId, nativeEvent: beforeCommit }),
-        'commit-attempt',
-        `${adapterId} must map its before-commit event to commit-attempt.`,
-      );
-    }
+    // No desktop surface provides a deterministic before-commit event, and none
+    // of them invents one.
+    assert.equal(
+      normalizeTrigger({ adapterId, nativeEvent: 'before-commit-attempt' }),
+      null,
+      `${adapterId} does not provide a before-commit event and must not claim one.`,
+    );
 
     // An unrecognized native event is never guessed into a contract trigger.
     assert.equal(normalizeTrigger({ adapterId, nativeEvent: 'chat.message-sent' }), null);
     assert.equal(normalizeTrigger({ adapterId, nativeEvent: '' }), null);
+
+    // The same event name in the other case belongs to a different client, and
+    // matching it would erase a real per-client distinction.
+    assert.equal(
+      normalizeTrigger({ adapterId, nativeEvent: completion.toLowerCase() === completion
+        ? completion.toUpperCase()
+        : completion.toLowerCase() }),
+      null,
+      `${adapterId} matched its own native event ${completion} case-insensitively.`,
+    );
 
     // FR-ADAPT-004: no adapter assumes another client's event contract.
     for (const other of DESKTOP_ADAPTER_IDS.filter((candidate) => candidate !== adapterId)) {
@@ -275,15 +272,129 @@ test('AC-ADAPT-001 / FR-ADAPT-003: every desktop adapter normalizes its own dete
     }
   }
 
-  assert.ok(
-    withCommitAttempt.length > 0 && withCommitAttempt.length < DESKTOP_ADAPTER_IDS.length,
-    'The before-commit-attempt mapping is surface-dependent: it must be declared by some supported surfaces and absent from others.',
-  );
-
   // Authoritative Git normalizes its own hook, and nothing else.
   assert.equal(normalizeTrigger({ adapterId: 'git', nativeEvent: 'pre-commit' }), 'commit-attempt');
   assert.equal(normalizeTrigger({ adapterId: 'git', nativeEvent: 'post-commit' }), null);
   assert.equal(normalizeTrigger({ adapterId: 'not-a-v1-client', nativeEvent: 'pre-commit' }), null);
+});
+
+/**
+ * The observed native contract, per client.
+ *
+ * These field names and event values were read off real captured payloads from
+ * each client (see the adapter qualification findings). Every value in this
+ * suite is synthetic; only the SHAPE is taken from the captures, because the
+ * real payloads carry conversation text and personal data.
+ */
+test('TB-013 / FR-ADAPT-004: claude-code-desktop declares the native field names and event value its real client sends', () => {
+  const adapter = describeAdapter('claude-code-desktop');
+
+  assert.equal(adapter.nativeIdentity.event, 'hook_event_name');
+  assert.equal(adapter.nativeIdentity.sessionId, 'session_id');
+  assert.equal(adapter.nativeIdentity.repositoryRoot.field, 'cwd');
+  assert.equal(adapter.nativeIdentity.repositoryRoot.shape, 'path');
+  assert.equal(adapter.nativeEvents['work-complete'], 'Stop');
+  assert.equal(normalizeTrigger({ adapterId: 'claude-code-desktop', nativeEvent: 'Stop' }), 'work-complete');
+
+  // Event casing is a real per-client distinction and must not be erased.
+  assert.equal(
+    normalizeTrigger({ adapterId: 'claude-code-desktop', nativeEvent: 'stop' }),
+    null,
+    'This client sends Stop; matching another client\'s lowercase stop would lose that distinction.',
+  );
+});
+
+test('TB-013 / FR-ADAPT-004: codex-desktop declares the native field names and event value its real client sends', () => {
+  const adapter = describeAdapter('codex-desktop');
+
+  assert.equal(adapter.nativeIdentity.event, 'hook_event_name');
+  assert.equal(adapter.nativeIdentity.sessionId, 'session_id');
+  assert.equal(adapter.nativeIdentity.repositoryRoot.field, 'cwd');
+  assert.equal(adapter.nativeIdentity.repositoryRoot.shape, 'path');
+  assert.equal(adapter.nativeEvents['work-complete'], 'Stop');
+  assert.equal(normalizeTrigger({ adapterId: 'codex-desktop', nativeEvent: 'Stop' }), 'work-complete');
+  assert.equal(normalizeTrigger({ adapterId: 'codex-desktop', nativeEvent: 'stop' }), null);
+});
+
+test('TB-013 / FR-ADAPT-004: cursor declares the native field names, the lowercase event value, and the array-shaped workspace roots its real client sends', () => {
+  const adapter = describeAdapter('cursor');
+
+  assert.equal(adapter.nativeIdentity.event, 'hook_event_name');
+  assert.equal(adapter.nativeIdentity.sessionId, 'session_id');
+  assert.equal(adapter.nativeIdentity.repositoryRoot.field, 'workspace_roots');
+  assert.equal(
+    adapter.nativeIdentity.repositoryRoot.shape,
+    'path-array',
+    'Cursor sends an array of workspace roots, not a scalar path.',
+  );
+  assert.equal(adapter.nativeEvents['work-complete'], 'stop');
+  assert.equal(normalizeTrigger({ adapterId: 'cursor', nativeEvent: 'stop' }), 'work-complete');
+  assert.equal(
+    normalizeTrigger({ adapterId: 'cursor', nativeEvent: 'Stop' }),
+    null,
+    'Cursor sends lowercase stop; accepting the capitalised value would assume another client\'s contract.',
+  );
+
+  // Cursor self-reports its exact client version in every payload.
+  assert.equal(adapter.nativeIdentity.clientVersion, 'cursor_version');
+  assert.equal(describeAdapter('claude-code-desktop').nativeIdentity.clientVersion, null);
+  assert.equal(describeAdapter('codex-desktop').nativeIdentity.clientVersion, null);
+});
+
+test('TB-013 / FR-ADAPT-003: no desktop surface declares a commit-attempt event, and cursor records its unproved one instead of claiming it', () => {
+  for (const adapterId of DESKTOP_ADAPTER_IDS) {
+    const adapter = describeAdapter(adapterId);
+
+    assert.equal(
+      'commit-attempt' in adapter.nativeEvents,
+      false,
+      `${adapterId} declares a commit-attempt native event that its real client does not emit.`,
+    );
+    assert.deepEqual(
+      [...adapter.capabilities.event.normalizedTriggers],
+      ['work-complete'],
+      `${adapterId} advertises a normalized trigger it cannot deliver.`,
+    );
+
+    for (const nativeEvent of [
+      'commit-attempt',
+      'pre-commit',
+      'code-tab.before-commit',
+      'agent.before-commit',
+    ]) {
+      assert.notEqual(
+        normalizeTrigger({ adapterId, nativeEvent }),
+        'commit-attempt',
+        `${adapterId} normalized ${nativeEvent} to a trigger no client event produces.`,
+      );
+    }
+  }
+
+  // The absences are not the same absence, and each adapter says which it has.
+  // Claude Code's and Codex's pre-commit events are known not to exist;
+  // Cursor's is simply unobserved, and recording it keeps that open question
+  // alive without letting the surface claim the capability (Q-004).
+  assert.deepEqual([...describeAdapter('claude-code-desktop').unverifiedTriggers], []);
+  assert.deepEqual([...describeAdapter('codex-desktop').unverifiedTriggers], []);
+  assert.deepEqual([...describeAdapter('cursor').unverifiedTriggers], ['commit-attempt']);
+  assert.deepEqual([...describeAdapter('git').unverifiedTriggers], []);
+
+  for (const adapterId of ADAPTER_IDS) {
+    const adapter = describeAdapter(adapterId);
+
+    for (const trigger of adapter.unverifiedTriggers) {
+      assert.equal(
+        adapter.capabilities.event.normalizedTriggers.includes(trigger),
+        false,
+        `${adapterId} advertises ${trigger} as a normalized trigger while recording it as unverified.`,
+      );
+      assert.equal(trigger in adapter.nativeEvents, false);
+    }
+  }
+
+  // Authoritative Git still owns commit-attempt; only it ever had the event.
+  assert.equal(normalizeTrigger({ adapterId: 'git', nativeEvent: 'pre-commit' }), 'commit-attempt');
+  assert.deepEqual([...describeAdapter('git').capabilities.event.normalizedTriggers], ['commit-attempt']);
 });
 
 const CAPABILITY_CATEGORIES = [
@@ -400,7 +511,7 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
 
   // The contrast case: a healthy preflight really does look clean.
   const healthy = await runAdapterEvaluation(
-    { adapterId: 'cursor', nativeEvent: 'agent.run-finished', context },
+    { adapterId: 'cursor', nativeEvent: 'stop', context },
     passingDependencies({ executionRoot }),
   );
 
@@ -412,7 +523,7 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
     {
       family: 'trust',
       reasonCode: 'prerequisite-missing',
-      nativeEvent: 'agent.run-finished',
+      nativeEvent: 'stop',
       dependencies: passingDependencies({
         executionRoot,
         establishTrust: async () => ({ established: false, detail: 'the workspace grant was revoked' }),
@@ -421,7 +532,7 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
     {
       family: 'invocation',
       reasonCode: 'crash',
-      nativeEvent: 'agent.run-finished',
+      nativeEvent: 'stop',
       dependencies: passingDependencies({
         executionRoot,
         evaluate: async () => {
@@ -432,7 +543,7 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
     {
       family: 'timeout',
       reasonCode: 'timeout',
-      nativeEvent: 'agent.run-finished',
+      nativeEvent: 'stop',
       dependencies: passingDependencies({
         executionRoot,
         timeoutMs: 5,
@@ -450,7 +561,7 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
     {
       family: 'output',
       reasonCode: 'malformed-output',
-      nativeEvent: 'agent.run-finished',
+      nativeEvent: 'stop',
       dependencies: passingDependencies({
         executionRoot,
         evaluate: async () => ({ verdict: 'looks fine to me' }),
@@ -494,30 +605,59 @@ test('FR-ADAPT-005: trust, invocation, timeout, capability, and malformed-output
 });
 
 /**
- * Client-native payloads, each in the shape its own client uses, each carrying
- * fields the Gate has no business seeing. None of this may cross the boundary.
+ * Client-native payloads, each in the shape its own client really sends, each
+ * carrying fields the Gate has no business seeing. None of this may cross the
+ * boundary.
+ *
+ * The SHAPE — the field names, the event-value casing, the array-ness of
+ * Cursor's workspace roots, and the presence of conversation text and personal
+ * data — is taken from real captures. Every VALUE here is synthetic. Real
+ * captures carry the user's own conversation content and email address and must
+ * never enter this repository (SG-SECRET-001).
  */
 const NATIVE_PAYLOADS = {
   'claude-code-desktop': (root) => ({
-    event: 'code-tab.turn-completed',
-    workspace: { path: root, trustPromptShown: true },
-    session: { id: 'cc-session-9f2', transcriptTokens: 41_233 },
-    conversation: { promptText: 'please refactor the order service', model: 'a-model-name' },
-    telemetry: { clientBuild: 'desktop-2026.08.1', anonymousId: 'aid-77' },
+    session_id: 'synthetic-claude-session',
+    transcript_path: '/synthetic/transcripts/claude/conversation.jsonl',
+    cwd: root,
+    prompt_id: 'synthetic-prompt-id',
+    permission_mode: 'synthetic-permission-mode',
+    effort: 'synthetic-effort',
+    hook_event_name: 'Stop',
+    stop_hook_active: false,
+    last_assistant_message: 'synthetic assistant reply that must never cross the boundary',
+    background_tasks: [],
+    session_crons: [],
   }),
   'codex-desktop': (root) => ({
-    type: 'project.task-finished',
-    project: { root, indexedFiles: 812 },
-    conversationId: 'cx-session-441',
-    taskSummary: 'rewrote the invoice mapper',
-    auth: { apiKeyRef: 'keychain://codex/default' },
+    session_id: 'synthetic-codex-session',
+    turn_id: 'synthetic-turn-id',
+    transcript_path: '/synthetic/transcripts/codex/conversation.jsonl',
+    cwd: root,
+    hook_event_name: 'Stop',
+    model: 'synthetic-model',
+    permission_mode: 'synthetic-permission-mode',
+    stop_hook_active: false,
+    last_assistant_message: 'synthetic assistant reply that must never cross the boundary',
   }),
   cursor: (root) => ({
-    name: 'agent.run-finished',
-    folder: { path: root, isTrusted: true },
-    agentRunId: 'cur-session-13a',
-    composer: { instructions: 'keep the tests green', attachments: ['src/order.ts'] },
-    rules: ['.cursorrules'],
+    conversation_id: 'synthetic-conversation-id',
+    generation_id: 'synthetic-generation-id',
+    model: 'synthetic-model',
+    model_id: 'synthetic-model-id',
+    model_params: { temperature: 0 },
+    status: 'synthetic-status',
+    loop_count: 1,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    session_id: 'synthetic-cursor-session',
+    hook_event_name: 'stop',
+    cursor_version: '0.0.0-synthetic',
+    workspace_roots: [root],
+    user_email: 'synthetic-user@example.test',
+    transcript_path: '/synthetic/transcripts/cursor/conversation.jsonl',
   }),
 };
 
@@ -586,7 +726,7 @@ test('FR-ADAPT-003 / NFR-COMP-001: each adapter normalizes its own native payloa
 
     const identity = normalizeNativeInvocation({ adapterId, native });
 
-    assert.equal(identity.repositoryRoot, root);
+    assert.equal(identity.repositoryRootCandidate, root);
     assert.equal(request.invocation.sessionId, identity.sessionId);
     assert.notEqual(identity.sessionId, null);
 
@@ -640,6 +780,173 @@ test('FR-ADAPT-003 / NFR-COMP-001: each adapter normalizes its own native payloa
 
   assert.equal(foreign.outcome, 'unverified');
   assert.equal(foreign.failure.family, 'capability');
+});
+
+test('TB-013 / FR-ADAPT-002 / FR-ADAPT-005: a desktop adapter RESOLVES a repository root from the path its client sent, and reports unverified when none resolves', async () => {
+  const root = await createRepository({
+    'src/order.txt': 'original\n',
+    'packages/api/src/order.ts': 'export const order = 1;\n',
+  });
+  const outsideAnyRepository = await temporaryDirectory('gate-adapter-not-a-repo-');
+  const executionRoot = await temporaryDirectory('gate-adapter-exec-resolve-');
+  const context = {
+    change: { kind: 'worktree', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'regression-only', contractRef: null },
+  };
+
+  // Each surface declares for itself whether its path is already a root.
+  assert.equal(describeAdapter('claude-code-desktop').nativeIdentity.repositoryRoot.resolution, 'resolve-upward');
+  assert.equal(describeAdapter('codex-desktop').nativeIdentity.repositoryRoot.resolution, 'resolve-upward');
+  assert.equal(describeAdapter('cursor').nativeIdentity.repositoryRoot.resolution, 'resolve-upward');
+  assert.equal(
+    describeAdapter('git').nativeIdentity.repositoryRoot.resolution,
+    'declared-root',
+    'Git invokes its hook at the repository root by its own contract and declares that separately.',
+  );
+
+  const drive = async (adapterId, nativePath) => {
+    const seen = [];
+    const declaration = describeAdapter(adapterId).nativeIdentity.repositoryRoot;
+    const result = await runAdapterEvaluation(
+      {
+        adapterId,
+        native: {
+          ...NATIVE_PAYLOADS[adapterId](root),
+          [declaration.field]: declaration.shape === 'path-array' ? [nativePath] : nativePath,
+        },
+        context,
+      },
+      passingDependencies({
+        executionRoot,
+        evaluate: async (request) => {
+          seen.push(request);
+
+          return evaluate(request, {
+            checks: [descriptor()],
+            executionRoot,
+            execute: async () => ({
+              executed: true,
+              exitCode: 0,
+              timedOut: false,
+              error: null,
+              durationMs: 3,
+            }),
+          });
+        },
+      }),
+    );
+
+    return { result, request: seen[0] ?? null };
+  };
+
+  for (const adapterId of DESKTOP_ADAPTER_IDS) {
+    // Observed in the wild: the path a client sends is sometimes a repository
+    // root...
+    const atRoot = await drive(adapterId, root);
+
+    assert.equal(atRoot.result.outcome, 'passed', `${adapterId} could not use a path that is a repository root.`);
+    assert.equal(atRoot.request.repository.root, root);
+
+    // ...and sometimes a path inside one. The adapter must resolve, not assume.
+    const insideRepository = await drive(adapterId, path.join(root, 'packages/api/src'));
+
+    assert.equal(
+      insideRepository.result.outcome,
+      'passed',
+      `${adapterId} could not resolve a repository root from a path inside the repository.`,
+    );
+    assert.equal(
+      insideRepository.request.repository.root,
+      root,
+      `${adapterId} handed gate core a path that is not a repository root.`,
+    );
+
+    // And sometimes it is inside no repository at all, which is unverified.
+    const nowhere = await drive(adapterId, outsideAnyRepository);
+
+    assert.equal(
+      nowhere.result.outcome,
+      'unverified',
+      `${adapterId} claimed a repository root where none exists.`,
+    );
+    assert.equal(nowhere.result.failure.family, 'capability');
+    assert.match(nowhere.result.failure.detail, /repositor/i);
+    assert.equal(nowhere.request, null, 'A path with no repository above it must never reach gate core.');
+  }
+});
+
+test('TB-013 / FR-ADAPT-005: cursor reads its workspace_roots ARRAY, and a multi-root workspace is unverified rather than one guessed root', async () => {
+  const root = await createRepository({ 'src/order.txt': 'original\n' });
+  const otherRoot = await createRepository({ 'src/invoice.txt': 'original\n' });
+  const executionRoot = await temporaryDirectory('gate-adapter-exec-roots-');
+  const context = {
+    change: { kind: 'worktree', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'regression-only', contractRef: null },
+  };
+
+  const drive = async (workspaceRoots) => {
+    const seen = [];
+    const result = await runAdapterEvaluation(
+      {
+        adapterId: 'cursor',
+        native: { ...NATIVE_PAYLOADS.cursor(root), workspace_roots: workspaceRoots },
+        context,
+      },
+      passingDependencies({
+        executionRoot,
+        evaluate: async (request) => {
+          seen.push(request);
+
+          return evaluate(request, {
+            checks: [descriptor()],
+            executionRoot,
+            execute: async () => ({
+              executed: true,
+              exitCode: 0,
+              timedOut: false,
+              error: null,
+              durationMs: 3,
+            }),
+          });
+        },
+      }),
+    );
+
+    return { result, request: seen[0] ?? null };
+  };
+
+  // A single-root workspace: the one element really is read out of the array.
+  const single = await drive([root]);
+
+  assert.equal(single.result.outcome, 'passed', 'A single-root workspace_roots array must be readable.');
+  assert.equal(single.request.repository.root, root);
+
+  // A multi-root workspace has no single repository root. Selecting an element
+  // would be a guess, so the honest answer is unverified.
+  const multi = await drive([root, otherRoot]);
+
+  assert.equal(multi.result.outcome, 'unverified');
+  assert.equal(multi.result.failure.family, 'capability');
+  assert.match(
+    multi.result.failure.detail,
+    /multi-root workspace has no single repository root/,
+    'A multi-root workspace must be reported as exactly that, not as a generic unreadable payload.',
+  );
+  assert.equal(multi.request, null, 'A guessed repository root must never reach gate core.');
+
+  // An empty array is no root at all, and a scalar is not this client's
+  // declared shape. Neither may be quietly accepted.
+  for (const workspaceRoots of [[], root, null]) {
+    const rejected = await drive(workspaceRoots);
+
+    assert.equal(
+      rejected.result.outcome,
+      'unverified',
+      `cursor accepted ${JSON.stringify(workspaceRoots)} as a workspace_roots value.`,
+    );
+    assert.equal(rejected.result.failure.family, 'capability');
+    assert.equal(rejected.request, null);
+  }
 });
 
 /** Everything the baseline needs that is not the adapter itself. */
@@ -730,6 +1037,64 @@ test('AC-ADAPT-002 / SG-SUPPORT-001 / NFR-COMP-001: every named desktop surface 
   );
 });
 
+test('TB-013 / AC-ADAPT-002 / SG-SUPPORT-001: a baseline records how it was driven, and a surface proved only by injected payloads cannot claim supported', async () => {
+  const root = await createRepository({ 'src/order.txt': 'original\n' });
+  const executionRoot = await temporaryDirectory('gate-adapter-exec-evidence-');
+  const localCapabilities = { repositoryFilesystem: true, processExecution: true, git: true };
+
+  for (const adapterId of DESKTOP_ADAPTER_IDS) {
+    // The baseline this repository can run offline injects payloads built from
+    // each adapter's own declaration. That proves the declaration is coherent;
+    // it does not prove a real client ever invoked the adapter.
+    const fixtureDriven = await runCompatibilityBaseline(
+      { adapterId, repositoryRoot: root },
+      baselineDependencies(root, { executionRoot }),
+    );
+
+    assert.equal(fixtureDriven.passed, true);
+    assert.equal(
+      fixtureDriven.evidence.payloadSource,
+      'synthetic-fixture',
+      'A baseline must record how it was driven, and an unstated source must default to the conservative answer.',
+    );
+
+    const onFixtures = classifySupport({
+      adapterId,
+      variant: 'desktop',
+      capabilities: localCapabilities,
+      baseline: fixtureDriven,
+    });
+
+    assert.equal(
+      onFixtures.tier,
+      'experimental',
+      `${adapterId} claimed supported on injected-payload evidence alone.`,
+    );
+    assert.equal(onFixtures.reason, 'client-invocation-not-observed');
+
+    // Q-004: this is evidence-based, not a permanent denial. The same passing
+    // baseline, recorded against a real client invocation, is supported.
+    const clientDriven = await runCompatibilityBaseline(
+      { adapterId, repositoryRoot: root },
+      baselineDependencies(root, {
+        executionRoot,
+        evidence: { payloadSource: 'captured-client-invocation' },
+      }),
+    );
+
+    assert.equal(clientDriven.evidence.payloadSource, 'captured-client-invocation');
+    assert.equal(
+      classifySupport({
+        adapterId,
+        variant: 'desktop',
+        capabilities: localCapabilities,
+        baseline: clientDriven,
+      }).tier,
+      'supported',
+    );
+  }
+});
+
 test('FR-ADAPT-006 / SG-SUPPORT-001: only a named desktop surface with a passing baseline is supported, unproved variants are experimental, and a context without repository, process, and Git access cannot claim support', async () => {
   const root = await createRepository({ 'src/order.txt': 'original\n' });
   const executionRoot = await temporaryDirectory('gate-adapter-exec-tiers-');
@@ -743,9 +1108,14 @@ test('FR-ADAPT-006 / SG-SUPPORT-001: only a named desktop surface with a passing
   };
 
   for (const adapterId of DESKTOP_ADAPTER_IDS) {
+    // The strongest evidence a surface can hold: a passing baseline that a real
+    // client invocation drove. Everything below removes one part of it.
     const baseline = await runCompatibilityBaseline(
       { adapterId, repositoryRoot: root },
-      baselineDependencies(root, { executionRoot }),
+      baselineDependencies(root, {
+        executionRoot,
+        evidence: { payloadSource: 'captured-client-invocation' },
+      }),
     );
 
     assert.equal(

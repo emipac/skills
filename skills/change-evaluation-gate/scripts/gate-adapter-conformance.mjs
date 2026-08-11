@@ -16,19 +16,30 @@
  *    shared compatibility baseline against a real repository and real Git
  *    despite declaring no native blocking; the exact Gate, Git, Node.js,
  *    client, and operating-system versions and every per-check outcome are
- *    recorded; and an unproved cloud variant or a context without repository,
- *    process, and Git access cannot claim support (AC-ADAPT-002,
- *    FR-ADAPT-002, FR-ADAPT-006, SG-SUPPORT-001, NFR-COMP-001).
+ *    recorded; a pass on INJECTED payloads is recorded as such and classified
+ *    `experimental`, never `supported`; and an unproved cloud variant or a
+ *    context without repository, process, and Git access cannot claim support
+ *    (AC-ADAPT-002, FR-ADAPT-002, FR-ADAPT-006, SG-SUPPORT-001, NFR-COMP-001).
  * 3. `failures-are-unverified` — a trust failure, a failed invocation, a
  *    timeout, a capability the surface does not have, and output the contract
  *    rejects each present as `unverified` on every desktop surface, and none of
  *    them is mistakable for a clean preflight (FR-ADAPT-005).
+ * 4. `repository-root-is-resolved` — every surface resolves a repository root
+ *    from the path its client sends, whether that path is a repository root or
+ *    inside one, reports `unverified` when no repository contains it, and
+ *    reports `unverified` for a multi-root workspace rather than selecting one
+ *    of its roots (FR-ADAPT-003, FR-ADAPT-005).
  *
  * NO DESKTOP CLIENT IS REQUIRED. Nothing here launches, probes, or detects
  * Claude Code Desktop, Codex Desktop, or Cursor. Each surface is driven by an
- * injected native payload built from that adapter's own declared field paths,
- * so this capability runs offline on a clean machine with none of those
- * clients installed. Git and this Node runtime are the only external tools.
+ * injected native payload built from that adapter's own declared fields, so
+ * this capability runs offline on a clean machine with none of those clients
+ * installed. Git and this Node runtime are the only external tools.
+ *
+ * That independence is also this capability's limit, and scenario 2 states it
+ * rather than hiding it: payloads built from the declaration under test cannot
+ * prove the declaration matches the client, so no surface reaches `supported`
+ * here.
  *
  * SAFETY: every fixture is a throwaway repository created under the OS
  * temporary directory and removed afterwards. `assertThrowawayRepository`
@@ -52,6 +63,7 @@ import { promisify } from 'node:util';
 import { activate, previewActivation } from './lib/activation.mjs';
 import {
   DESKTOP_ADAPTER_IDS,
+  buildNativePayload,
   classifySupport,
   describeAdapter,
   normalizeTrigger,
@@ -497,7 +509,18 @@ const supportedDesktopBaseline = async () => {
       );
     }
 
-    const supported = classifySupport({
+    // SG-SUPPORT-001, the whole point of this gate: this capability drives each
+    // surface with payloads built from that surface's OWN declaration, so a
+    // pass here proves the declaration is coherent and executable — never that
+    // it matches the client. The baseline records that provenance, and the tier
+    // honours it.
+    check(
+      findings,
+      baseline.evidence.payloadSource === 'synthetic-fixture',
+      `${adapterId} recorded its baseline payload source as ${baseline.evidence.payloadSource}, but this capability injects payloads.`,
+    );
+
+    const classified = classifySupport({
       adapterId,
       variant: 'desktop',
       capabilities: localCapabilities,
@@ -506,8 +529,22 @@ const supportedDesktopBaseline = async () => {
 
     check(
       findings,
-      supported.tier === 'supported',
-      `${adapterId} passed its baseline but was classified ${supported.tier}.`,
+      classified.tier === 'experimental' && classified.reason === 'client-invocation-not-observed',
+      `${adapterId} was classified ${classified.tier} (${classified.reason}) on injected-payload evidence alone.`,
+    );
+
+    // Q-004: the tier is evidence-based, not a permanent denial. The same
+    // passing baseline, recorded against a real client invocation, is
+    // supported — which is what release qualification has to produce.
+    check(
+      findings,
+      classifySupport({
+        adapterId,
+        variant: 'desktop',
+        capabilities: localCapabilities,
+        baseline: { ...baseline, evidence: { payloadSource: 'captured-client-invocation' } },
+      }).tier === 'supported',
+      `${adapterId} could not reach supported even with a real client invocation recorded.`,
     );
 
     // SG-SUPPORT-001: without the evidence, the same surface is not supported.
@@ -527,6 +564,15 @@ const supportedDesktopBaseline = async () => {
       );
     }
 
+    // FR-ADAPT-003: no desktop surface claims a normalized trigger its client
+    // does not produce, and Cursor's unobserved one is recorded, not claimed.
+    check(
+      findings,
+      !('commit-attempt' in describeAdapter(adapterId).nativeEvents)
+        && !describeAdapter(adapterId).capabilities.event.normalizedTriggers.includes('commit-attempt'),
+      `${adapterId} declares a commit-attempt trigger no observed client event produces.`,
+    );
+
     check(
       findings,
       classifySupport({
@@ -541,7 +587,10 @@ const supportedDesktopBaseline = async () => {
     recorded.push({
       adapterId,
       surface: baseline.surface,
-      tier: supported.tier,
+      tier: classified.tier,
+      tierReason: classified.reason,
+      payloadSource: baseline.evidence.payloadSource,
+      unverifiedTriggers: [...describeAdapter(adapterId).unverifiedTriggers],
       versions: baseline.versions,
       checks: baseline.checks.map((entry) => ({ id: entry.id, ok: entry.ok })),
       recordedAt: baseline.recordedAt,
@@ -583,26 +632,11 @@ const failuresAreUnverified = async () => {
 
   for (const adapterId of DESKTOP_ADAPTER_IDS) {
     const adapter = describeAdapter(adapterId);
-    const nativeFor = (event, sessionId) => {
-      const payload = {};
-      const write = (dotted, value) => {
-        const segments = dotted.split('.');
-        const leaf = segments.pop();
-        const container = segments.reduce((node, segment) => {
-          node[segment] = node[segment] ?? {};
-
-          return node[segment];
-        }, payload);
-
-        container[leaf] = value;
-      };
-
-      write(adapter.nativeIdentity.event, event);
-      write(adapter.nativeIdentity.repositoryRoot, root);
-      write(adapter.nativeIdentity.sessionId, sessionId);
-
-      return payload;
-    };
+    const nativeFor = (event, sessionId) => buildNativePayload(adapter, {
+      nativeEvent: event,
+      repositoryRoot: root,
+      sessionId,
+    });
 
     const declaredEvent = adapter.nativeEvents['work-complete'];
     const healthy = await runAdapterEvaluation(
@@ -674,6 +708,116 @@ const failuresAreUnverified = async () => {
   return { name: 'failures-are-unverified', ok: findings.length === 0, findings };
 };
 
+/**
+ * Scenario 4. A repository root is resolved, never assumed.
+ *
+ * Real captures show the same declared field carrying a repository root under
+ * one client and a directory that is not one under another, and Cursor sending
+ * an ARRAY of workspace roots. Every surface is driven here through all three
+ * situations against real repositories on disk.
+ */
+const repositoryRootIsResolved = async () => {
+  const findings = [];
+  const root = await temporaryDirectory(`${CAPABILITY}-resolve-`);
+  const outsideAnyRepository = await temporaryDirectory(`${CAPABILITY}-no-repo-`);
+  const executionRoot = await temporaryDirectory(`${CAPABILITY}-resolve-exec-`);
+  const otherRoot = await temporaryDirectory(`${CAPABILITY}-resolve-other-`);
+
+  for (const repository of [root, otherRoot]) {
+    await writeFile(path.join(repository, 'source.txt'), 'baseline\n', 'utf8');
+    await git(repository, ['init', '--quiet']);
+    await git(repository, ['add', '--all']);
+    await commit(repository, 'baseline');
+  }
+
+  await mkdir(path.join(root, 'packages/api/src'), { recursive: true });
+
+  const context = {
+    change: { kind: 'worktree', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'regression-only', contractRef: null },
+  };
+
+  const drive = async (adapterId, native) => {
+    const seen = [];
+    const result = await runAdapterEvaluation({ adapterId, native, context }, {
+      establishTrust: async () => ({ established: true }),
+      evaluate: async (request) => {
+        seen.push(request);
+
+        return evaluate(request, {
+          executionRoot,
+          checks: [],
+          execute: async () => ({ executed: true, exitCode: 0, timedOut: false, error: null, durationMs: 1 }),
+        });
+      },
+    });
+
+    return { result, request: seen[0] ?? null };
+  };
+
+  for (const adapterId of DESKTOP_ADAPTER_IDS) {
+    const adapter = describeAdapter(adapterId);
+    const nativeEvent = adapter.nativeEvents['work-complete'];
+    const payloadFor = (repositoryPath) => buildNativePayload(adapter, {
+      nativeEvent,
+      repositoryRoot: repositoryPath,
+      sessionId: 'conformance-resolve',
+    });
+
+    // The client sent a path that IS a repository root.
+    const atRoot = await drive(adapterId, payloadFor(root));
+
+    check(
+      findings,
+      atRoot.result.outcome === 'passed' && atRoot.request?.repository.root === root,
+      `${adapterId} could not use a client path that is already a repository root.`,
+    );
+
+    // The client sent a path INSIDE the repository. Resolving it is the whole
+    // correction: assuming it was a root would hand gate core a non-repository.
+    const inside = await drive(adapterId, payloadFor(path.join(root, 'packages/api/src')));
+
+    check(
+      findings,
+      inside.result.outcome === 'passed' && inside.request?.repository.root === root,
+      `${adapterId} handed gate core ${inside.request?.repository.root} instead of the resolved repository root.`,
+    );
+
+    // The client sent a path inside no repository at all.
+    const nowhere = await drive(adapterId, payloadFor(outsideAnyRepository));
+
+    check(
+      findings,
+      nowhere.result.outcome === 'unverified'
+        && nowhere.result.failure?.family === 'capability'
+        && nowhere.request === null,
+      `${adapterId} claimed a repository root where none exists.`,
+    );
+  }
+
+  // Cursor alone supports multi-root workspaces, and a multi-root workspace has
+  // no single repository root. Picking one would be a guess.
+  const cursor = describeAdapter('cursor');
+  const multiRoot = await drive('cursor', {
+    ...buildNativePayload(cursor, {
+      nativeEvent: cursor.nativeEvents['work-complete'],
+      repositoryRoot: root,
+      sessionId: 'conformance-multi-root',
+    }),
+    [cursor.nativeIdentity.repositoryRoot.field]: [root, otherRoot],
+  });
+
+  check(
+    findings,
+    multiRoot.result.outcome === 'unverified'
+      && multiRoot.result.failure?.family === 'capability'
+      && multiRoot.request === null,
+    `cursor selected a repository root from a multi-root workspace instead of reporting unverified.`,
+  );
+
+  return { name: 'repository-root-is-resolved', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -683,6 +827,7 @@ const main = async () => {
       await oneDecisionFourSurfaces(),
       await supportedDesktopBaseline(),
       await failuresAreUnverified(),
+      await repositoryRootIsResolved(),
     ];
   } finally {
     for (const root of temporaryRoots) {

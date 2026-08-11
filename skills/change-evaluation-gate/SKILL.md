@@ -99,7 +99,7 @@ as a separate future action.
 
 ## Supported preflight adapters
 
-The Gate ships one authoritative integration and three supported v1 preflight
+The Gate ships one authoritative integration and three declared v1 preflight
 surfaces: local Git `pre-commit`, Claude Code Desktop's local Code tab, Codex
 Desktop with a local project, and Cursor IDE's local Agent. Which native events
 each surface normalizes, what each declares about its own event, blocking,
@@ -114,6 +114,13 @@ decision as structured `not-authoritative` preflight feedback and blocks
 nothing, and lacking native blocking never disqualifies it. CLI, SSH, remote,
 cloud, and background-agent variants are experimental; chat-only or hosted
 surfaces without repository, process, and Git access are unsupported.
+
+All three desktop surfaces are currently `experimental`. Their declared fields
+and event values come from real captured client payloads and each passes the
+offline baseline, but no adapter has yet been driven end to end by a real
+client invocation, and a baseline whose fixtures came from the declaration
+under test cannot establish support. Report them as declared, never as
+supported.
 
 Installing an adapter never registers it. Adapters are dormant assets until the
 Activation transaction self-tests and registers them.
