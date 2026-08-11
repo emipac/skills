@@ -23,6 +23,7 @@ verification:
     - gate-runtime-binding-smoke
     - gate-fix-smoke
     - gate-evidence-prune-smoke
+    - gate-activation-smoke
   commands:
     format:
       backend: []

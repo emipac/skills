@@ -1,8 +1,8 @@
-# Handoff — Change Evaluation Gate, resume at TB-010
+# Handoff — Change Evaluation Gate, resume at TB-011
 
-> **Updated 2026-08-10 (third pass).** TB-008 and TB-009 are now DONE and
-> verified. The resume point is **TB-010**. The filename still says TB-008 for
-> link stability; trust this heading and the state table below.
+> **Updated 2026-08-11 (fourth pass).** TB-008, TB-009 and TB-010 are now DONE
+> and verified. The resume point is **TB-011**. The filename still says TB-008
+> for link stability; trust this heading and the state table below.
 
 Written 2026-08-10 by the orchestrating Tech Lead session. Read this before
 touching the Gate. It records only what is NOT already in the tickets, the SRS,
@@ -15,15 +15,15 @@ killed mid-run (its work had already landed, verified after the fact). Work was
 stopped at a clean ticket boundary rather than risking a half-written slice.
 Nothing is in a partial state.
 
-## State: 9 of 15 tickets done
+## State: 10 of 15 tickets done
 
 | Done | Open |
 | --- | --- |
-| TB-001 … TB-009 | TB-010 … TB-015 |
+| TB-001 … TB-010 | TB-011 … TB-015 |
 
-**TB-001 … TB-008 are COMMITTED** as `07574ef` on branch
-`agent/change-evaluation-gate-planning` (not pushed). **TB-009 is uncommitted**
-working-tree work.
+**TB-001 … TB-009 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
+(`07574ef` = TB-002…TB-008, `371609b` = TB-009; not pushed). **TB-010 is
+uncommitted** working-tree work.
 
 Ticket status lines in `.scratch/change-evaluation-gate/issues/` are accurate —
 trust them. TB-001 is committed (`247247d`); **TB-002 … TB-007 are uncommitted
@@ -37,12 +37,13 @@ directly by the Tech Lead, not taken from agent self-reports:
 
 | Gate | Result |
 | --- | --- |
-| `npm run test:unit` | **177 pass, 0 fail** (session baseline was 92) |
-| `npm run validate` | OK — 29 released skills, 187 Markdown files |
+| `npm run test:unit` | **188 pass, 0 fail** (session baseline was 92) |
+| `npm run validate` | OK — 29 released skills, 190 Markdown files |
 | `npm run test:install` | OK — 12 skills across 5 clients |
 | `npm run gate-runtime-binding-smoke` | exit 0 (added by TB-006) |
 | `npm run gate-fix-smoke` | exit 0 (added by TB-007) |
 | `npm run gate-evidence-prune-smoke` | exit 0 (added by TB-008) |
+| `npm run gate-activation-smoke` | exit 0 (added by TB-010) |
 
 If any of these is red before you change anything, stop and investigate — it
 means something drifted after this handoff was written.
@@ -56,9 +57,8 @@ TB-009 ──┴─────────────────────�
 TB-005/006/008 ─> TB-014 ───────────────────┘
 ```
 
-Concrete sequence: ~~TB-008~~ → ~~TB-009~~ → **TB-010** → TB-011 → TB-012 →
-TB-013 → TB-014 → TB-015. **TB-010 is the correct next ticket** (its blockers
-TB-002, TB-004, and TB-008 are all done).
+Concrete sequence: ~~TB-008~~ → ~~TB-009~~ → ~~TB-010~~ → **TB-011** → TB-012 →
+TB-013 → TB-014 → TB-015. **TB-011 is the correct next ticket.**
 TB-012 and TB-013 are the only genuinely parallel pair, but they share
 `skills/change-evaluation-gate/` and `tests/`, so this session ran everything
 sequentially to avoid write collisions. Recommend keeping that.
@@ -143,6 +143,7 @@ Remaining capabilities to create: `gate-evidence-prune-smoke` (TB-008),
 | `fix.mjs`, `mutation.mjs` | TB-007 | Explicit `gate fix`, provider-declared `fix_order`, forced reevaluation |
 | `evidence-store.mjs`, `evidence-bounds.mjs`, `redaction.mjs`, `lifecycle-event.mjs` | TB-008 | Append-only content-addressed store under the Git common dir, v1 ceilings, redaction, 11 Lifecycle event types, durable bypass ledger |
 | `coordination.mjs` | TB-009 | Per-Git-common-directory lock, identical in-flight sharing, role-specific decisions, Git queue priority, subscriber-local cancellation, audited stale recovery |
+| `activation.mjs` | TB-010 | Previewed, consent-bound Activation transaction with LIFO rollback; `ACTIVATION_STEPS` ends at `git-enablement` so Git is enabled last; pinned receipt at `<store-root>/activation/receipt.json` |
 
 The Evidence ladder stage order is exported from
 `skills/verify-change/scripts/verification-plan.mjs` as `evidenceLadderStages`.
@@ -166,6 +167,15 @@ not create a parallel decision shape:
   heartbeat, that is new work — see `references/evaluation-coordination-contract.md`.
 - **No operator-facing lock command.** Like `gate prune`, it belongs with
   **TB-012**'s lifecycle commands.
+- **Hook composition is deliberately minimal (TB-010 → TB-011 handoff).**
+  TB-010 registers an owned shim ONLY where no hook exists and refuses
+  otherwise; it also refuses a shared/global `core.hooksPath`. The full ordered
+  strategy — native hook manager → confirmed marker-delimited block in an
+  existing hook → owned shim — plus paused/resumed trust identity binding is
+  **TB-011's**. Extend `activation.mjs` in place; `ACTIVATION_STEPS` already has
+  `hook-chain-validation` and `trust` steps to hang it on.
+- **`git-enablement` must stay LAST in `ACTIVATION_STEPS`** (frozen array in
+  `activation.mjs`). FR-LIFE-004 requires it; verified by the Tech Lead.
 - No user-facing `gate prune` operator command exists. TB-008 built the library
   seam plus its capability script (what its matrix required); the operator
   command surface belongs with **TB-012**'s lifecycle commands.
@@ -199,6 +209,12 @@ not create a parallel decision shape:
   output capture was unreachable on any production path. **Default stays
   `captureOutput = false` / `stdio: 'ignore'`** — verified, no behavior change
   for existing callers.
+- **TB-010** added `store.activationReceipt()` (`read`/`write`/`remove`) to
+  TB-008's store — the one deliberately non-append-only piece (current state,
+  not history); the audit trail stays append-only via `activation` Lifecycle
+  events. It also rolls back an activation whose Lifecycle event cannot be
+  written (`activation-record-failed`), on the reasoning that authoritative
+  enforcement with no audit record violates NFR-AUD-001/SG-LIFE-001. Accepted.
 - **TB-008 fixed a real defect**, not just added features: on macOS a linked
   worktree resolved `/private/var/...` while the primary resolved `/var/...`,
   producing *two* evidence stores for one clone. The Git common directory is now

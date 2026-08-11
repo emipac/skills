@@ -170,6 +170,8 @@ export const openEvidenceStore = async ({
     bypassLedger: path.join(root, 'bypass-ledger.ndjson'),
     tombstones: path.join(root, 'tombstones.ndjson'),
     prunings: path.join(root, 'prunings.ndjson'),
+    activation: path.join(root, 'activation'),
+    activationReceipt: path.join(root, 'activation', 'receipt.json'),
   };
 
   for (const directory of [paths.root, paths.envelopes, paths.blobs, paths.staging]) {
@@ -242,6 +244,42 @@ export const openEvidenceStore = async ({
 
     return { appended: true, reasonCode: null, errors: [], event };
   };
+
+  /**
+   * The clone-local Activation receipt.
+   *
+   * The receipt is the only piece of this store that is not append-only, and
+   * deliberately so: it is current activation state, not history. It is
+   * published by a single atomic rename and withdrawn by a single removal, so
+   * an interrupted Activation transaction leaves either a whole receipt or no
+   * receipt at all — never a partial one (NFR-REL-002).
+   *
+   * Its audit trail stays append-only: every write and every withdrawal also
+   * appends an immutable Lifecycle event, so removing a receipt never removes
+   * the record that it once existed (FR-EVID-005, SG-LIFE-001).
+   */
+  const activationReceipt = () => ({
+    path: paths.activationReceipt,
+    read: async () => {
+      const contents = await readFile(paths.activationReceipt, 'utf8').catch((error) => {
+        if (error.code === 'ENOENT') {
+          return null;
+        }
+
+        throw error;
+      });
+
+      return contents === null ? null : JSON.parse(contents);
+    },
+    write: async (receipt) => {
+      await writeAtomic(paths.activationReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
+
+      return receipt;
+    },
+    remove: async () => {
+      await rm(paths.activationReceipt, { force: true });
+    },
+  });
 
   const readBypassLedger = () => readLines(paths.bypassLedger);
 
@@ -679,6 +717,7 @@ export const openEvidenceStore = async ({
     paths,
     limits,
     violations,
+    activationReceipt,
     appendEvidence,
     appendLifecycleEvent,
     bypassLedger,

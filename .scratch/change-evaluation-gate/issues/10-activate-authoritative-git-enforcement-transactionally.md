@@ -1,6 +1,6 @@
 # TB-010 — Activate authoritative Git enforcement transactionally
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -50,7 +50,7 @@ Do not activate during install or setup, grant client trust, enable Git before s
 
 ## Acceptance Criteria
 
-- [ ] `AC-LIFE-002`: success records previewed identities and enables Git last; failure at any step restores configured state with no partial receipt or registration.
+- [x] `AC-LIFE-002`: success records previewed identities and enables Git last; failure at any step restores configured state with no partial receipt or registration.
 
 ## Verification Matrix
 

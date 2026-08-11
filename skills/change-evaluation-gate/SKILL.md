@@ -75,8 +75,15 @@ activation state.
 
 Do not create or modify Git hooks, `core.hooksPath`, trust settings, runtime
 inputs, activation receipts, active-release pointers, or evidence storage.
-Those are clone-local Activation transaction responsibilities delivered by
-later Gate lifecycle work.
+Those belong to the separate, explicitly requested, clone-local Activation
+transaction defined by the
+[Activation transaction contract](references/activation-transaction-contract.md):
+it previews exact changes and commands, obtains repository-bound consent,
+resolves runners, establishes client-controlled trust, validates the existing
+hook chain, self-tests the adapters and the evaluation process, pins a receipt,
+and enables authoritative Git last. Configuring policy never starts it, and a
+failed transaction leaves the clone configured with no receipt and no
+registration.
 
 Report the repository as `configured`, never `activated`, and name activation
 as a separate future action.
