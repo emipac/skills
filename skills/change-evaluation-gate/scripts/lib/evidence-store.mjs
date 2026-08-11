@@ -254,9 +254,16 @@ export const openEvidenceStore = async ({
    * an interrupted Activation transaction leaves either a whole receipt or no
    * receipt at all — never a partial one (NFR-REL-002).
    *
-   * Its audit trail stays append-only: every write and every withdrawal also
-   * appends an immutable Lifecycle event, so removing a receipt never removes
-   * the record that it once existed (FR-EVID-005, SG-LIFE-001).
+   * These two operations move bytes and nothing else. The Lifecycle event that
+   * makes the change auditable is appended by the lifecycle command performing
+   * it — activation, update, deactivation, repair — because only that caller
+   * knows which governed action this write belongs to and what its outcome was.
+   * That is what keeps one governed action to exactly one event rather than a
+   * generic store record beside a specific caller record.
+   *
+   * A new caller that writes or removes the receipt directly therefore owes the
+   * audit trail its own `appendLifecycleEvent`; nothing here appends one for it
+   * (FR-EVID-005, SG-LIFE-001).
    */
   const activationReceipt = () => ({
     path: paths.activationReceipt,
@@ -432,18 +439,30 @@ export const openEvidenceStore = async ({
       let blobId = null;
       let blobBytes = 0;
 
+      // Blobs are content-addressed, so identical output from several checks is
+      // one stored file. The per-evaluation ceiling bounds what is written, so
+      // it counts distinct content once rather than charging every reference.
+      const candidateId = `sha256:${digestOf(captured)}`;
+      const alreadyPending = pending.some((entry) => entry.blobId === candidateId);
+
       if (captured.length > limits.blobBytes) {
         // A single attempt may never exceed the per-blob ceiling. The inline
         // excerpt still records what was seen and how much was left out.
         blobReasonCode = 'blob-limit-exceeded';
-      } else if (evaluationBlobBytes + captured.length > limits.evaluationBlobBytes) {
+      } else if (
+        !alreadyPending
+        && evaluationBlobBytes + captured.length > limits.evaluationBlobBytes
+      ) {
         blobReasonCode = 'evaluation-blob-limit-exceeded';
       } else {
         blobOutcome = 'retained';
-        blobId = `sha256:${digestOf(captured)}`;
+        blobId = candidateId;
         blobBytes = captured.length;
-        evaluationBlobBytes += captured.length;
-        pending.push({ bytes: captured, descriptor: { evaluationId, checkId, attempt } });
+
+        if (!alreadyPending) {
+          evaluationBlobBytes += captured.length;
+          pending.push({ blobId, bytes: captured, descriptor: { evaluationId, checkId, attempt } });
+        }
       }
 
       attempts.push({
@@ -647,6 +666,7 @@ export const openEvidenceStore = async ({
         previewedBlobIds: (preview?.blobs ?? []).map((blob) => blob.blobId),
         expectedConfirmation: expected,
         removed: [],
+        retained: [],
         reclaimedBytes: 0,
       };
 
@@ -665,9 +685,36 @@ export const openEvidenceStore = async ({
     const pruningId = randomUUID();
     const prunedAt = clock().toISOString();
     const removed = [];
+    const retained = [];
     let reclaimedBytes = 0;
 
+    // A preview is a snapshot of what was referenced when it was taken. Between
+    // then and now another evaluation may have appended output with identical
+    // content, which content-addressing stores as this same blob. Removing it
+    // would strand an envelope nobody asked to prune, so the live index decides
+    // (FR-EVID-004, SG-EVID-001).
+    const live = new Map(groupByBlob(await listBlobs()).map((blob) => [blob.blobId, blob]));
+    const referenceKey = (reference) => [
+      reference?.evaluationId ?? null,
+      reference?.checkId ?? null,
+      reference?.attempt ?? null,
+    ].join(' ');
+
     for (const blob of preview.blobs) {
+      const previewed = new Set((blob.references ?? []).map(referenceKey));
+      const current = live.get(blob.blobId)?.references ?? [];
+      const gained = current.filter((reference) => !previewed.has(referenceKey(reference)));
+
+      if (gained.length > 0) {
+        retained.push({
+          blobId: blob.blobId,
+          reason: 'referenced-since-preview',
+          references: gained,
+        });
+
+        continue;
+      }
+
       // The blob file goes; nothing else does. The tombstone is appended first
       // so an interrupted prune can never leave an unrecorded removal.
       const tombstone = {
@@ -696,6 +743,7 @@ export const openEvidenceStore = async ({
       previewedBlobIds: preview.blobs.map((blob) => blob.blobId),
       expectedConfirmation: expected,
       removed,
+      retained,
       reclaimedBytes,
     };
 
@@ -705,7 +753,7 @@ export const openEvidenceStore = async ({
       before: expected,
       after: pruningId,
       outcome: 'succeeded',
-      reason: `Removed ${removed.length} blob(s) and reclaimed ${reclaimedBytes} bytes; envelopes, decisions, events, pruning records, and tombstones were preserved.`,
+      reason: `Removed ${removed.length} blob(s) and reclaimed ${reclaimedBytes} bytes; ${retained.length} previewed blob(s) were retained because an evaluation referenced them after the preview; envelopes, decisions, events, pruning records, and tombstones were preserved.`,
     });
 
     return { ...record };

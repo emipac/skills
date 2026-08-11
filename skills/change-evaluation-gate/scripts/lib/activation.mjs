@@ -590,15 +590,17 @@ export const withdrawHookRegistration = async ({
   ownership = 'gate-owned-shim',
   blockIdentity = null,
   receiptId = null,
+  // Every receipt id this clone has issued for this activation, newest first.
+  // An update rewrites the receipt but not the registration, so the block goes
+  // on naming the receipt that authorized it; all of them are ours.
+  acceptedReceiptIds = null,
   priorIdentity = null,
   dryRun = false,
 }) => {
   const refuse = (reason) => ({ removable: false, removed: false, reason });
-
-  if (blockIdentity === null) {
-    // Nothing pinned the registration, so nothing can prove the gate wrote it.
-    return refuse('unknown-registration');
-  }
+  const accepted = acceptedReceiptIds === null
+    ? (receiptId === null ? [] : [receiptId])
+    : acceptedReceiptIds.filter((id) => typeof id === 'string' && id.length > 0);
 
   const contents = await readFile(hookPath, 'utf8').catch((error) => {
     if (error.code === 'ENOENT') {
@@ -622,11 +624,19 @@ export const withdrawHookRegistration = async ({
     return refuse('registration-malformed');
   }
 
-  if (registration.blockIdentity !== blockIdentity) {
-    return refuse('registration-drifted');
-  }
+  // Ownership is proved by the pinned block identity when the receipt has one.
+  // A receipt written before that field existed pins nothing, so the marker the
+  // gate wrote into the block — one of our own receipt ids — is the proof
+  // instead. Without either, nothing shows the gate wrote this file.
+  const namesOurReceipt = accepted.length > 0 && accepted.includes(registration.receiptId);
 
-  if (receiptId !== null && registration.receiptId !== receiptId) {
+  if (blockIdentity === null) {
+    if (!namesOurReceipt) {
+      return refuse('unknown-registration');
+    }
+  } else if (registration.blockIdentity !== blockIdentity) {
+    return refuse('registration-drifted');
+  } else if (accepted.length > 0 && !namesOurReceipt) {
     return refuse('receipt-mismatch');
   }
 

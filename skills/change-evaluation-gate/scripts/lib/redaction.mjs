@@ -165,7 +165,18 @@ export const createRedactor = ({ secrets = [], patterns = [] } = {}) => {
   return {
     version: REDACTION_VERSION,
     // Only the identity of a declared Sensitive input travels; never its value.
-    secrets: declared.map(({ name, source, value }) => ({ name, source, value })),
+    //
+    // The residual scan needs the value to prove it absent, so the value is
+    // carried but made non-enumerable: `JSON.stringify`, `console.log`, object
+    // spread, and `Object.entries` all see identity only, while
+    // `residualFindings` reads it by direct property access. A diagnostic that
+    // serializes the redactor therefore cannot leak a declared secret
+    // (SG-SECRET-001).
+    secrets: declared.map(({ name, source, value }) => Object.defineProperty(
+      { name, source },
+      'value',
+      { value, enumerable: false, writable: false, configurable: false },
+    )),
     redactText,
     redactValue,
   };

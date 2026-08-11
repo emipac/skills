@@ -62,6 +62,20 @@ const releaseOf = (gate) => (gate === null || gate === undefined ? null : {
 export const activeRelease = (receipt) => releaseOf(receipt?.runtime?.gate ?? null);
 
 /**
+ * Every receipt id this activation has been published under, newest first.
+ *
+ * An update rewrites the receipt and mints a new id, but it does not rewrite the
+ * registration on disk — the block goes on naming the receipt that authorized
+ * it. All of them belong to this activation, so a registration naming any of
+ * them is still ours, and only a registration naming something else is a
+ * genuine mismatch (FR-LIFE-008, FR-LIFE-009).
+ */
+export const authorizedReceiptIds = (receipt) => [
+  receipt?.receiptId ?? null,
+  ...(receipt?.receiptLineage ?? []),
+].filter((id) => typeof id === 'string' && id.length > 0);
+
+/**
  * What an ordinary distribution makes available.
  *
  * A newer installed skill, plugin, or package is a *candidate* and nothing
@@ -326,6 +340,9 @@ export const updateGate = async ({
       previewId: preview.previewId,
       migrations: preview.migrations.map((migration) => migration.id),
     },
+    // The whole lineage, not just the previous id: the registration on disk
+    // still names whichever receipt authorized it, however many updates ago.
+    receiptLineage: authorizedReceiptIds(receipt),
     selfTests,
   };
 
@@ -395,6 +412,8 @@ export const statusGate = async ({
 
   // The authoritative registration: is the hook still there, and is it still
   // the exact block this activation wrote?
+  const authorized = authorizedReceiptIds(receipt);
+
   for (const hook of receipt.hooks ?? []) {
     const registration = await readHookRegistration(hook.path, hook.ownership);
 
@@ -403,6 +422,11 @@ export const statusGate = async ({
         area: 'git',
         severity: 'authoritative',
         code: 'hook-absent',
+        // Which registration drifted, so a repair can target this one rather
+        // than guessing at the first hook the receipt happens to list.
+        hook: hook.hook ?? AUTHORITATIVE_HOOK,
+        path: hook.path,
+        ownership: hook.ownership,
         detail: `The authoritative ${hook.hook ?? AUTHORITATIVE_HOOK} registration at ${hook.path} is gone.`,
       });
 
@@ -416,14 +440,20 @@ export const statusGate = async ({
         area: 'git',
         severity: 'authoritative',
         code: 'hook-block-tampered',
+        hook: hook.hook ?? AUTHORITATIVE_HOOK,
+        path: hook.path,
+        ownership: hook.ownership,
         detail: `The gate-owned block at ${hook.path} is no longer the block this activation wrote.`,
       });
-    } else if (pinned.blockIdentity && registration.receiptId !== receipt.receiptId) {
+    } else if (pinned.blockIdentity && !authorized.includes(registration.receiptId)) {
       findings.push({
         area: 'git',
         severity: 'authoritative',
         code: 'hook-receipt-mismatch',
-        detail: `The gate-owned block at ${hook.path} names activation receipt ${registration.receiptId ?? 'none'} rather than ${receipt.receiptId}.`,
+        hook: hook.hook ?? AUTHORITATIVE_HOOK,
+        path: hook.path,
+        ownership: hook.ownership,
+        detail: `The gate-owned block at ${hook.path} names activation receipt ${registration.receiptId ?? 'none'}, which this clone never issued.`,
       });
     }
   }
@@ -536,6 +566,10 @@ export const deactivateGate = async ({ evidenceStore = null } = {}, dependencies
     ownership: hook.ownership,
     blockIdentity: pinned.blockIdentity ?? null,
     receiptId: receipt.receiptId,
+    // A registration written before an update still names the receipt that
+    // authorized it, and a receipt written before block identities were pinned
+    // has this marker as its only ownership proof.
+    acceptedReceiptIds: authorizedReceiptIds(receipt),
     priorIdentity: pinned.priorIdentity ?? null,
   }));
 
@@ -625,7 +659,10 @@ const refuseAsset = async ({ asset, repositoryRoot, configurationPath, storeRoot
   });
 
   if (contents === null) {
-    return { path: resolved, reason: 'asset-absent' };
+    // Already in the desired state. This is not a safety condition, so it must
+    // not refuse the operation the way a modified asset does — otherwise an
+    // interrupted uninstall could never be completed on a retry.
+    return { path: resolved, reason: 'asset-absent', satisfied: true };
   }
 
   if (asset?.identity == null || contentIdentity(contents) !== asset.identity) {
@@ -691,6 +728,7 @@ export const uninstallGate = async ({
   }
 
   const refused = [];
+  const alreadyAbsent = new Set();
 
   for (const asset of assets) {
     const refusal = await refuseAsset({
@@ -700,9 +738,18 @@ export const uninstallGate = async ({
       storeRoot: evidenceStore?.root ?? path.join(repositoryRoot ?? '.', '.git'),
     });
 
-    if (refusal !== null) {
-      refused.push(refusal);
+    if (refusal === null) {
+      continue;
     }
+
+    if (refusal.satisfied === true) {
+      // Nothing to remove and nothing to protect: skip it and keep going.
+      alreadyAbsent.add(refusal.path);
+
+      continue;
+    }
+
+    refused.push(refusal);
   }
 
   if (refused.length > 0) {
@@ -720,6 +767,10 @@ export const uninstallGate = async ({
 
   for (const asset of assets) {
     const resolved = path.resolve(asset.path);
+
+    if (alreadyAbsent.has(resolved)) {
+      continue;
+    }
 
     await rm(resolved, { force: true });
     removed.push({ kind: 'project-asset', path: resolved });
@@ -755,6 +806,30 @@ const locateGateKeys = (contents, keys) => {
   const blocks = [];
   let current = null;
 
+  /**
+   * Where the Gate's own block really ends.
+   *
+   * Blank lines and comments immediately above the next top-level key introduce
+   * that key, not this one. Ending the block at the last line that is actually
+   * part of the Gate's value leaves somebody else's comment exactly where they
+   * wrote it.
+   */
+  const lastOwnedLine = (startLine, beforeLine) => {
+    let end = startLine;
+
+    for (let index = startLine + 1; index < beforeLine; index += 1) {
+      const line = lines[index];
+
+      if (line.trim() === '' || line.trimStart().startsWith('#')) {
+        continue;
+      }
+
+      end = index;
+    }
+
+    return end;
+  };
+
   lines.forEach((line, index) => {
     const match = TOP_LEVEL_KEY.exec(line);
 
@@ -763,7 +838,7 @@ const locateGateKeys = (contents, keys) => {
     }
 
     if (current !== null) {
-      current.endLine = index - 1;
+      current.endLine = lastOwnedLine(current.startLine, index);
       blocks.push(current);
       current = null;
     }
@@ -774,6 +849,7 @@ const locateGateKeys = (contents, keys) => {
   });
 
   if (current !== null) {
+    current.endLine = lastOwnedLine(current.startLine, lines.length);
     blocks.push(current);
   }
 
@@ -928,17 +1004,26 @@ export const previewRepair = async ({
   const receipt = status.receipt;
   const pinned = receipt?.hookChain ?? {};
   const repairable = new Set(['hook-absent', 'hook-block-tampered', 'hook-receipt-mismatch']);
+  const hooks = receipt?.hooks ?? [];
   const actions = status.findings
     .filter((finding) => repairable.has(finding.code))
-    .map((finding) => ({
-      kind: 'hook-registration',
-      code: finding.code,
-      path: pinned.path ?? (receipt?.hooks ?? [])[0]?.path ?? null,
-      ownership: (receipt?.hooks ?? [])[0]?.ownership ?? null,
-      blockIdentity: pinned.blockIdentity ?? null,
-      priorIdentity: pinned.priorIdentity ?? null,
-      receiptId: receipt?.receiptId ?? null,
-    }));
+    .map((finding) => {
+      // Repair the registration that actually drifted. Each finding names its
+      // own hook, so a receipt listing several never has one of them repaired
+      // in place of another.
+      const hook = hooks.find((entry) => entry.path === finding.path) ?? null;
+
+      return {
+        kind: 'hook-registration',
+        code: finding.code,
+        hook: finding.hook ?? hook?.hook ?? null,
+        path: finding.path ?? hook?.path ?? pinned.path ?? hooks[0]?.path ?? null,
+        ownership: finding.ownership ?? hook?.ownership ?? hooks[0]?.ownership ?? null,
+        blockIdentity: pinned.blockIdentity ?? null,
+        priorIdentity: pinned.priorIdentity ?? null,
+        receiptId: receipt?.receiptId ?? null,
+      };
+    });
   const body = {
     status: status.status,
     receiptId: receipt?.receiptId ?? null,
