@@ -137,6 +137,23 @@ version — release qualification work, tracked by `TB-015`.
 
 Also out of scope and untouched: the hook-registration divergence (Finding 8).
 
+## Checked again 2026-08-11 by TB-015 — AC-ADAPT-002 still not met
+
+Release qualification re-derived every surface's tier from its own baseline
+rather than reading the declared one. All four surfaces — the three desktop
+adapters and authoritative Git — came back `experimental` /
+`client-invocation-not-observed`, and the compatibility manifest records
+`client: null` for each, because no client was launched, probed, or driven.
+
+`AC-ADAPT-002` therefore stays unticked in this ticket and in `TB-015`, and this
+ticket stays REOPEN. The remaining work is unchanged and is now written down as
+an executable checklist: `PROMOTION_REQUIREMENTS` in
+`skills/change-evaluation-gate/scripts/lib/release-qualification.mjs`, and
+section 5 of
+`skills/change-evaluation-gate/references/release-qualification-contract.md`.
+
+Nothing in `adapters.mjs` was modified by `TB-015`.
+
 ## Unresolved Assumptions
 
 None.

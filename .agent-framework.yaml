@@ -28,6 +28,7 @@ verification:
     - gate-lifecycle-smoke
     - gate-adapter-conformance
     - gate-security-control-smoke
+    - gate-runtime-portability
   commands:
     format:
       backend: []

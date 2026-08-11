@@ -127,3 +127,22 @@ Activation transaction self-tests and registers them.
 
 Completion criterion: repository policy may be configured, but the clone has
 no Gate-owned operational state and commit behavior is unchanged.
+
+## Release qualification
+
+A Gate-capable release carries a compatibility manifest: the release version
+read from `package.json`, the environments its runtime portability matrix was
+actually executed on, every surface's shared baseline outcomes with the exact
+versions they ran under, and the delivery risks that stayed open. What the
+manifest must be able to show, and what a maintainer must record to promote a
+surface out of `experimental`, are defined by the
+[release qualification contract](references/release-qualification-contract.md).
+
+Run `npm run gate-runtime-portability` to execute the matrix and qualify the
+manifest here; add `--json` for the whole manifest and `--out <path>` to write
+it. Support tiers are derived from the evidence rather than declared, tested
+versions are an evidence snapshot rather than a standing allowlist, and an
+environment nobody ran the matrix on is `unverified` — untested, not refused.
+
+Completion criterion: every claim in the manifest is one the evidence beside it
+produces.

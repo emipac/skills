@@ -55,7 +55,7 @@ Do not silently omit failed fixtures, convert evidence into a permanent version 
 ## Acceptance Criteria
 
 - [ ] `AC-ADAPT-002`: each supported local surface passes its shared baseline, defined failures are `unverified`, unsupported contexts cannot claim support, and exact versions and outcomes are recorded.
-- [ ] `AC-PORT-001`: every claimed environment passes executable, stream, JSON, timeout, process-tree, Git-index, linked-worktree, path, declared-write, immutability, and non-interactive fixtures.
+- [x] `AC-PORT-001`: every claimed environment passes executable, stream, JSON, timeout, process-tree, Git-index, linked-worktree, path, declared-write, immutability, and non-interactive fixtures.
 
 ## Verification Matrix
 
@@ -73,6 +73,51 @@ Frontend build and browser evidence are inapplicable to repository frontend code
 - `TB-009` — concurrency and linked-worktree behavior must be qualified.
 - `TB-013` — all supported adapter fixtures must exist.
 - `TB-014` — trusted policy, redaction, and drift safeguards must exist.
+
+## Qualification landed 2026-08-11 — AC-PORT-001 met, AC-ADAPT-002 still open
+
+The compatibility manifest, its qualification rules, and the
+`gate-runtime-portability` capability landed. The capability detects this
+environment, reads the release version from `package.json`, executes all eleven
+`AC-PORT-001` fixtures against throwaway repositories, runs every adapter's
+shared baseline, gathers real timing and conflicting-attempt evidence, and
+qualifies the manifest. Exit status is 0 only when every fixture holds and the
+manifest qualifies.
+
+**`AC-PORT-001` is met.** One environment is claimed — the machine this ran on,
+detected rather than declared: macOS 26.6.1, arm64, kernel 25.6.0, Node
+v24.6.0, npm 11.5.1, git 2.51.0. All eleven fixtures passed on it, each with a
+recorded outcome and duration. Every other operating system and runtime
+combination is recorded `unverified` with a stated reason — untested, not
+refused, per `Q-004`. The matrix is a function of what is claimed, and claiming
+one environment is what one machine can evidence.
+
+**`AC-ADAPT-002` is NOT met and stays unticked, here and in `TB-013`.** No
+surface reached `supported`. The shared baseline still runs on payloads this
+repository builds from the declaration under test, so `classifySupport` returns
+`experimental` / `client-invocation-not-observed` for all four surfaces,
+including authoritative Git. The manifest therefore records no exact client
+version for any surface, which is the clause `AC-ADAPT-002` most directly
+requires. Qualification does not merely permit this outcome — it enforces it:
+the declared tier is re-derived from the same baseline and any disagreement,
+overstated or understated, fails the release.
+
+What remains, for whoever picks this up: a baseline run driven by a real client
+invocation for at least one surface, recording that client's exact version. The
+exact steps are `PROMOTION_REQUIREMENTS` in
+`skills/change-evaluation-gate/scripts/lib/release-qualification.mjs` and
+section 5 of
+`skills/change-evaluation-gate/references/release-qualification-contract.md`.
+
+`RISK-003` and `RISK-007` remain OPEN and visible in the manifest, each with
+evidence observed by this run: measured timing for the bounded and terminated
+checks, and two genuinely conflicting attempts of one unchanged check, recorded
+rather than retried away.
+
+No version bump was performed. `package.json` stays at its current version; the
+release pull request's `changeset version` step produces `0.9.0` from the
+pending minor changesets, and the manifest reads the version at generation time
+so it can never disagree with the package.
 
 ## Unresolved Assumptions
 
