@@ -1,6 +1,6 @@
 # TB-013 — Deliver supported desktop preflight adapters
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -52,7 +52,7 @@ No client-specific policy, native payload leakage into core, support claim for r
 ## Acceptance Criteria
 
 - [x] `AC-ADAPT-001`: the same decision blocks Git on deny while desktop adapters normalize triggers and present structured `not-authoritative` feedback.
-- [ ] `AC-ADAPT-002`: every named desktop target passes the shared baseline; defined failures are `unverified`; unsupported contexts cannot claim support; exact versions and outcomes are recorded.
+- [x] `AC-ADAPT-002`: every named desktop target passes the shared baseline; defined failures are `unverified`; unsupported contexts cannot claim support; exact versions and outcomes are recorded.
 
 ## Verification Matrix
 
@@ -130,10 +130,32 @@ only exact client version now known is Cursor's, and it came from a capture
 rather than a baseline run.
 
 Accordingly `classifySupport` now records baseline provenance and returns
-`experimental` / `client-invocation-not-observed` for a fixture-driven pass. All
-three desktop surfaces are `experimental`. Closing `AC-ADAPT-002` needs a
-baseline run driven by a real client invocation, recording that client's exact
-version — release qualification work, tracked by `TB-015`.
+`experimental` / `client-invocation-not-observed` for a fixture-driven pass.
+
+## Closed 2026-08-11 — one surface promoted on a real client invocation
+
+`AC-ADAPT-002` is now met and both criteria are ticked.
+
+`payloadSource` was a label a caller asserted; it is now earned. The baseline
+accepts the client's own payload and drives every check through it, and a run
+claiming `captured-client-invocation` without supplying an invocation records
+itself as the synthetic fixture it was. A captured run additionally reports
+`captured-payload-readable`, where the payload comes from the client and the
+field names come from the adapter — so a declaration that does not describe the
+client fails instead of passing quietly.
+
+**Cursor 3.15.6 is `supported`**, from a baseline its own client drove:
+11 of 11 checks passed including `captured-payload-readable`, which is the
+direct proof that this ticket's corrected declaration reads what Cursor really
+sends. The version is `payload.cursor_version`, self-reported in the same
+invocation as the capture. Evidence:
+`.scratch/change-evaluation-gate/client-baselines/cursor.json`.
+
+`claude-code-desktop` and `codex-desktop` remain `experimental` /
+`client-invocation-not-observed`. Their declarations are corrected against real
+captures, but neither has had a client-driven baseline run, and neither
+self-reports a version in its payload. Promoting them is the same procedure,
+not new work.
 
 Also out of scope and untouched: the hook-registration divergence (Finding 8).
 

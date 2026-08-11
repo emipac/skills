@@ -1,0 +1,116 @@
+{
+  "ok": true,
+  "adapterId": "cursor",
+  "surface": "cursor-ide-local-agent",
+  "recordedAt": "2026-08-11T19:43:48.127Z",
+  "observedPayloadKeys": [
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "conversation_id",
+    "cursor_version",
+    "generation_id",
+    "hook_event_name",
+    "input_tokens",
+    "loop_count",
+    "model",
+    "model_id",
+    "model_params",
+    "output_tokens",
+    "session_id",
+    "status",
+    "transcript_path",
+    "user_email",
+    "workspace_roots"
+  ],
+  "clientVersion": "3.15.6",
+  "clientVersionSource": "payload.cursor_version",
+  "git": "git version 2.51.0",
+  "baseline": {
+    "adapterId": "cursor",
+    "surface": "cursor-ide-local-agent",
+    "role": "preflight",
+    "passed": true,
+    "checks": [
+      {
+        "id": "captured-payload-readable",
+        "ok": true,
+        "detail": "The declared field names read the client's own payload: event \"stop\", plus a repository root and a session identity."
+      },
+      {
+        "id": "deterministic-event",
+        "ok": true,
+        "detail": "stop normalized to work-complete on every attempt."
+      },
+      {
+        "id": "non-interactive-invocation",
+        "ok": true,
+        "detail": "The surface invoked the gate non-interactively and received a decision."
+      },
+      {
+        "id": "repository-identity",
+        "ok": true,
+        "detail": "The request named /var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-client-baseline-j58U4X."
+      },
+      {
+        "id": "session-identity",
+        "ok": true,
+        "detail": "The request named session baseline-session-1."
+      },
+      {
+        "id": "filesystem-access",
+        "ok": true,
+        "detail": "The declared repository root is readable from this surface."
+      },
+      {
+        "id": "git-access",
+        "ok": true,
+        "detail": "Git metadata resolved to .git."
+      },
+      {
+        "id": "structured-result-visible",
+        "ok": true,
+        "detail": "The surface presented a preflight result."
+      },
+      {
+        "id": "trust-failure-unverified",
+        "ok": true,
+        "detail": "A revoked grant produced unverified."
+      },
+      {
+        "id": "parallel-session-isolation",
+        "ok": true,
+        "detail": "Two concurrent sessions each carried their own identity."
+      },
+      {
+        "id": "declared-native-blocking",
+        "ok": true,
+        "detail": "Declared native blocking false; a deny decision did not block this surface."
+      }
+    ],
+    "evidence": {
+      "payloadSource": "captured-client-invocation"
+    },
+    "versions": {
+      "gate": "change-evaluation-gate/0.8.0",
+      "git": "git version 2.51.0",
+      "node": "v24.6.0",
+      "os": "darwin arm64",
+      "client": "3.15.6"
+    },
+    "recordedAt": "2026-08-11T19:43:48.126Z",
+    "failedChecks": []
+  },
+  "support": {
+    "adapterId": "cursor",
+    "variant": "desktop",
+    "tier": "supported",
+    "reason": "baseline-passed",
+    "versions": {
+      "gate": "change-evaluation-gate/0.8.0",
+      "git": "git version 2.51.0",
+      "node": "v24.6.0",
+      "os": "darwin arm64",
+      "client": "3.15.6"
+    }
+  }
+}

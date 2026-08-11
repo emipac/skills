@@ -1,6 +1,6 @@
 # TB-015 — Qualify the Gate-capable 0.9.0 release
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -54,7 +54,7 @@ Do not silently omit failed fixtures, convert evidence into a permanent version 
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-002`: each supported local surface passes its shared baseline, defined failures are `unverified`, unsupported contexts cannot claim support, and exact versions and outcomes are recorded.
+- [x] `AC-ADAPT-002`: each supported local surface passes its shared baseline, defined failures are `unverified`, unsupported contexts cannot claim support, and exact versions and outcomes are recorded.
 - [x] `AC-PORT-001`: every claimed environment passes executable, stream, JSON, timeout, process-tree, Git-index, linked-worktree, path, declared-write, immutability, and non-interactive fixtures.
 
 ## Verification Matrix
@@ -118,6 +118,31 @@ No version bump was performed. `package.json` stays at its current version; the
 release pull request's `changeset version` step produces `0.9.0` from the
 pending minor changesets, and the manifest reads the version at generation time
 so it can never disagree with the package.
+
+## Closed 2026-08-11 — AC-ADAPT-002 met by a client-driven baseline
+
+The open clause was "each supported local surface passes its shared baseline"
+and "exact versions are recorded", neither of which a fixture-driven run can
+establish, because the fixture and the declaration under test came from the same
+source.
+
+`runCompatibilityBaseline` now accepts the client's own payload and drives every
+check through it. `captured-client-invocation` can no longer be asserted — a run
+that claims it without supplying an invocation records itself as
+`synthetic-fixture`. `gate-client-baseline.mjs` is the runner a client hook
+invokes to produce that evidence, and `gate-runtime-portability` carries a
+recorded baseline into the manifest rather than re-deriving it, honouring only
+records whose run actually earned the label.
+
+**Cursor 3.15.6: `supported`**, 11 of 11 baseline checks, `payloadSource:
+captured-client-invocation`, version from `payload.cursor_version` in the same
+invocation as the capture.
+
+`git`, `claude-code-desktop`, and `codex-desktop` remain `experimental` /
+`client-invocation-not-observed`, which is the honest record: their
+declarations are corrected against real captures, but no client-driven baseline
+has been run for them. Under `Q-004` that is unverified, never denied, and the
+manifest states the procedure to promote each one.
 
 ## Unresolved Assumptions
 

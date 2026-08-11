@@ -42,7 +42,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -904,10 +904,50 @@ const OBSERVED_CLIENT_FACTS = Object.freeze({
  * therefore cannot return `supported` for any of them, which is the correct
  * outcome and not a limitation to work around (SG-SUPPORT-001).
  */
-const surfaceEvidence = async (adapterId, { environment, releaseVersion }) => {
+const surfaceEvidence = async (adapterId, { environment, releaseVersion, recorded = null }) => {
   const root = await repositoryWithHistory(`gate-portability-baseline-${adapterId}-`);
   const adapter = describeAdapter(adapterId);
   const executionRoot = await temporaryDirectory(`gate-portability-baseline-run-${adapterId}-`);
+
+  // A promotion run already produced this surface's baseline from an invocation
+  // its real client made. That evidence cannot be reproduced here — no client is
+  // launched by this capability — so it is carried, not re-derived, exactly as
+  // the manifest carries every other observed fact.
+  if (recorded !== null) {
+    const capabilities = { repositoryFilesystem: true, processExecution: true, git: true };
+    const derived = classifySupport({
+      adapterId,
+      variant: 'desktop',
+      capabilities,
+      baseline: recorded.baseline,
+    });
+
+    return {
+      adapterId,
+      surface: adapter.surface,
+      role: adapter.role,
+      variant: 'desktop',
+      capabilities,
+      tier: derived.tier,
+      reason: derived.reason,
+      baseline: recorded.baseline,
+      observed: OBSERVED_CLIENT_FACTS[adapterId] ?? null,
+      clientInvocation: {
+        recordedAt: recorded.recordedAt ?? null,
+        clientVersion: recorded.clientVersion ?? null,
+        clientVersionSource: recorded.clientVersionSource ?? null,
+        // Key names only; a native payload's values are the client's.
+        observedPayloadKeys: recorded.observedPayloadKeys ?? [],
+      },
+      promotion: promotionProcedure({
+        adapterId,
+        variant: 'desktop',
+        capabilities,
+        baseline: recorded.baseline,
+      }),
+    };
+  }
+
   // The real evaluation seam, with only the child-process execution injected —
   // the baseline is about the surface, not about a stand-in decision.
   const baseline = await runCompatibilityBaseline({ adapterId, repositoryRoot: root }, {
@@ -953,10 +993,51 @@ const surfaceEvidence = async (adapterId, { environment, releaseVersion }) => {
  * The matrix.
  * ------------------------------------------------------------------ */
 
+/**
+ * Load every recorded client-driven baseline, keyed by adapter.
+ *
+ * These are produced by `gate-client-baseline.mjs` running inside a real
+ * client. A record is only honoured when the run it describes actually earned
+ * `captured-client-invocation`; a record carrying anything else is ignored, so
+ * a hand-written file cannot promote a surface (SG-SUPPORT-001).
+ */
+const loadRecordedBaselines = async (directory) => {
+  const recorded = new Map();
+
+  if (directory === null) {
+    return recorded;
+  }
+
+  const entries = await readdir(directory).catch(() => []);
+
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) {
+      continue;
+    }
+
+    const record = await readFile(path.join(directory, entry), 'utf8')
+      .then((contents) => JSON.parse(contents))
+      .catch(() => null);
+
+    if (
+      record?.adapterId
+      && record.baseline?.evidence?.payloadSource === 'captured-client-invocation'
+    ) {
+      recorded.set(record.adapterId, record);
+    }
+  }
+
+  return recorded;
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   const outIndex = process.argv.indexOf('--out');
   const outPath = outIndex === -1 ? null : process.argv[outIndex + 1] ?? null;
+  const recordedIndex = process.argv.indexOf('--client-baselines');
+  const recordedPath = recordedIndex === -1
+    ? path.join(FRAMEWORK_ROOT, '.scratch', 'change-evaluation-gate', 'client-baselines')
+    : process.argv[recordedIndex + 1] ?? null;
   let manifest = null;
   let qualification = null;
   let fixtures = [];
@@ -990,10 +1071,15 @@ const main = async () => {
 
     flaky = await flakyAttemptEvidence();
 
+    const recorded = await loadRecordedBaselines(recordedPath);
     const surfaces = [];
 
     for (const adapterId of ADAPTER_IDS) {
-      surfaces.push(await surfaceEvidence(adapterId, { environment, releaseVersion }));
+      surfaces.push(await surfaceEvidence(adapterId, {
+        environment,
+        releaseVersion,
+        recorded: recorded.get(adapterId) ?? null,
+      }));
     }
 
     const timing = fixtures
