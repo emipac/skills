@@ -44,6 +44,7 @@ import {
   decisionOutcome,
   resolveBypass,
 } from './policy.mjs';
+import { reconcileControlSurface } from './security-control.mjs';
 import { ISOLATION, captureSnapshot, verifySnapshot } from './snapshot.mjs';
 import { delegateResolution } from './verification-seam.mjs';
 
@@ -425,6 +426,25 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     declarations: dependencies.graderSurfaces ?? {},
     executionRoot: snapshot.executionRoot,
   });
+  // Independent drift of a pinned Gate control surface ends the decision as
+  // `unverified`: a gate that can no longer identify its own runtime, adapters,
+  // hooks, receipt, trusted configuration, descriptors, or providers is not in
+  // a position to authorize anything, whatever the checks report
+  // (AC-SEC-001, NFR-SEC-004). It is reported, never repaired here.
+  if (dependencies.controlSurface) {
+    const reconciled = reconcileControlSurface({
+      receipt: dependencies.controlSurface.receipt ?? null,
+      observed: dependencies.controlSurface.observed ?? null,
+    });
+
+    if (reconciled.drifted) {
+      diagnostics.push({
+        reasonCode: reconciled.reasonCode,
+        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved.`,
+      });
+    }
+  }
+
   const acceptanceIds = new Set(scope.acceptanceIds);
   const changedPaths = dependencies.changedPaths ?? capture.changedPaths;
   const resolution = delegateResolution({

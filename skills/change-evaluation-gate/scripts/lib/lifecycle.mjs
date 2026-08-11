@@ -32,6 +32,7 @@ import {
 } from './activation.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { contentIdentity } from './evidence-store.mjs';
+import { reconcileControlSurface } from './security-control.mjs';
 
 /**
  * The ordered steps of one `gate update`, with the release switch always last.
@@ -368,6 +369,7 @@ export const updateGate = async ({
 export const statusGate = async ({
   evidenceStore = null,
   adapters = null,
+  controlSurface = null,
 } = {}, dependencies = {}) => {
   const { probeAdapter = async () => ({ ok: true }) } = dependencies;
 
@@ -448,6 +450,14 @@ export const statusGate = async ({
       adapter: adapter.id,
       detail: probe?.detail ?? `The ${adapter.id} adapter is no longer available.`,
     });
+  }
+
+  // Independent drift of a pinned Gate control surface: the clone can no longer
+  // say what it is enforcing, so it is `broken` rather than merely degraded
+  // (AC-SEC-001, NFR-SEC-004). A caller that observed nothing reconciles
+  // nothing; this reports and repairs exactly as much as everything above it.
+  if (controlSurface !== null) {
+    findings.push(...reconcileControlSurface({ receipt, observed: controlSurface }).findings);
   }
 
   const authoritativeLoss = findings.some((finding) => finding.severity === 'authoritative');

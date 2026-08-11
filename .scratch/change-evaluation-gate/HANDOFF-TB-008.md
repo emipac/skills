@@ -1,7 +1,9 @@
-# Handoff — Change Evaluation Gate, resume at TB-014
+# Handoff — Change Evaluation Gate, resume at TB-015 (final ticket)
 
-> **Updated 2026-08-11 (seventh pass).** TB-008 … TB-013 are now DONE and
-> verified. The resume point is **TB-014**, then TB-015 closes the feature.
+> **Updated 2026-08-11 (eighth pass).** TB-008 … TB-014 are now DONE and
+> verified. **TB-015 is the ONLY remaining ticket** and it closes the feature.
+> Read the "Open decisions" section before starting it — TB-015 is the slice
+> where overclaiming is easiest and most damaging.
 > The filename still says TB-008 for link stability; trust this heading and
 > the state table below.
 
@@ -16,16 +18,16 @@ killed mid-run (its work had already landed, verified after the fact). Work was
 stopped at a clean ticket boundary rather than risking a half-written slice.
 Nothing is in a partial state.
 
-## State: 13 of 15 tickets done
+## State: 14 of 15 tickets done
 
 | Done | Open |
 | --- | --- |
-| TB-001 … TB-013 | TB-014, TB-015 |
+| TB-001 … TB-014 | TB-015 only |
 
-**TB-001 … TB-012 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
+**TB-001 … TB-013 are COMMITTED** on branch `agent/change-evaluation-gate-planning`
 (`07574ef` = TB-002…TB-008, `371609b` = TB-009, `eb01d11` = TB-010,
-`cfe36c3` = TB-011, `e0bbe45` = TB-012; not pushed). **TB-013 is uncommitted**
-working-tree work.
+`cfe36c3` = TB-011, `e0bbe45` = TB-012, `d87d8fa` = TB-013; not pushed).
+**TB-014 is uncommitted** working-tree work.
 
 Ticket status lines in `.scratch/change-evaluation-gate/issues/` are accurate —
 trust them. TB-001 is committed (`247247d`); **TB-002 … TB-007 are uncommitted
@@ -39,8 +41,8 @@ directly by the Tech Lead, not taken from agent self-reports:
 
 | Gate | Result |
 | --- | --- |
-| `npm run test:unit` | **221 pass, 0 fail** (session baseline was 92) |
-| `npm run validate` | OK — 29 released skills, 198 Markdown files |
+| `npm run test:unit` | **232 pass, 0 fail** (session baseline was 92) |
+| `npm run validate` | OK — 29 released skills, 201 Markdown files |
 | `npm run test:install` | OK — 12 skills across 5 clients |
 | `npm run gate-runtime-binding-smoke` | exit 0 (added by TB-006) |
 | `npm run gate-fix-smoke` | exit 0 (added by TB-007) |
@@ -49,6 +51,7 @@ directly by the Tech Lead, not taken from agent self-reports:
 | `npm run gate-hook-conformance-smoke` | exit 0 (added by TB-011) |
 | `npm run gate-lifecycle-smoke` | exit 0 (added by TB-012) |
 | `npm run gate-adapter-conformance` | exit 0 (added by TB-013) |
+| `npm run gate-security-control-smoke` | exit 0 (added by TB-014) |
 
 If any of these is red before you change anything, stop and investigate — it
 means something drifted after this handoff was written.
@@ -151,6 +154,7 @@ Remaining capabilities to create: `gate-evidence-prune-smoke` (TB-008),
 | `activation.mjs` | TB-010, TB-011 | Previewed, consent-bound Activation transaction with LIFO rollback; `ACTIVATION_STEPS` ends at `git-enablement` so Git is enabled last; pinned receipt at `<store-root>/activation/receipt.json`. TB-011 added ordered hook composition (native manager → confirmed marker block → owned shim), non-interactive identity rejection, and trust pause/resume identity binding |
 | `lifecycle.mjs` | TB-012 | `update`/`status`/`repair`/`deactivate`/`uninstall`/`cleanup` plus operator `prune` and lock inspection; candidate-vs-active release, read-only health, conservative removal, `receipt.hookChain.blockIdentity` |
 | `adapters.mjs` | TB-013 | Git + three desktop preflight adapters, eight declared capability categories, trigger normalization, support tiers, shared compatibility baseline. Added WITHOUT modifying any existing lib file |
+| `security-control.mjs` | TB-014 | Dual-policy transitions with hash-bound approval, approved Sensitive runtime inputs (temporary, `0600`, name+source only), 7-surface drift reconciliation, and `TRUST_BOUNDARY` |
 
 The Evidence ladder stage order is exported from
 `skills/verify-change/scripts/verification-plan.mjs` as `evidenceLadderStages`.
@@ -233,6 +237,18 @@ not create a parallel decision shape:
   worktree resolved `/private/var/...` while the primary resolved `/var/...`,
   producing *two* evidence stores for one clone. The Git common directory is now
   canonicalized. Keep this in mind for TB-009 — the same path must be the lock key.
+
+## ⚠️ TB-014 added an automated overclaim guard — do not defeat it
+
+`tests/gate-security-control.test.mjs` scans every `.mjs`/`.md`/`.yaml` under
+`skills/change-evaluation-gate/` and FAILS on any unqualified `tamper-proof`,
+`sandbox`, `sandboxed`, or `encryption` claim. `TRUST_BOUNDARY` in
+`security-control.mjs` states the model as data: `tamperResistant: false`,
+`resistsMachineOwner: false`, `containsHostileCode: false`.
+
+**TB-015 writes the compatibility manifest and release notes — the single most
+likely place to accidentally overclaim.** If that test fails, the fix is to
+reword the claim, NEVER to weaken the scan or add an exemption.
 
 ## Open decisions the next session must make
 

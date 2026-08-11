@@ -1,6 +1,6 @@
 # TB-014 — Protect policy transitions, Sensitive inputs, and drift
 
-Status: open
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -53,9 +53,9 @@ No single-policy self-approval, raw secret persistence, automatic drift repair, 
 
 ## Acceptance Criteria
 
-- [ ] `AC-CFG-003`: candidate policy weakening cannot self-authorize; hash-bound approval advances only after both trusted and candidate policies pass.
-- [ ] `AC-CFG-004`: secret-canary fixtures copy only approved inputs, remove them, and find no raw value in retained configuration or Evidence.
-- [ ] `AC-SEC-001`: independent control-surface drift produces broken health and authoritative `unverified`, while ordinary Grader changes remain visible without automatic malicious classification.
+- [x] `AC-CFG-003`: candidate policy weakening cannot self-authorize; hash-bound approval advances only after both trusted and candidate policies pass.
+- [x] `AC-CFG-004`: secret-canary fixtures copy only approved inputs, remove them, and find no raw value in retained configuration or Evidence.
+- [x] `AC-SEC-001`: independent control-surface drift produces broken health and authoritative `unverified`, while ordinary Grader changes remain visible without automatic malicious classification.
 
 ## Verification Matrix
 
