@@ -563,7 +563,7 @@ const pathWithSpacesFixture = async () => {
   });
   const findings = [];
 
-  if (!root.includes(' ') || !/[^ -]/.test(root)) {
+  if (!root.includes(' ') || !/[^\x00-\x7f]/.test(root)) {
     findings.push('the fixture root did not actually contain a space and a non-ASCII character.');
   }
 

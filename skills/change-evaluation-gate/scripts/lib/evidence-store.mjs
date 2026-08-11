@@ -698,7 +698,7 @@ export const openEvidenceStore = async ({
       reference?.evaluationId ?? null,
       reference?.checkId ?? null,
       reference?.attempt ?? null,
-    ].join(' ');
+    ].join('\x00');
 
     for (const blob of preview.blobs) {
       const previewed = new Set((blob.references ?? []).map(referenceKey));
