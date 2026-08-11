@@ -742,6 +742,27 @@ export const BASELINE_PAYLOAD_SOURCES = Object.freeze([
   'synthetic-fixture',
 ]);
 
+/**
+ * Whether a value is a native payload a client actually sent.
+ *
+ * Only the shape is judged here — that it is a plain object carrying at least
+ * one key. Whether *this* adapter can read it is the baseline's own
+ * `captured-payload-readable` check, which is where a declaration that does not
+ * match the client is supposed to fail rather than be filtered out quietly.
+ */
+const isCapturedPayload = (value) => typeof value === 'object'
+  && value !== null
+  && !Array.isArray(value)
+  && Object.keys(value).length > 0;
+
+/**
+ * The extra check a run driven by a real client invocation can report, and a
+ * fixture-only run cannot reach. It is not in `BASELINE_CHECKS` because every
+ * surface owes those outcomes on every run; this one exists only when there is
+ * a captured payload to read.
+ */
+export const CAPTURED_BASELINE_CHECKS = Object.freeze(['captured-payload-readable']);
+
 export const BASELINE_CHECKS = Object.freeze([
   'deterministic-event',
   'non-interactive-invocation',
@@ -794,11 +815,22 @@ export const runCompatibilityBaseline = async (
   }
 
   const clock = dependencies.clock ?? (() => new Date());
-  // An unstated source is the conservative one. A caller that does not say a
-  // real client drove this run has not shown that one did.
-  const payloadSource = BASELINE_PAYLOAD_SOURCES.includes(dependencies.evidence?.payloadSource)
+  // A payload the client itself sent, if this run was given one. Everything
+  // below drives through it rather than through the adapter's own declaration,
+  // which is the whole difference between proving the declaration matches the
+  // client and restating it.
+  const captured = isCapturedPayload(dependencies.capturedPayload)
+    ? dependencies.capturedPayload
+    : null;
+  // The label cannot be asserted. `captured-client-invocation` is earned only
+  // by supplying the invocation, because a claim that a real client drove this
+  // run is exactly the claim SG-SUPPORT-001 will not take on trust.
+  const claimed = BASELINE_PAYLOAD_SOURCES.includes(dependencies.evidence?.payloadSource)
     ? dependencies.evidence.payloadSource
     : 'synthetic-fixture';
+  const payloadSource = claimed === 'captured-client-invocation' && captured === null
+    ? 'synthetic-fixture'
+    : claimed;
   const checks = [];
   const record = (id, ok, detail) => {
     checks.push({ id, ok, detail });
@@ -815,11 +847,27 @@ export const runCompatibilityBaseline = async (
   /** One baseline invocation, capturing exactly what gate core was handed. */
   const invoke = async ({ sessionId, overrides = {}, nativeEvent = null }) => {
     const seen = [];
-    const native = buildNativePayload(adapter, {
-      nativeEvent: nativeEvent ?? adapter.nativeEvents['work-complete'] ?? adapter.nativeEvents['commit-attempt'],
-      repositoryRoot,
-      sessionId,
-    });
+    const event = nativeEvent
+      ?? adapter.nativeEvents['work-complete']
+      ?? adapter.nativeEvents['commit-attempt'];
+    // A captured payload is replayed in the client's own words. Only the two
+    // values the baseline must vary — the event under test and the session it
+    // isolates — are substituted, and only through the adapter's declared field
+    // names, so a declaration that does not match the client cannot read them.
+    const rootDeclaration = adapter.nativeIdentity.repositoryRoot;
+    const native = captured === null
+      ? buildNativePayload(adapter, { nativeEvent: event, repositoryRoot, sessionId })
+      : {
+        ...captured,
+        [adapter.nativeIdentity.event]: event,
+        [adapter.nativeIdentity.sessionId]: sessionId,
+        // The client named its own workspace; the baseline grades a throwaway
+        // repository. Only the location moves, and it moves in the shape the
+        // adapter declared, so an array-shaped surface stays array-shaped.
+        [rootDeclaration.field]: rootDeclaration.shape === 'path-array'
+          ? [repositoryRoot]
+          : repositoryRoot,
+      };
     const result = await runAdapterEvaluation({ adapterId, native, context }, {
       establishTrust: dependencies.establishTrust ?? (async () => ({ established: true, detail: 'baseline grant' })),
       ...overrides,
@@ -832,6 +880,27 @@ export const runCompatibilityBaseline = async (
 
     return { result, request: seen[0] ?? null };
   };
+
+  // 0. When a real invocation was supplied, this adapter's declared field names
+  //    must actually read it. This is the check that a fixture-only run cannot
+  //    reach and that a wrong declaration cannot survive: the payload comes from
+  //    the client, the field names come from the adapter, and either they agree
+  //    or the surface is not describing this client (SG-SUPPORT-001).
+  if (captured !== null) {
+    const identity = normalizeNativeInvocation({ adapterId, native: captured });
+    const readable = identity !== null
+      && identity.nativeEvent !== null
+      && identity.repositoryRoot !== null
+      && identity.sessionId !== null;
+
+    record(
+      'captured-payload-readable',
+      readable,
+      readable
+        ? `The declared field names read the client's own payload: event ${JSON.stringify(identity.nativeEvent)}, plus a repository root and a session identity.`
+        : 'The declared field names could not read a native payload this client actually sent.',
+    );
+  }
 
   // 1. A deterministic native event maps to the same normalized trigger every
   //    time, and an event the surface does not declare maps to nothing.

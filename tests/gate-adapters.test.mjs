@@ -950,6 +950,48 @@ test('TB-013 / FR-ADAPT-005: cursor reads its workspace_roots ARRAY, and a multi
 });
 
 /** Everything the baseline needs that is not the adapter itself. */
+/**
+ * A payload in the shape each real client was observed to send, carrying the
+ * extra keys the client includes and that the adapter must ignore.
+ *
+ * Every value is synthetic. Only the SHAPE is real: the captured payloads carry
+ * conversation text and an end user's email, so none of them may enter this
+ * repository (SG-SECRET-001).
+ */
+const capturedPayloadFor = (adapterId) => ({
+  'claude-code-desktop': {
+    session_id: 'session-aaaa-1111',
+    transcript_path: '/synthetic/transcripts/aaaa.json',
+    cwd: '/synthetic/workspace',
+    prompt_id: 'prompt-aaaa',
+    permission_mode: 'acceptEdits',
+    hook_event_name: 'Stop',
+    stop_hook_active: false,
+    last_assistant_message: 'synthetic assistant text',
+  },
+  'codex-desktop': {
+    session_id: 'session-bbbb-2222',
+    turn_id: 'turn-bbbb',
+    transcript_path: '/synthetic/sessions/bbbb.jsonl',
+    cwd: '/synthetic/workspace',
+    hook_event_name: 'Stop',
+    model: 'synthetic-model',
+    permission_mode: 'default',
+    stop_hook_active: false,
+    last_assistant_message: 'synthetic assistant text',
+  },
+  cursor: {
+    conversation_id: 'conversation-cccc-3333',
+    generation_id: 'generation-cccc',
+    session_id: 'conversation-cccc-3333',
+    status: 'completed',
+    hook_event_name: 'stop',
+    cursor_version: '0.0.0-synthetic',
+    workspace_roots: ['/synthetic/workspace'],
+    transcript_path: '/synthetic/agent-transcripts/cccc.jsonl',
+  },
+}[adapterId] ?? null);
+
 const baselineDependencies = (root, overrides = {}) => ({
   evaluate: async (request) => evaluate(request, {
     checks: [descriptor()],
@@ -1079,6 +1121,9 @@ test('TB-013 / AC-ADAPT-002 / SG-SUPPORT-001: a baseline records how it was driv
       baselineDependencies(root, {
         executionRoot,
         evidence: { payloadSource: 'captured-client-invocation' },
+        // The label is not enough: the invocation itself must be supplied, or
+        // the run records itself as the fixture it actually was.
+        capturedPayload: capturedPayloadFor(adapterId),
       }),
     );
 
@@ -1115,6 +1160,9 @@ test('FR-ADAPT-006 / SG-SUPPORT-001: only a named desktop surface with a passing
       baselineDependencies(root, {
         executionRoot,
         evidence: { payloadSource: 'captured-client-invocation' },
+        // The label is not enough: the invocation itself must be supplied, or
+        // the run records itself as the fixture it actually was.
+        capturedPayload: capturedPayloadFor(adapterId),
       }),
     );
 
