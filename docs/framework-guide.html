@@ -602,12 +602,17 @@
       </p>
 
       <p class="cmd-label">Discover what the project looks like</p>
-      <pre><code>node &lt;skills-dir&gt;/framework-setup/scripts/configure.mjs --discover</code></pre>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs --discover</code></pre>
 
-      <p>
-        Replace <code>&lt;skills-dir&gt;</code> with wherever the installer put the skills — commonly
-        <code>.claude/skills</code> or <code>.agents/skills</code> in your project.
-      </p>
+      <div class="note">
+        <span class="note-tag">Adjust the path to your install</span>
+        <p>
+          Commands on this page assume the installer put the skills in
+          <code>.agents/skills</code>. Claude Code installs commonly use
+          <code>.claude/skills</code> instead — check which one exists in your project and
+          swap that one segment. Everything after it is the same.
+        </p>
+      </div>
 
       <h3>What ends up in the file</h3>
 
@@ -818,17 +823,71 @@
         Gate policy exists only in schema version 4. If your <code>.agent-framework.yaml</code> says
         <code>schema_version: 3</code>, migrate first:
       </p>
-      <pre><code>node &lt;skills-dir&gt;/framework-setup/scripts/configure.mjs \
-  --migrate-v4 --mapping &lt;mapping.json&gt;</code></pre>
       <p>
-        The migration is previewed and atomic. If any command or profile is ambiguous it writes
-        nothing and tells you what to map. Migration never configures or activates the Gate — it
-        only makes configuration possible. Schema v3 stays readable throughout <code>0.x</code>.
+        Migration runs in four steps and writes nothing until the last one. Do not try to guess
+        the mapping file up front — let the tool tell you what it needs.
+      </p>
+
+      <p class="cmd-label">1 — Ask with an empty mapping</p>
+      <pre><code>echo '{}' &gt; mapping.json
+node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping mapping.json</code></pre>
+
+      <p class="cmd-label">2 — Read exactly what it cannot prove</p>
+      <pre><code>{
+  "status": "requires-mapping",
+  "ambiguities": [
+    { "path": "backend", "value": "unknown", "required": ["profile"] },
+    { "path": "verification.commands.test.both[0]", "value": "npm run test",
+      "required": ["timeout_seconds"] }
+  ]
+}</code></pre>
+      <p>
+        Nothing has been written. It asks only about what it genuinely cannot determine — here it
+        already worked out the runner and arguments for <code>npm run test</code> by itself and
+        wants only a timeout.
+      </p>
+
+      <p class="cmd-label">3 — Answer those exact paths</p>
+      <pre><code>{
+  "profiles": { "backend": "express-typescript" },
+  "commands": {
+    "verification.commands.test.both[0]": { "timeout_seconds": 900 }
+  }
+}</code></pre>
+      <p>
+        Only two sections exist: <code>profiles</code> and <code>commands</code>. A profile may be
+        mapped only where the schema v3 value was <code>unknown</code>. Per command you may set
+        <code>runner</code> (one of <code>composer-bin</code>, <code>php-script</code>,
+        <code>package-script</code>, <code>repository-script</code>), <code>args</code>,
+        <code>working_directory</code>, <code>timeout_seconds</code>, and
+        <code>allowed_environment</code>.
+      </p>
+      <p>
+        Re-run the command from step 1. You now get <code>"status": "ready"</code>, a
+        <code>previewHash</code>, and the complete proposed configuration to read. Still nothing
+        written.
+      </p>
+
+      <p class="cmd-label">4 — Confirm that exact preview</p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --migrate-v4 --mapping mapping.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
+      <p>
+        Only now does <code>.agent-framework.yaml</code> change. The hash is bound to the exact
+        preview you were shown, so if the file changes underneath you the confirmation stops
+        matching and nothing is written — which is the entire point of it.
+      </p>
+      <p>
+        Migration never configures or activates the Gate; it only makes configuration possible.
+        Schema v3 stays readable throughout <code>0.x</code>.
       </p>
 
       <h3>Step 3 — Configure the policy</h3>
-      <pre><code>node &lt;skills-dir&gt;/framework-setup/scripts/configure.mjs \
-  --configure-gate --policy &lt;policy.json&gt;</code></pre>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --configure-gate --policy policy.json</code></pre>
+      <p>
+        Like migration, this previews first and returns a hash you confirm with
+        <code>--confirm</code>. Nothing is written until you do.
+      </p>
 
       <p>The policy has exactly five parts, and nothing else:</p>
       <div class="table-wrap">
