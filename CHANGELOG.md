@@ -1,5 +1,161 @@
 # ai-skills-framework
 
+## 0.9.0
+
+### Minor Changes
+
+- [#19](https://github.com/emipac/skills/pull/19) [`eb01d11`](https://github.com/emipac/skills/commit/eb01d1150b9a20dd4dbdd8e2989f6d1887b97b53) Thanks [@emipac](https://github.com/emipac)! - Activate authoritative local Git enforcement as a previewed, consented,
+  clone-local transaction that enables Git last, pins an Activation receipt, and
+  rolls back every gate-owned change on any failure without overwriting an
+  existing hook or touching a shared hooks path.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Align feature, delivery, implementation, and verification handoffs with
+  parent-wide acceptance, safeguard, risk, decision, seam, and evidence gates.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Persist and prune bounded immutable Change Evaluation Gate Evidence: every
+  evaluation appends one canonical, content-addressed, redacted envelope atomically
+  to a clone-local store under the resolved Git common directory, enforcing the
+  fixed v1 ceilings of 32 KiB inline per Check attempt, 4 MiB per output blob, and
+  32 MiB of blobs per evaluation, which a project may lower but never raise.
+  Truncation preserves the beginning and the end of the output and reports its
+  redacted and omitted byte counts. Sensitive values are redacted before anything
+  is written and a capture that cannot be proved safe persists nothing and returns
+  `unverified`. Nothing is ever deleted automatically: pruning is manual,
+  preview-first, and blob-only, a mismatched confirmation removes nothing and
+  records no successful deletion, and a matching one preserves envelopes,
+  decisions, bypass records, Lifecycle events, pruning records, and a tombstone for
+  every removed blob. Adds the immutable Lifecycle event record for all eleven
+  governed actions, a durable one-shot bypass ledger, opt-in bounded output capture
+  in the executor, and the `gate-evidence-prune-smoke` capability.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Add the independently installable Change Evaluation Gate module and explicit
+  schema v4 dormant policy configuration without activating enforcement.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`371609b`](https://github.com/emipac/skills/commit/371609b6f93abe64d7c248b3b3069ba5311e79e7) Thanks [@emipac](https://github.com/emipac)! - Coordinate concurrent Change Evaluation Gate evaluations safely. Execution now
+  serializes per resolved, canonical Git common directory, so every client and
+  every linked worktree of one clone answers to exactly one lock while unrelated
+  repositories never block each other. The lock records the holding process, host,
+  start instant, and heartbeat. Only an exactly matching in-flight evaluation
+  binding — snapshot, configuration, plan, environment, and task identities — may
+  share one execution, there is still no persistent pass cache, and each subscriber
+  of a shared execution receives the authorization of its own Enforcement role, so
+  sharing never changes who may enforce. Different evaluations queue, an
+  authoritative `commit-attempt` advances ahead of queued-but-not-running
+  preflights without ever preempting a running one, and a client refused the lock
+  waits a bounded turn instead of running unserialized. Cancellation is
+  subscriber-local and never cancels work another subscriber still requires.
+  Stale-lock recovery is explicit, confirmation-matched, and audited through a
+  `stale-lock-recovery` Lifecycle event, preserving the recovered record rather
+  than deleting it; acquisition never clears a stale lock. Coordination that cannot
+  be trusted fills in the existing `coordination-failure` reason code in place and
+  returns `unverified` — never an authorization.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`a25bf37`](https://github.com/emipac/skills/commit/a25bf379a6f72770f41a6e280088df76604fa790) Thanks [@emipac](https://github.com/emipac)! - Correct the Change Evaluation Gate desktop preflight adapter declarations
+  against real captured client payloads: each surface declares the field names,
+  event value, and field shape its client actually sends, a repository root is
+  resolved upward from the path a client sends rather than assumed and is
+  `unverified` when none resolves, Cursor's array of workspace roots has an
+  explicit rule that reports `unverified` for a multi-root workspace instead of
+  selecting one, no desktop surface declares a `commit-attempt` event any longer
+  while Cursor records its unobserved one as unverified rather than claimed, and a
+  compatibility baseline records whether real client invocations or injected
+  payloads drove it so no surface can be called supported on fixture evidence
+  alone.
+
+- [#16](https://github.com/emipac/skills/pull/16) [`f22b30d`](https://github.com/emipac/skills/commit/f22b30de21c2a528c4866a846d861fa8a935a4cd) Thanks [@emipac](https://github.com/emipac)! - Add a curated upstream intake skill that automatically ports only structurally
+  compatible Matt Pocock skill changes and records every review disposition.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`d87d8fa`](https://github.com/emipac/skills/commit/d87d8fa171374723e95ac72df5050860c0ed118c) Thanks [@emipac](https://github.com/emipac)! - Deliver supported Change Evaluation Gate desktop preflight adapters: one
+  decision blocks authoritative Git on `deny` while Claude Code Desktop, Codex
+  Desktop, and Cursor present the same decision as structured `not-authoritative`
+  preflight feedback, each adapter declares its own event, blocking, trust,
+  repository, session, filesystem, Git, and invocation capabilities, every trust,
+  invocation, timeout, capability, and malformed-output failure is `unverified`,
+  and a surface is called supported only after the shared compatibility baseline
+  passes against it with its exact tested versions recorded.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Add the versioned Change Evaluation Gate `evaluate` process contract, isolated
+  Git snapshot materialization, and ordered check delegation through the existing
+  `verify-change` Verification seam.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`247247d`](https://github.com/emipac/skills/commit/247247d304bee5519479e5a21de792fa0c0161b5) Thanks [@emipac](https://github.com/emipac)! - Add previewed schema v4 verification migration with explicit backend and
+  frontend profile presence while retaining schema v3 compatibility.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Separate check-only Change Evaluation Gate evaluation from explicit mutation:
+  commit evaluation rejects any check that offers a declared fix command as its
+  evaluation command, the new explicit fix operation applies declared mutations in
+  their provider-declared order through a separate mutating seam, and only a
+  complete non-mutating evaluation of the resulting new snapshot can authorize the
+  result. Laravel proposes proved style, rewrite-check, static-analysis, and
+  broad-test checks as required while focused, affected-test, smoke, build, and
+  browser checks are earned through explicit confirmation, and declares a
+  structural rewrite before formatting without gate core learning either tool.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Apply Change Evaluation Gate policy over the completed decision: repository-owned
+  required and advisory severity, snapshot-bound authorization with no baseline
+  exemption or pass cache, per-check and total budgets that terminate process
+  trees and skip only eligible advisory work, and an optional one-shot audited
+  bypass that returns `bypassed` without ever rewriting a failure into a pass.
+
+- [#17](https://github.com/emipac/skills/pull/17) [`1b3014e`](https://github.com/emipac/skills/commit/1b3014e18e5bb0716dd39b4d247e6296c9a52b34) Thanks [@emipac](https://github.com/emipac)! - Add a Laravel development setup skill for a deterministic Pest 5, Pint, PAO,
+  Larastan, Rector, Ray, browser-testing, and Laravel Boost toolchain.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`e0bbe45`](https://github.com/emipac/skills/commit/e0bbe45e03a161e095daccbf4f9016cfe4258924) Thanks [@emipac](https://github.com/emipac)! - Manage the Gate's active release and removal lifecycle: ordinary distribution
+  exposes a candidate only, `gate update` switches the Active gate release
+  atomically and preserves the prior release on any failure, `gate status`
+  reconciles health without repairing or writing anything, and deactivation,
+  uninstall, and configuration cleanup remove only unchanged Gate-owned state
+  while preserving shared configuration, global assets, and historical Evidence.
+  Pins a durable, receipt-independent content identity for the gate-written hook
+  block so tampering is detectable from a published receipt alone, and adds the
+  operator-facing `gate prune` and coordination-lock inspection commands.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`cfe36c3`](https://github.com/emipac/skills/commit/cfe36c346bdb0697353422a47e2134572e42703d) Thanks [@emipac](https://github.com/emipac)! - Compose Gate activation with an existing hook chain in the declared order —
+  native hook manager, confirmed marker-delimited block, then owned shim — so the
+  prior chain is preserved and still executes, and bind paused-and-resumed and
+  non-interactive activation to exact repository, configuration, selected-adapter,
+  and preview identities.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`2ce63ed`](https://github.com/emipac/skills/commit/2ce63ed5c90c7adc4be5f2ca681e0bf15e3be489) Thanks [@emipac](https://github.com/emipac)! - Protect Change Evaluation Gate policy transitions, Sensitive runtime inputs, and
+  control-surface drift: a policy-surface change is graded under both the prior
+  Trusted configuration and its candidate and advances trust only on a hash-bound
+  approval once both pass, approved Sensitive runtime inputs are copied only into
+  the isolated materialization and removed with it while retained state keeps name
+  and source alone, and independent drift of the pinned Gate control surface makes
+  `gate status` broken and an authoritative decision unverified — reported, never
+  repaired, and never presented as resistance to the machine owner.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`8a0fac6`](https://github.com/emipac/skills/commit/8a0fac64ceea754f1990aee946cfc9dc522be55d) Thanks [@emipac](https://github.com/emipac)! - Qualify the Change Evaluation Gate release candidate against observed evidence:
+  a compatibility manifest records the release version read from `package.json`,
+  the one environment its eleven runtime portability fixtures were actually
+  executed on, every surface's shared baseline outcomes with the exact versions
+  they ran under, and the delivery risks that stayed open — and qualification
+  refuses any claim the evidence beside it does not produce. Support tiers are
+  re-derived rather than declared, so all four surfaces stay `experimental` until
+  a real client invocation drives a baseline; untested environments stay
+  `unverified` rather than refused and tested versions never become a standing
+  allowlist; and the manifest claims local Git authority only, closes neither
+  open delivery risk, and carries the stated trust boundary rather than restating
+  it.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`769ce09`](https://github.com/emipac/skills/commit/769ce091b827407952ef7818f083acdac0989b4a) Thanks [@emipac](https://github.com/emipac)! - Declare each desktop adapter's registration surface — its client configuration
+  file, that file's block schema, and whether the schema is independently
+  versioned — so activation, health reconciliation, and removal act on a desktop
+  registration only through that declaration, preserve every part of a client
+  configuration file the adapter does not own, and report `unverified` rather than
+  assume a surface they cannot confirm.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Add the versioned stack-neutral provider check descriptor contract with a
+  Laravel provider, a reference non-Laravel provider, shell-free command
+  validation, and visible capability gaps.
+
+- [#19](https://github.com/emipac/skills/pull/19) [`07574ef`](https://github.com/emipac/skills/commit/07574ef1e2dc13047459200b70fc6ac884063eaf) Thanks [@emipac](https://github.com/emipac)! - Report honest Change Evaluation Gate task scope, changed Grader surfaces, and
+  served-runtime binding: evaluation without a valid delivery contract is
+  regression-only, changed tests, verification scripts, providers, and Gate
+  configuration are reported with every integrity identity bound, and HTTP or
+  browser evidence is unverified unless the serving runtime is proved to serve the
+  materialized Evaluation snapshot.
+
 ## 0.8.0
 
 ### Minor Changes
