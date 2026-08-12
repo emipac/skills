@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -15,6 +15,7 @@ const agents = [
 ];
 const smokeSkills = [
   'audit-security',
+  'change-evaluation-gate',
   'curate-upstream-skills',
   'framework-router',
   'framework-setup',
@@ -53,6 +54,26 @@ try {
     },
   );
 
+  for (const dormantPath of [
+    '.agent-framework.yaml',
+    '.git/hooks/pre-commit',
+    '.git/ai-skills-framework/gate.json',
+    // Adapters are self-tested and registered by the Activation transaction,
+    // which pins this receipt. Installing the plugin must never create it:
+    // an installed adapter is a dormant asset, not a registered integration
+    // (SG-DIST-001, FR-ADAPT-002).
+    '.git/change-evaluation-gate/evidence/activation/receipt.json',
+  ]) {
+    try {
+      await access(path.join(temporaryRoot, dormantPath));
+      throw new Error(`Skill installation created Gate adoption state: ${dormantPath}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   const installedRootsByAgent = new Map([
     ['codex', '.agents/skills'],
     ['claude-code', '.claude/skills'],
@@ -62,6 +83,12 @@ try {
   ]);
 
   for (const [agent, installedRoot] of installedRootsByAgent) {
+    const gateDocument = path.join(
+      temporaryRoot,
+      installedRoot,
+      'change-evaluation-gate',
+      'SKILL.md',
+    );
     const routerDocument = path.join(
       temporaryRoot,
       installedRoot,
@@ -244,6 +271,46 @@ try {
       'curate-upstream-skills',
       'references',
       'compatibility-policy.md',
+    );
+
+    const installedGate = await readFile(gateDocument, 'utf8');
+
+    if (
+      !installedGate.includes('name: change-evaluation-gate')
+      || !installedGate.includes('Configuration does not activate the Gate')
+    ) {
+      throw new Error(`${agent}: dormant Change Evaluation Gate was not installed correctly`);
+    }
+
+    // The three supported desktop preflight surfaces ship with the plugin and
+    // are documented as dormant until an explicit Activation registers them.
+    if (
+      !installedGate.includes('Supported preflight adapters')
+      || !installedGate.includes('Installing an adapter never registers it')
+    ) {
+      throw new Error(`${agent}: installed Gate does not document its dormant preflight adapters`);
+    }
+
+    const installedAdapters = await readFile(
+      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters.mjs'),
+      'utf8',
+    );
+
+    for (const surface of ['claude-code-desktop', 'codex-desktop', 'cursor']) {
+      if (!installedAdapters.includes(surface)) {
+        throw new Error(`${agent}: the installed adapter library is missing the ${surface} surface`);
+      }
+    }
+
+    await readFile(
+      path.join(
+        temporaryRoot,
+        installedRoot,
+        'change-evaluation-gate',
+        'references',
+        'adapter-conformance-contract.md',
+      ),
+      'utf8',
     );
 
     if (!(await readFile(routerDocument, 'utf8')).includes('name: framework-router')) {

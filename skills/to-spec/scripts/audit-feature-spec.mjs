@@ -18,6 +18,15 @@ const requiredSections = [
   'Readiness',
 ];
 
+const requiredReadinessItems = [
+  'Every in-scope requirement maps to acceptance evidence.',
+  'Public test seams are agreed.',
+  'Safeguards and prohibited behavior are explicit.',
+  'Risks and resolved decisions have explicit dispositions.',
+  'Blocking gaps and assumptions are resolved.',
+  'Out-of-scope behavior is explicit.',
+];
+
 const normalize = (value) => value
   .replace(/^\d+(?:\.\d+)*\.?\s+/, '')
   .trim()
@@ -78,9 +87,19 @@ const ids = (value, pattern) => [...value.matchAll(pattern)].map((match) => matc
 const requirementIds = (value) => ids(value, /\b(?:FR|NFR)-[A-Z0-9]+-\d{3}\b/g);
 const acceptanceIds = (value) => ids(value, /\bAC-[A-Z0-9]+-\d{3}\b/g);
 const safeguardIds = (value) => ids(value, /\bSG-[A-Z0-9]+-\d{3}\b/g);
+const riskIds = (value) => ids(value, /\bRISK-\d{3}\b/g);
+const questionIds = (value) => ids(value, /\bQ-\d{3}\b/g);
 const uniqueSorted = (values) => [...new Set(values)].sort();
 
 const addError = (errors, code, message) => errors.push({ code, message });
+
+const requiredColumns = (table, columns) => columns.filter(
+  (column) => columnIndex(table, column) === -1,
+);
+
+const tableField = (table, field) => table?.rows.find(
+  (row) => normalize(row[0] ?? '') === normalize(field),
+)?.[1]?.trim();
 
 export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
   const sections = parseSections(contents);
@@ -98,14 +117,17 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
   }
 
   const contractTable = parseFirstTable(sections.get(normalize('Feature Contract')));
-  const statusRow = contractTable?.rows.find(
-    (row) => normalize(row[0] ?? '') === 'status',
-  );
 
   if (!contractTable) {
     addError(errors, 'missing-contract-table', 'Feature Contract must contain a field table');
-  } else if (statusRow?.[1] !== 'ready-for-tickets') {
+  } else if (tableField(contractTable, 'Status') !== 'ready-for-tickets') {
     addError(errors, 'not-ready', 'Feature Contract status must be ready-for-tickets');
+  }
+
+  for (const field of ['SRS baseline', 'Decision sources']) {
+    if (!tableField(contractTable, field)) {
+      addError(errors, 'missing-contract-field', `Feature Contract must define ${field}`);
+    }
   }
 
   const traceabilitySection = sections.get(normalize('SRS Traceability'));
@@ -114,17 +136,36 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
   const tracedRequirements = uniqueSorted(requirementIds(traceabilityText));
   const tracedAcceptance = uniqueSorted(acceptanceIds(traceabilityText));
   const tracedSafeguards = uniqueSorted(safeguardIds(traceabilityText));
+  const tracedRisks = uniqueSorted(riskIds(traceabilityText));
+  const tracedQuestions = uniqueSorted(questionIds(traceabilityText));
 
   if (!traceabilityTable) {
     addError(errors, 'missing-traceability-table', 'SRS Traceability must contain a mapping table');
+  } else {
+    const missingColumns = requiredColumns(traceabilityTable, [
+      'Requirement IDs',
+      'Acceptance IDs',
+      'Safeguard IDs',
+      'Risk IDs',
+      'Question IDs',
+      'Scope',
+    ]);
+
+    if (missingColumns.length > 0) {
+      addError(
+        errors,
+        'invalid-traceability-table',
+        `SRS Traceability is missing ${missingColumns.join(', ')}`,
+      );
+    }
   }
 
   if (tracedRequirements.length === 0) {
-    addError(errors, 'missing-traceability', 'Feature spec must reference at least one SRS requirement');
+    addError(errors, 'missing-traceability', 'Feature contract must reference at least one SRS requirement');
   }
 
   if (tracedAcceptance.length === 0) {
-    addError(errors, 'missing-acceptance-trace', 'Feature spec must reference SRS acceptance criteria');
+    addError(errors, 'missing-acceptance-trace', 'Feature contract must reference SRS acceptance criteria');
   }
 
   if (srsContents !== null) {
@@ -132,12 +173,16 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
       ...requirementIds(srsContents),
       ...acceptanceIds(srsContents),
       ...safeguardIds(srsContents),
+      ...riskIds(srsContents),
+      ...questionIds(srsContents),
     ]);
 
     for (const reference of [
       ...tracedRequirements,
       ...tracedAcceptance,
       ...tracedSafeguards,
+      ...tracedRisks,
+      ...tracedQuestions,
     ]) {
       if (!knownIds.has(reference)) {
         addError(errors, 'unknown-srs-reference', `${reference} is not defined by the SRS baseline`);
@@ -158,6 +203,16 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
 
   if (!acceptanceTable || acceptanceTable.rows.length === 0) {
     addError(errors, 'missing-acceptance-criteria', 'Acceptance Criteria must contain at least one row');
+  } else {
+    const missingColumns = requiredColumns(acceptanceTable, ['ID', 'Criterion', 'Evidence seam']);
+
+    if (missingColumns.length > 0) {
+      addError(
+        errors,
+        'invalid-acceptance-table',
+        `Acceptance Criteria is missing ${missingColumns.join(', ')}`,
+      );
+    }
   }
 
   for (const reference of tracedAcceptance) {
@@ -170,17 +225,115 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
     }
   }
 
-  const gapTable = parseFirstTable(sections.get(normalize('Risks, Gaps, and Assumptions')));
+  for (const reference of specifiedAcceptance) {
+    if (!tracedAcceptance.includes(reference)) {
+      addError(
+        errors,
+        'untraced-acceptance-detail',
+        `${reference} is defined without parent SRS traceability`,
+      );
+    }
+  }
 
-  if (gapTable) {
+  if (acceptanceTable && requiredColumns(
+    acceptanceTable,
+    ['ID', 'Criterion', 'Evidence seam'],
+  ).length === 0) {
+    const idColumn = columnIndex(acceptanceTable, 'ID');
+    const criterionColumn = columnIndex(acceptanceTable, 'Criterion');
+    const evidenceColumn = columnIndex(acceptanceTable, 'Evidence seam');
+
+    for (const row of acceptanceTable.rows) {
+      if (![idColumn, criterionColumn, evidenceColumn].every((index) => row[index]?.trim())) {
+        addError(
+          errors,
+          'incomplete-acceptance-row',
+          'Every acceptance row requires an ID, observable criterion, and evidence seam',
+        );
+      }
+    }
+  }
+
+  const seamSection = sections.get(normalize('Public Interfaces and Test Seams'));
+  const seamTable = parseFirstTable(seamSection);
+  const seamAcceptance = new Set(acceptanceIds(seamSection?.lines.join('\n') ?? ''));
+
+  if (!seamTable || seamTable.rows.length === 0) {
+    addError(errors, 'missing-public-seams', 'Public Interfaces and Test Seams must contain a mapping table');
+  } else {
+    const missingColumns = requiredColumns(seamTable, [
+      'Seam',
+      'Behavior observed',
+      'Acceptance IDs',
+      'Prior art',
+    ]);
+
+    if (missingColumns.length > 0) {
+      addError(
+        errors,
+        'invalid-public-seam-table',
+        `Public Interfaces and Test Seams is missing ${missingColumns.join(', ')}`,
+      );
+    } else {
+      const seamColumn = columnIndex(seamTable, 'Seam');
+      const behaviorColumn = columnIndex(seamTable, 'Behavior observed');
+      const acceptanceColumn = columnIndex(seamTable, 'Acceptance IDs');
+
+      for (const row of seamTable.rows) {
+        if (![seamColumn, behaviorColumn, acceptanceColumn].every((index) => row[index]?.trim())) {
+          addError(
+            errors,
+            'incomplete-public-seam-row',
+            'Every public seam row requires a seam, observable behavior, and acceptance IDs',
+          );
+        }
+      }
+    }
+  }
+
+  for (const reference of tracedAcceptance) {
+    if (!seamAcceptance.has(reference)) {
+      addError(
+        errors,
+        'missing-public-seam-coverage',
+        `${reference} has no agreed public evidence seam`,
+      );
+    }
+  }
+
+  for (const reference of seamAcceptance) {
+    if (!tracedAcceptance.includes(reference)) {
+      addError(
+        errors,
+        'untraced-public-seam-acceptance',
+        `${reference} is mapped to a public seam without SRS traceability`,
+      );
+    }
+  }
+
+  const gapTable = parseFirstTable(sections.get(normalize('Risks, Gaps, and Assumptions')));
+  const dispositionIds = new Set(gapTable?.rows.flatMap((row) => [
+    ...riskIds(row[0] ?? ''),
+    ...questionIds(row[0] ?? ''),
+  ]) ?? []);
+
+  if (!gapTable) {
+    addError(
+      errors,
+      'missing-gap-table',
+      'Risks, Gaps, and Assumptions must contain a disposition table',
+    );
+  } else {
     const blocksColumn = columnIndex(gapTable, 'Blocks readiness');
     const resolutionColumn = columnIndex(gapTable, 'Resolution');
+    const typeColumn = columnIndex(gapTable, 'Type');
+    const impactColumn = columnIndex(gapTable, 'Impact');
 
-    if (blocksColumn === -1 || resolutionColumn === -1) {
+    if ([blocksColumn, resolutionColumn, typeColumn, impactColumn].includes(-1)) {
       addError(
         errors,
         'invalid-gap-table',
-        'Risks, Gaps, and Assumptions requires Blocks readiness and Resolution columns',
+        'Risks, Gaps, and Assumptions requires Type, Impact, Blocks readiness, and Resolution columns',
       );
     } else {
       for (const row of gapTable.rows) {
@@ -188,11 +341,34 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
         const unresolved = /^(?:|open|unresolved|tbd|—|-)$/i.test(
           row[resolutionColumn] ?? '',
         );
+        const isHighImpactRisk = /^risk$/i.test(row[typeColumn] ?? '')
+          && /^high$/i.test(row[impactColumn] ?? '');
+        const hasAcceptedDisposition = /^(?:accepted|mitigated|avoided|transferred|resolved)\b/i.test(
+          row[resolutionColumn] ?? '',
+        );
 
         if (blocks && unresolved) {
           addError(errors, 'blocking-gap', `${row[0]} blocks readiness and remains unresolved`);
         }
+
+        if (isHighImpactRisk && !hasAcceptedDisposition) {
+          addError(
+            errors,
+            'unresolved-high-impact-risk',
+            `${row[0]} requires an accepted risk disposition before readiness`,
+          );
+        }
       }
+    }
+  }
+
+  for (const reference of [...tracedRisks, ...tracedQuestions]) {
+    if (!dispositionIds.has(reference)) {
+      addError(
+        errors,
+        'missing-risk-decision-disposition',
+        `${reference} is traced without an explicit disposition`,
+      );
     }
   }
 
@@ -209,8 +385,18 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
     }
   }
 
+  const readinessText = new Set(readinessItems.map(
+    (line) => line.replace(/^\s*- \[[ xX]\]\s*/, '').trim(),
+  ));
+
+  for (const requiredItem of requiredReadinessItems) {
+    if (!readinessText.has(requiredItem)) {
+      addError(errors, 'missing-readiness-item', `Readiness is missing: ${requiredItem}`);
+    }
+  }
+
   if (/<[^>]+>/.test(contents.replace(/<!--[\s\S]*?-->/g, ''))) {
-    addError(errors, 'unresolved-placeholder', 'Feature spec still contains template placeholders');
+    addError(errors, 'unresolved-placeholder', 'Feature contract still contains template placeholders');
   }
 
   return {
@@ -221,6 +407,8 @@ export const auditFeatureSpec = (contents, { srsContents = null } = {}) => {
       requirementIds: tracedRequirements,
       acceptanceIds: tracedAcceptance,
       safeguardIds: tracedSafeguards,
+      riskIds: tracedRisks,
+      questionIds: tracedQuestions,
       readinessItems: readinessItems.length,
     },
   };

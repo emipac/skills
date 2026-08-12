@@ -12,7 +12,13 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { auditFeatureSpec } from '../skills/to-spec/scripts/audit-feature-spec.mjs';
-import { auditTicketSet } from '../skills/to-tickets/scripts/audit-ticket-contracts.mjs';
+import {
+  auditTicketSet,
+  verificationLayers,
+} from '../skills/to-tickets/scripts/audit-ticket-contracts.mjs';
+import {
+  ticketLayerStages,
+} from '../skills/verify-change/scripts/verification-plan.mjs';
 
 const srs = `# Example SRS
 
@@ -21,6 +27,8 @@ const srs = `# Example SRS
 | SG-AUTH-001 | Verification cannot be bypassed. |
 | AC-AUTH-001 | Invalid credentials cannot establish a session. |
 | AC-AUTH-002 | Valid credentials establish a session. |
+| RISK-001 | Verification bypass could establish an unauthorized session. |
+| Q-001 | Is session duration part of this feature? |
 `;
 
 const featureSpec = `# Password sign-in feature contract
@@ -31,6 +39,7 @@ const featureSpec = `# Password sign-in feature contract
 | --- | --- |
 | Status | ready-for-tickets |
 | SRS baseline | docs/specifications/srs.md |
+| Decision sources | Approved discovery conversation |
 
 ## Problem and Outcome
 
@@ -38,9 +47,9 @@ Members need secure password sign-in.
 
 ## SRS Traceability
 
-| Requirement IDs | Acceptance IDs | Safeguard IDs | Scope |
-| --- | --- | --- | --- |
-| FR-AUTH-001, NFR-SEC-001 | AC-AUTH-001, AC-AUTH-002 | SG-AUTH-001 | In scope |
+| Requirement IDs | Acceptance IDs | Safeguard IDs | Risk IDs | Question IDs | Scope |
+| --- | --- | --- | --- | --- | --- |
+| FR-AUTH-001, NFR-SEC-001 | AC-AUTH-001, AC-AUTH-002 | SG-AUTH-001 | RISK-001 | Q-001 | In scope |
 
 ## User Stories and Scenarios
 
@@ -53,9 +62,9 @@ Use the repository's existing authentication boundary.
 
 ## Public Interfaces and Test Seams
 
-| Seam | Behavior observed | Prior art |
-| --- | --- | --- |
-| Sign-in HTTP endpoint | Session establishment or rejection | Existing authentication feature tests |
+| Seam | Behavior observed | Acceptance IDs | Prior art |
+| --- | --- | --- | --- |
+| Sign-in HTTP endpoint | Session establishment or rejection | AC-AUTH-001, AC-AUTH-002 | Existing authentication feature tests |
 
 ## Safeguards and Prohibited Behavior
 
@@ -64,9 +73,10 @@ Use the repository's existing authentication boundary.
 
 ## Risks, Gaps, and Assumptions
 
-| ID | Type | Description | Blocks readiness | Resolution |
-| --- | --- | --- | --- | --- |
-| GAP-001 | Gap | Session duration is outside this slice. | No | Deferred to Q-001. |
+| ID | Type | Description | Impact | Blocks readiness | Resolution |
+| --- | --- | --- | --- | --- | --- |
+| RISK-001 | Risk | Verification bypass could establish an unauthorized session. | High | No | Mitigated by SG-AUTH-001 and authentication tests. |
+| Q-001 | Question | Session duration belongs to a different feature. | Low | No | Resolved as out of scope. |
 
 ## Acceptance Criteria
 
@@ -88,6 +98,7 @@ Password reset and social login.
 - [x] Every in-scope requirement maps to acceptance evidence.
 - [x] Public test seams are agreed.
 - [x] Safeguards and prohibited behavior are explicit.
+- [x] Risks and resolved decisions have explicit dispositions.
 - [x] Blocking gaps and assumptions are resolved.
 - [x] Out-of-scope behavior is explicit.
 `;
@@ -100,7 +111,7 @@ const ticket = ({
 }) => `# ${id} — Deliver password sign-in
 
 **Status:** ready-for-agent
-**Parent feature spec:** Password sign-in feature contract
+**Parent feature contract:** Password sign-in feature contract
 
 ## Outcome
 
@@ -113,6 +124,8 @@ ${outcome}
 - AC-AUTH-001
 - AC-AUTH-002
 - SG-AUTH-001
+- RISK-001
+- Q-001
 
 ## Domain Concepts
 
@@ -134,6 +147,11 @@ SG-AUTH-001: verification cannot be bypassed.
 
 No password reset or social login.
 
+## Risk and Decision Impacts
+
+- RISK-001 is mitigated by SG-AUTH-001 and authentication evidence.
+- Q-001 is resolved as out of scope and must not expand this ticket.
+
 ## Acceptance Criteria
 
 - [ ] AC-AUTH-001 is proven at the public seam.
@@ -143,8 +161,8 @@ No password reset or social login.
 
 | Layer | Scope | Evidence | Command or capability | Required |
 | --- | --- | --- | --- | --- |
-| Feature | backend | AC-AUTH-001 and AC-AUTH-002 authentication behavior | php artisan test --compact --filter=SignIn | Yes |
-| Static | backend | Type correctness | vendor/bin/phpstan analyse | Yes |
+| focused | backend | AC-AUTH-001 and AC-AUTH-002 authentication behavior | php artisan test --compact --filter=SignIn | Yes — proves the public seam |
+| static-analysis | backend | Type correctness | vendor/bin/phpstan analyse | Yes — required by the backend profile |
 
 ## Blocked By
 
@@ -157,12 +175,14 @@ ${assumption}
 ## Readiness
 
 - [x] The outcome is a complete vertical behavior.
-- [x] Acceptance criteria trace to the SRS and feature spec.
+- [x] Acceptance criteria trace to the SRS and feature contract.
 - [x] The public seam and first red test are identified.
 - [x] Safeguards and non-goals are explicit.
+- [x] Risks and resolved decisions are traced to the parent contract.
 - [x] Blocking edges exist and are acyclic.
 - [x] No unresolved assumption blocks the start.
 - [x] The ticket fits one fresh implementation context.
+- [x] User-facing and frontend evidence requirements are covered or explicitly inapplicable.
 `;
 
 test('accepts a ready feature contract with complete SRS traceability', () => {
@@ -173,17 +193,55 @@ test('accepts a ready feature contract with complete SRS traceability', () => {
   assert.deepEqual(result.metrics.requirementIds, ['FR-AUTH-001', 'NFR-SEC-001']);
   assert.deepEqual(result.metrics.acceptanceIds, ['AC-AUTH-001', 'AC-AUTH-002']);
   assert.deepEqual(result.metrics.safeguardIds, ['SG-AUTH-001']);
+  assert.deepEqual(result.metrics.riskIds, ['RISK-001']);
+  assert.deepEqual(result.metrics.questionIds, ['Q-001']);
 });
 
 test('rejects unknown traceability IDs and unresolved blocking gaps', () => {
   const invalidSpec = featureSpec
     .replace('FR-AUTH-001, NFR-SEC-001', 'FR-UNKNOWN-999, NFR-SEC-001')
-    .replace('| No | Deferred to Q-001. |', '| Yes | Open |');
+    .replace('| Low | No | Resolved as out of scope. |', '| Low | Yes | Open |');
   const result = auditFeatureSpec(invalidSpec, { srsContents: srs });
 
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.code === 'unknown-srs-reference'));
   assert.ok(result.errors.some((error) => error.code === 'blocking-gap'));
+});
+
+test('rejects a ready feature contract without acceptance-to-seam coverage', () => {
+  const invalidSpec = featureSpec.replace(
+    '| Sign-in HTTP endpoint | Session establishment or rejection | AC-AUTH-001, AC-AUTH-002 |',
+    '| Sign-in HTTP endpoint | Session establishment or rejection | AC-AUTH-001 |',
+  );
+  const result = auditFeatureSpec(invalidSpec, { srsContents: srs });
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => (
+    error.code === 'missing-public-seam-coverage'
+    && error.message.includes('AC-AUTH-002')
+  )));
+});
+
+test('rejects unresolved high-impact risk disposition even when it is non-blocking', () => {
+  const invalidSpec = featureSpec.replace(
+    '| High | No | Mitigated by SG-AUTH-001 and authentication tests. |',
+    '| High | No | Open |',
+  );
+  const result = auditFeatureSpec(invalidSpec, { srsContents: srs });
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'unresolved-high-impact-risk'));
+});
+
+test('rejects a substituted feature readiness checklist', () => {
+  const invalidSpec = featureSpec.replace(
+    '- [x] Public test seams are agreed.',
+    '- [x] The document looks complete.',
+  );
+  const result = auditFeatureSpec(invalidSpec, { srsContents: srs });
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'missing-readiness-item'));
 });
 
 test('rejects empty required feature and ticket sections', () => {
@@ -221,7 +279,7 @@ test('accepts ready vertical ticket contracts with an acyclic blocker graph', ()
       }),
     },
   ];
-  const result = auditTicketSet(tickets, { specContents: featureSpec });
+  const result = auditTicketSet(tickets, { contractContents: featureSpec });
 
   assert.equal(result.valid, true);
   assert.deepEqual(result.errors, []);
@@ -276,10 +334,89 @@ test('rejects acceptance criteria missing from the verification matrix', () => {
   )));
 });
 
+test('rejects ticket acceptance IDs outside its traceability and parent contract', () => {
+  const invalidTicket = ticket({ id: 'TB-001' })
+    .replace(
+      '- [ ] AC-AUTH-002 is proven at the public seam.',
+      '- [ ] AC-AUTH-999 is proven at the public seam.',
+    )
+    .replace(
+      'AC-AUTH-001 and AC-AUTH-002 authentication behavior',
+      'AC-AUTH-001 and AC-AUTH-999 authentication behavior',
+    );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: invalidTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'unknown-parent-acceptance'));
+  assert.ok(result.errors.some((error) => error.code === 'acceptance-not-traced'));
+});
+
+test('rejects a ticket set that omits a parent acceptance criterion', () => {
+  const incompleteTicket = ticket({ id: 'TB-001' })
+    .replace('- AC-AUTH-002\n', '')
+    .replace('- [ ] AC-AUTH-002 is proven at the public seam.\n', '')
+    .replace(
+      'AC-AUTH-001 and AC-AUTH-002 authentication behavior',
+      'AC-AUTH-001 authentication behavior',
+    );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: incompleteTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => (
+    error.code === 'missing-parent-acceptance-coverage'
+    && error.message.includes('AC-AUTH-002')
+  )));
+});
+
+test('rejects ticket sets that drop parent safeguards or risk decisions', () => {
+  const incompleteTicket = ticket({ id: 'TB-001' })
+    .replace('- SG-AUTH-001\n', '')
+    .replace('- RISK-001\n', '')
+    .replace('SG-AUTH-001: verification cannot be bypassed.', 'Verification cannot be bypassed.')
+    .replace('- RISK-001 is mitigated by SG-AUTH-001 and authentication evidence.\n', '');
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: incompleteTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'missing-parent-safeguard-coverage'));
+  assert.ok(result.errors.some((error) => error.code === 'missing-parent-risk-or-decision-coverage'));
+});
+
+test('rejects tickets when the parent feature contract is not ready', () => {
+  const draftFeature = featureSpec.replace(
+    '| Status | ready-for-tickets |',
+    '| Status | draft |',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: ticket({ id: 'TB-001' }) }],
+    { specContents: draftFeature },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'parent-not-ready'));
+});
+
+test('requires the parent feature contract for ticket readiness', () => {
+  const result = auditTicketSet([
+    { id: 'TB-001', contents: ticket({ id: 'TB-001' }) },
+  ]);
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'parent-not-loaded'));
+});
+
 test('rejects an unknown verification scope', () => {
   const invalidTicket = ticket({ id: 'TB-001' }).replace(
-    '| Feature | backend |',
-    '| Feature | sideways |',
+    '| focused | backend |',
+    '| focused | sideways |',
   );
   const result = auditTicketSet(
     [{ id: 'TB-001', contents: invalidTicket }],
@@ -290,6 +427,41 @@ test('rejects an unknown verification scope', () => {
   assert.ok(result.errors.some((error) => (
     error.code === 'invalid-verification-scope'
   )));
+});
+
+test('rejects an unknown verification layer before implementation planning', () => {
+  const invalidTicket = ticket({ id: 'TB-001' }).replace(
+    '| focused | backend |',
+    '| component-tests | backend |',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: invalidTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'invalid-verification-layer'));
+});
+
+test('requires a reason for every verification requirement decision', () => {
+  const invalidTicket = ticket({ id: 'TB-001' }).replace(
+    'Yes — proves the public seam',
+    'Yes',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: invalidTicket }],
+    { specContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => error.code === 'invalid-verification-requirement'));
+});
+
+test('keeps ticket audit layers aligned with verification planning', () => {
+  assert.deepEqual(
+    verificationLayers,
+    ticketLayerStages.map(([layer]) => layer),
+  );
 });
 
 test('declares feature, ticket, and implementation lifecycle evaluations', async () => {
@@ -321,6 +493,8 @@ test('implementation orchestrator requires red evidence and explicit commit auth
   );
 
   assert.match(implementationSkill, /failure caused by missing behavior/);
+  assert.match(implementationSkill, /audit-ticket-contracts\.mjs/);
+  assert.match(implementationSkill, /verification-plan\.mjs/);
   assert.match(implementationSkill, /Resume only after an explicit decision/);
   assert.match(
     implementationSkill,
@@ -356,7 +530,7 @@ test('feature and ticket audit CLIs are read-only and return valid JSON', async 
     [
       path.resolve('skills/to-tickets/scripts/audit-ticket-contracts.mjs'),
       ticketsRoot,
-      '--spec',
+      '--contract',
       specPath,
     ],
     { encoding: 'utf8' },

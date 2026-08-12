@@ -14,9 +14,9 @@
 
 ## SRS Traceability
 
-| Requirement IDs | Acceptance IDs | Safeguard IDs | Scope |
-| --- | --- | --- | --- |
-| <FR/NFR IDs> | <AC IDs> | <SG IDs or None> | <Included boundary> |
+| Requirement IDs | Acceptance IDs | Safeguard IDs | Risk IDs | Question IDs | Scope |
+| --- | --- | --- | --- | --- | --- |
+| <FR/NFR IDs> | <AC IDs> | <SG IDs or None> | <RISK IDs or None> | <Resolved Q IDs or None> | <Included boundary> |
 
 ## User Stories and Scenarios
 
@@ -41,9 +41,9 @@ scenarios that materially apply.
 
 ## Risks, Gaps, and Assumptions
 
-| ID | Type | Description | Blocks readiness | Resolution |
-| --- | --- | --- | --- | --- |
-| GAP-001 | <Risk/Gap/Dependency/Assumption/Implicit decision> | <Finding> | <Yes/No> | <Accepted resolution or Open> |
+| ID | Type | Description | Impact | Blocks readiness | Resolution |
+| --- | --- | --- | --- | --- | --- |
+| GAP-001 | <Risk/Gap/Dependency/Assumption/Implicit decision/Question> | <Finding> | <Low/Medium/High/N/A> | <Yes/No> | <Accepted disposition or Open> |
 
 ## Acceptance Criteria
 
@@ -65,5 +65,6 @@ exact commands.>
 - [ ] Every in-scope requirement maps to acceptance evidence.
 - [ ] Public test seams are agreed.
 - [ ] Safeguards and prohibited behavior are explicit.
+- [ ] Risks and resolved decisions have explicit dispositions.
 - [ ] Blocking gaps and assumptions are resolved.
 - [ ] Out-of-scope behavior is explicit.

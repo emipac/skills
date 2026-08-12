@@ -21,6 +21,7 @@
   ],
   "skills": [
     "./skills/audit-security",
+    "./skills/change-evaluation-gate",
     "./skills/code-review",
     "./skills/codebase-design",
     "./skills/curate-upstream-skills",

@@ -15,7 +15,16 @@
     "version": "changeset version && npm run sync-version",
     "validate": "node scripts/validate-repo.mjs",
     "test:unit": "node --test tests/*.test.mjs",
-    "test:install": "node scripts/smoke-install.mjs"
+    "test:install": "node scripts/smoke-install.mjs",
+    "gate-runtime-binding-smoke": "node skills/change-evaluation-gate/scripts/runtime-binding-smoke.mjs",
+    "gate-fix-smoke": "node skills/change-evaluation-gate/scripts/gate-fix-smoke.mjs",
+    "gate-evidence-prune-smoke": "node skills/change-evaluation-gate/scripts/gate-evidence-prune-smoke.mjs",
+    "gate-activation-smoke": "node skills/change-evaluation-gate/scripts/gate-activation-smoke.mjs",
+    "gate-hook-conformance-smoke": "node skills/change-evaluation-gate/scripts/gate-hook-conformance-smoke.mjs",
+    "gate-lifecycle-smoke": "node skills/change-evaluation-gate/scripts/gate-lifecycle-smoke.mjs",
+    "gate-adapter-conformance": "node skills/change-evaluation-gate/scripts/gate-adapter-conformance.mjs",
+    "gate-security-control-smoke": "node skills/change-evaluation-gate/scripts/gate-security-control-smoke.mjs",
+    "gate-runtime-portability": "node skills/change-evaluation-gate/scripts/gate-runtime-portability.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

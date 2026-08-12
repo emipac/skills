@@ -19,6 +19,10 @@ or both. The planner classifies changed files against those scopes, preserves
 configured command order, and explains every skip or ambiguous classification. It
 never guesses a replacement command.
 
-User-facing work requires smoke or browser evidence. Frontend changes require
-the configured production build. Completion requires an evidence row for every
+Shared, tied, and unmatched files affect every configured active profile.
+`none` means that profile is inactive and is never synthesized; `unknown`
+remains active and conservative. A production frontend build is required only
+when a real configured frontend profile is affected.
+
+User-facing work requires smoke or browser evidence. Completion requires an evidence row for every
 required command with its exact outcome after the final relevant change.

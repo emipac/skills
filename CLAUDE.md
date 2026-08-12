@@ -55,10 +55,14 @@ explicit amendment decisions, and explicit commit/push authorization. Contract
 changes require unit coverage for traceability, blockers, cycles, assumptions,
 and readiness.
 
-`framework-setup` schema version 3 owns profiles, source scopes, capabilities,
-and exact scoped commands. `verify-change` must retain deterministic impact
+`framework-setup` schema versions 3 and 4 own profiles, source scopes,
+capabilities, and exact scoped commands. Version 4 adds symmetric profile
+absence and OS-independent Command descriptors while version 3 remains
+readable. `verify-change` must retain deterministic impact
 ordering, exact command evidence, visible ambiguous paths, justified skips, and
-mandatory smoke or browser coverage for user-facing work. `code-review` must
+mandatory smoke or browser coverage for user-facing work. Shared, tied, and
+unmatched paths affect configured active profiles only, and frontend builds are
+required only for an affected configured frontend. `code-review` must
 keep Standards, Contract, Security, and Evidence findings independent, with
 Security delegated to a diff-scoped `audit-security` pass. Durable
 synchronization requires an explicit owning artifact and decision gate.

@@ -374,7 +374,7 @@ Completed and published as `v0.3.0`:
 
 #### Success criteria
 
-- SRS requirements trace to feature specs and tickets.
+- SRS requirements trace to feature contracts and delivery contracts.
 - Tickets are vertical, independently verifiable, and sized for one context.
 - No ticket begins with unresolved blocking assumptions.
 - Implementation produces red-before-green evidence at the agreed seam.

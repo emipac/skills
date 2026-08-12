@@ -1,9 +1,12 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   access,
   mkdir,
   readFile,
   readdir,
+  rename,
+  rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -23,6 +26,13 @@ const frontendProfiles = new Set([
   'svelte-typescript',
   'none',
   'unknown',
+]);
+const backendProfilesV4 = new Set([...backendProfiles, 'none']);
+const commandRunners = new Set([
+  'composer-bin',
+  'php-script',
+  'package-script',
+  'repository-script',
 ]);
 const ignoredDirectories = new Set(['.git', 'node_modules', 'vendor']);
 
@@ -47,11 +57,18 @@ const readExistingConfiguration = async (projectRoot) => {
   const configurationPath = path.join(projectRoot, '.agent-framework.yaml');
 
   if (!(await exists(configurationPath))) {
-    return { schemaVersion: null, sourceScopes: null };
+    return {
+      schemaVersion: null,
+      backend: null,
+      frontend: null,
+      sourceScopes: null,
+    };
   }
 
   const contents = await readFile(configurationPath, 'utf8');
   const schemaVersion = Number(contents.match(/^schema_version:\s*(\d+)$/m)?.[1] ?? 0);
+  const backend = parseYamlScalar(contents.match(/^backend:\s*(.+)$/m)?.[1] ?? 'unknown');
+  const frontend = parseYamlScalar(contents.match(/^frontend:\s*(.+)$/m)?.[1] ?? 'unknown');
   const sourceScopes = { backend: [], frontend: [], shared: [] };
   let inSourceScopes = false;
   let currentScope = null;
@@ -82,7 +99,708 @@ const readExistingConfiguration = async (projectRoot) => {
 
   return {
     schemaVersion: schemaVersion || null,
+    backend,
+    frontend,
     sourceScopes: schemaVersion >= 3 ? sourceScopes : null,
+  };
+};
+
+const parseYamlScalar = (value) => {
+  const trimmed = value.trim();
+
+  return trimmed.startsWith('"') ? JSON.parse(trimmed) : trimmed;
+};
+
+const parseMigrationConfiguration = (contents) => {
+  const schemaVersion = Number(contents.match(/^schema_version:\s*(\d+)$/m)?.[1] ?? 0);
+  const backend = parseYamlScalar(contents.match(/^backend:\s*(.+)$/m)?.[1] ?? 'unknown');
+  const frontend = parseYamlScalar(contents.match(/^frontend:\s*(.+)$/m)?.[1] ?? 'unknown');
+  const commands = [];
+  const sourceScopes = { backend: [], frontend: [], shared: [] };
+  const commandIndexes = new Map();
+  let inVerification = false;
+  let inCommands = false;
+  let category = null;
+  let scope = null;
+
+  const lines = contents.split(/\r?\n/);
+
+  let inSourceScopes = false;
+  let sourceScope = null;
+
+  for (const line of lines) {
+    if (line === 'source_scopes:') {
+      inSourceScopes = true;
+      continue;
+    }
+
+    if (inSourceScopes && line && !line.startsWith(' ')) {
+      break;
+    }
+
+    const scopeMatch = line.match(/^  (backend|frontend|shared):(?:\s*\[\])?$/);
+
+    if (inSourceScopes && scopeMatch) {
+      sourceScope = scopeMatch[1];
+      continue;
+    }
+
+    const rootMatch = line.match(/^    -\s+(.+)$/);
+
+    if (inSourceScopes && sourceScope && rootMatch) {
+      sourceScopes[sourceScope].push(parseYamlScalar(rootMatch[1]));
+    }
+  }
+
+  for (const [lineIndex, line] of lines.entries()) {
+    if (line === 'verification:') {
+      inVerification = true;
+      continue;
+    }
+
+    if (inVerification && line === '  commands:') {
+      inCommands = true;
+      continue;
+    }
+
+    if (inVerification && line && !line.startsWith(' ')) {
+      break;
+    }
+
+    if (!inCommands) {
+      continue;
+    }
+
+    const categoryMatch = line.match(/^    ([a-z_]+):(?:\s*\[\])?$/);
+
+    if (categoryMatch) {
+      category = categoryMatch[1];
+      scope = null;
+      continue;
+    }
+
+    const scopeMatch = line.match(/^      (backend|frontend|both):(?:\s*\[\])?$/);
+
+    if (scopeMatch) {
+      scope = scopeMatch[1];
+      continue;
+    }
+
+    const commandMatch = line.match(/^        -\s+(.+)$/);
+
+    if (!commandMatch || !category || !scope) {
+      continue;
+    }
+
+    const commandIndexKey = `${category}.${scope}`;
+    const index = commandIndexes.get(commandIndexKey) ?? 0;
+    commandIndexes.set(commandIndexKey, index + 1);
+    commands.push({
+      category,
+      scope,
+      index,
+      lineIndex,
+      value: parseYamlScalar(commandMatch[1]),
+    });
+  }
+
+  return { schemaVersion, backend, frontend, sourceScopes, commands };
+};
+
+const inferredCommandDescriptor = (command) => {
+  const packageScript = command.match(/^(npm|pnpm|bun) run ([a-zA-Z0-9:_-]+)$/)
+    ?? command.match(/^yarn ([a-zA-Z0-9:_-]+)$/);
+
+  if (packageScript) {
+    return {
+      runner: 'package-script',
+      args: [packageScript.at(-1)],
+    };
+  }
+
+  const safeCommand = /^[a-zA-Z0-9_./:=@-]+(?:\s+[a-zA-Z0-9_./:=@-]+)*$/;
+
+  if (!safeCommand.test(command)) {
+    return null;
+  }
+
+  const composerBinary = command.match(/^(?:\.\/)?vendor\/bin\/([a-zA-Z0-9_.-]+)(?:\s+(.+))?$/);
+
+  if (composerBinary) {
+    return {
+      runner: 'composer-bin',
+      args: [composerBinary[1], ...(composerBinary[2]?.split(' ') ?? [])],
+    };
+  }
+
+  const phpScript = command.match(/^php\s+(.+)$/);
+
+  if (phpScript) {
+    return {
+      runner: 'php-script',
+      args: phpScript[1].split(' '),
+    };
+  }
+
+  return null;
+};
+
+const migrationAmbiguities = (configuration, mappings) => {
+  const ambiguities = [];
+
+  for (const profile of ['backend', 'frontend']) {
+    if (configuration[profile] === 'unknown' && !mappings.profiles?.[profile]) {
+      ambiguities.push({
+        path: profile,
+        value: 'unknown',
+        required: ['profile'],
+      });
+    }
+  }
+
+  for (const command of configuration.commands) {
+    const commandPath = `verification.commands.${command.category}.${command.scope}[${command.index}]`;
+    const mapping = mappings.commands?.[commandPath] ?? {};
+    const inferredDescriptor = inferredCommandDescriptor(command.value);
+    const required = [];
+
+    if (!inferredDescriptor && !mapping.runner) {
+      required.push('runner');
+    }
+
+    if (!inferredDescriptor && !Array.isArray(mapping.args)) {
+      required.push('args');
+    }
+
+    if (!Number.isInteger(mapping.timeout_seconds) || mapping.timeout_seconds <= 0) {
+      required.push('timeout_seconds');
+    }
+
+    if (required.length > 0) {
+      ambiguities.push({
+        path: commandPath,
+        value: command.value,
+        required,
+      });
+    }
+  }
+
+  return ambiguities;
+};
+
+const validateCommandWorkingDirectory = (workingDirectory) => {
+  const isInvalid = typeof workingDirectory !== 'string'
+    || !workingDirectory
+    || workingDirectory.includes('\\')
+    || path.posix.isAbsolute(workingDirectory)
+    || path.win32.isAbsolute(workingDirectory)
+    || workingDirectory.split('/').includes('..');
+
+  if (isInvalid) {
+    throw new Error(`Invalid command working directory: ${String(workingDirectory)}`);
+  }
+};
+
+const validateMigrationMappings = (configuration, mappings) => {
+  if (!mappings || typeof mappings !== 'object' || Array.isArray(mappings)) {
+    throw new Error('Migration mappings must be an object');
+  }
+
+  const unsupportedSection = Object.keys(mappings).find(
+    (section) => !['profiles', 'commands'].includes(section),
+  );
+
+  if (unsupportedSection) {
+    throw new Error(`Unsupported migration mapping section: ${unsupportedSection}`);
+  }
+
+  for (const section of ['profiles', 'commands']) {
+    const value = mappings[section];
+
+    if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) {
+      throw new Error(`Migration mapping ${section} must be an object`);
+    }
+  }
+
+  for (const [profile, value] of Object.entries(mappings.profiles ?? {})) {
+    if (!['backend', 'frontend'].includes(profile)) {
+      throw new Error(`Unsupported profile mapping: ${profile}`);
+    }
+
+    if (configuration[profile] !== 'unknown') {
+      throw new Error(
+        `Profile mapping for ${profile} is only allowed when its schema v3 value is unknown`,
+      );
+    }
+
+    const supportedProfiles = profile === 'backend' ? backendProfilesV4 : frontendProfiles;
+
+    if (!supportedProfiles.has(value)) {
+      throw new Error(`Unsupported ${profile} profile mapping: ${String(value)}`);
+    }
+  }
+
+  const commandPaths = new Set(configuration.commands.map(
+    (command) => `verification.commands.${command.category}.${command.scope}[${command.index}]`,
+  ));
+
+  for (const [commandPath, mapping] of Object.entries(mappings.commands ?? {})) {
+    if (!commandPaths.has(commandPath)) {
+      throw new Error(`Unknown command mapping: ${commandPath}`);
+    }
+
+    if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+      throw new Error(`Command mapping must be an object: ${commandPath}`);
+    }
+
+    const allowedKeys = new Set([
+      'runner',
+      'args',
+      'working_directory',
+      'timeout_seconds',
+      'allowed_environment',
+    ]);
+    const unsupportedKey = Object.keys(mapping).find((key) => !allowedKeys.has(key));
+
+    if (unsupportedKey) {
+      throw new Error(`Unsupported command mapping field: ${unsupportedKey}`);
+    }
+
+    if (mapping.runner !== undefined && !commandRunners.has(mapping.runner)) {
+      throw new Error(`Unsupported command runner: ${String(mapping.runner)}`);
+    }
+
+    if (
+      mapping.args !== undefined
+      && (!Array.isArray(mapping.args)
+        || mapping.args.length === 0
+        || mapping.args.some((argument) => typeof argument !== 'string'))
+    ) {
+      throw new Error(`Invalid command arguments: ${commandPath}`);
+    }
+
+    if (mapping.working_directory !== undefined) {
+      validateCommandWorkingDirectory(mapping.working_directory);
+    }
+
+    if (
+      mapping.timeout_seconds !== undefined
+      && (!Number.isInteger(mapping.timeout_seconds) || mapping.timeout_seconds <= 0)
+    ) {
+      throw new Error(`Invalid command timeout: ${commandPath}`);
+    }
+
+    if (
+      mapping.allowed_environment !== undefined
+      && (!Array.isArray(mapping.allowed_environment)
+        || new Set(mapping.allowed_environment).size !== mapping.allowed_environment.length
+        || mapping.allowed_environment.some(
+          (name) => typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name),
+        ))
+    ) {
+      throw new Error(`Invalid allowed environment names: ${commandPath}`);
+    }
+  }
+};
+
+const verificationProfile = (backend, frontend) => {
+  if (backend === 'none' && frontend === 'none') {
+    return 'tooling';
+  }
+
+  if (backend === 'none') {
+    return frontend;
+  }
+
+  return frontend === 'none' ? backend : `${backend}-${frontend}`;
+};
+
+const migratedCommandDescriptor = (command, mappings) => {
+  const commandPath = `verification.commands.${command.category}.${command.scope}[${command.index}]`;
+  const mapping = mappings.commands?.[commandPath] ?? {};
+  const inferredDescriptor = inferredCommandDescriptor(command.value) ?? {};
+
+  return {
+    runner: mapping.runner ?? inferredDescriptor.runner,
+    args: mapping.args ?? inferredDescriptor.args,
+    working_directory: mapping.working_directory ?? '.',
+    timeout_seconds: mapping.timeout_seconds,
+    allowed_environment: mapping.allowed_environment ?? [],
+    evidence_category: command.category,
+    source_scope: command.scope,
+  };
+};
+
+const renderMigratedConfiguration = (contents, configuration, mappings) => {
+  const backend = mappings.profiles?.backend ?? configuration.backend;
+  const frontend = mappings.profiles?.frontend ?? configuration.frontend;
+  const commandLines = new Map(configuration.commands.map((command) => [
+    command.lineIndex,
+    `        - ${JSON.stringify(migratedCommandDescriptor(command, mappings))}`,
+  ]));
+
+  return contents.split(/\r?\n/).map((line, lineIndex) => {
+    if (commandLines.has(lineIndex)) {
+      return commandLines.get(lineIndex);
+    }
+
+    if (/^schema_version:/.test(line)) {
+      return 'schema_version: 4';
+    }
+
+    if (/^backend:/.test(line)) {
+      return `backend: ${yamlScalar(backend)}`;
+    }
+
+    if (/^frontend:/.test(line)) {
+      return `frontend: ${yamlScalar(frontend)}`;
+    }
+
+    if (/^  profile:/.test(line)) {
+      return `  profile: ${yamlScalar(verificationProfile(backend, frontend))}`;
+    }
+
+    return line;
+  }).join('\n');
+};
+
+const validateMigratedProfilePresence = (configuration, mappings) => {
+  const backend = mappings.profiles?.backend ?? configuration.backend;
+  const frontend = mappings.profiles?.frontend ?? configuration.frontend;
+
+  for (const [profile, value] of Object.entries({ backend, frontend })) {
+    if (value !== 'none') {
+      continue;
+    }
+
+    const hasProfileScopes = configuration.sourceScopes[profile].length > 0;
+    const hasProfileCommands = configuration.commands.some(
+      (command) => command.scope === profile,
+    );
+
+    if (hasProfileScopes || hasProfileCommands) {
+      const title = profile[0].toUpperCase() + profile.slice(1);
+
+      throw new Error(
+        `${title} profile none cannot retain ${profile} source scopes or commands`,
+      );
+    }
+  }
+};
+
+export const previewConfigurationMigration = async ({
+  projectRoot,
+  mappings = {},
+}) => {
+  const configurationPath = path.join(path.resolve(projectRoot), '.agent-framework.yaml');
+
+  if (!(await exists(configurationPath))) {
+    throw new Error('Cannot migrate a missing .agent-framework.yaml configuration');
+  }
+
+  const contents = await readFile(configurationPath, 'utf8');
+  const configuration = parseMigrationConfiguration(contents);
+
+  if (configuration.schemaVersion !== 3) {
+    throw new Error(`Schema v4 migration requires schema version 3, found ${configuration.schemaVersion}`);
+  }
+
+  validateMigrationMappings(configuration, mappings);
+  const ambiguities = migrationAmbiguities(configuration, mappings);
+
+  if (ambiguities.length > 0) {
+    return {
+      status: 'requires-mapping',
+      fromVersion: 3,
+      toVersion: 4,
+      previewHash: null,
+      ambiguities,
+    };
+  }
+
+  validateMigratedProfilePresence(configuration, mappings);
+
+  const proposedConfiguration = renderMigratedConfiguration(
+    contents,
+    configuration,
+    mappings,
+  );
+  const previewHash = createHash('sha256')
+    .update(contents)
+    .update('\0')
+    .update(proposedConfiguration)
+    .digest('hex');
+
+  return {
+    status: 'ready',
+    fromVersion: 3,
+    toVersion: 4,
+    previewHash,
+    ambiguities: [],
+    proposedConfiguration,
+  };
+};
+
+export const migrateConfiguration = async ({
+  projectRoot,
+  mappings = {},
+  confirmation,
+}) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
+  const preview = await previewConfigurationMigration({
+    projectRoot: resolvedProjectRoot,
+    mappings,
+  });
+
+  if (preview.status !== 'ready') {
+    throw new Error('Schema v4 migration still requires explicit mappings');
+  }
+
+  if (confirmation !== preview.previewHash) {
+    throw new Error('Migration confirmation does not match the current preview');
+  }
+
+  const temporaryPath = path.join(
+    resolvedProjectRoot,
+    `.agent-framework.yaml.${randomUUID()}.tmp`,
+  );
+  const configurationStats = await stat(configurationPath);
+
+  try {
+    await writeFile(temporaryPath, preview.proposedConfiguration, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: configurationStats.mode,
+    });
+    await rename(temporaryPath, configurationPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+
+  return {
+    status: 'migrated',
+    fromVersion: preview.fromVersion,
+    toVersion: preview.toVersion,
+    previewHash: preview.previewHash,
+  };
+};
+
+const gatePolicyKeys = ['checks', 'budget', 'bypass', 'execution', 'evidence'];
+const gateForbiddenOwnershipFields = new Set([
+  'activation',
+  'activated',
+  'allowed_environment',
+  'args',
+  'capabilities',
+  'client',
+  'command',
+  'commands',
+  'evidence_category',
+  'executable',
+  'hook',
+  'profile',
+  'profiles',
+  'receipt',
+  'runner',
+  'source_scope',
+  'trust',
+  'version',
+  'working_directory',
+]);
+
+const gateForbiddenOwnershipField = (value) => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (gateForbiddenOwnershipFields.has(key)) {
+      return key;
+    }
+
+    const nestedField = gateForbiddenOwnershipField(nestedValue);
+
+    if (nestedField) {
+      return nestedField;
+    }
+  }
+
+  return null;
+};
+
+const validateGatePolicy = (policy) => {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('Gate policy must be an object');
+  }
+
+  const policyKeys = Object.keys(policy);
+  const unsupportedKey = policyKeys.find((key) => !gatePolicyKeys.includes(key));
+  const missingKey = gatePolicyKeys.find((key) => !policyKeys.includes(key));
+
+  if (unsupportedKey) {
+    throw new Error(`Unsupported Gate policy subcontract: ${unsupportedKey}`);
+  }
+
+  if (missingKey) {
+    throw new Error(`Missing Gate policy subcontract: ${missingKey}`);
+  }
+
+  if (policyKeys.length !== gatePolicyKeys.length) {
+    throw new Error('Gate policy must contain exactly five subcontracts');
+  }
+
+  const forbiddenOwnershipField = gateForbiddenOwnershipField(policy);
+
+  if (forbiddenOwnershipField) {
+    throw new Error(
+      `Gate policy cannot own verification or activation field: ${forbiddenOwnershipField}`,
+    );
+  }
+
+  const checks = policy.checks;
+
+  if (!checks || typeof checks !== 'object' || Array.isArray(checks)) {
+    throw new Error('Gate checks policy must be an object');
+  }
+
+  const checkKeys = Object.keys(checks);
+
+  if (
+    checkKeys.length !== 2
+    || !checkKeys.includes('required')
+    || !checkKeys.includes('advisory')
+  ) {
+    throw new Error('Gate checks policy must contain only required and advisory identities');
+  }
+
+  for (const category of ['required', 'advisory']) {
+    const identities = checks[category];
+
+    if (
+      !Array.isArray(identities)
+      || new Set(identities).size !== identities.length
+      || identities.some((identity) => typeof identity !== 'string' || !identity.trim())
+    ) {
+      throw new Error(`Gate ${category} check identities must be unique non-empty strings`);
+    }
+  }
+
+  const overlappingIdentity = checks.required.find((identity) => checks.advisory.includes(identity));
+
+  if (overlappingIdentity) {
+    throw new Error(
+      `Gate check identity cannot be both required and advisory: ${overlappingIdentity}`,
+    );
+  }
+
+  const budget = policy.budget;
+
+  if (
+    !budget
+    || typeof budget !== 'object'
+    || Array.isArray(budget)
+    || Object.keys(budget).length !== 1
+    || !Number.isInteger(budget.total_seconds)
+    || budget.total_seconds <= 0
+  ) {
+    throw new Error('Gate budget policy must contain a positive total_seconds integer');
+  }
+
+  for (const subcontract of ['bypass', 'execution', 'evidence']) {
+    const value = policy[subcontract];
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Gate ${subcontract} policy must be an object`);
+    }
+  }
+};
+
+const renderGateConfiguration = (contents, policy) => {
+  const gateLines = [
+    'evaluation_gate:',
+    ...gatePolicyKeys.map((key) => `  ${key}: ${JSON.stringify(policy[key])}`),
+  ];
+  const lines = contents.trimEnd().split(/\r?\n/);
+  const historyIndex = lines.findIndex((line) => line === 'history:');
+  const insertionIndex = historyIndex === -1 ? lines.length : historyIndex;
+
+  lines.splice(insertionIndex, 0, ...gateLines);
+
+  return `${lines.join('\n')}\n`;
+};
+
+export const previewGateConfiguration = async ({ projectRoot, policy }) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
+
+  if (!(await exists(configurationPath))) {
+    throw new Error('Cannot configure the Gate without .agent-framework.yaml');
+  }
+
+  const contents = await readFile(configurationPath, 'utf8');
+  const schemaVersion = Number(contents.match(/^schema_version:\s*(\d+)$/m)?.[1] ?? 0);
+
+  if (schemaVersion !== 4) {
+    throw new Error(`Gate configuration requires schema version 4, found ${schemaVersion}`);
+  }
+
+  if (/^evaluation_gate\s*:/m.test(contents)) {
+    throw new Error('The Gate is already configured');
+  }
+
+  validateGatePolicy(policy);
+  const proposedConfiguration = renderGateConfiguration(contents, policy);
+  const previewHash = createHash('sha256')
+    .update(contents)
+    .update('\0')
+    .update(proposedConfiguration)
+    .digest('hex');
+
+  return {
+    status: 'ready',
+    configured: false,
+    previewHash,
+    proposedConfiguration,
+  };
+};
+
+export const configureGate = async ({
+  projectRoot,
+  policy,
+  confirmation,
+}) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
+  const preview = await previewGateConfiguration({ projectRoot: resolvedProjectRoot, policy });
+
+  if (confirmation !== preview.previewHash) {
+    throw new Error('Gate configuration confirmation does not match the current preview');
+  }
+
+  const temporaryPath = path.join(
+    resolvedProjectRoot,
+    `.agent-framework.yaml.${randomUUID()}.tmp`,
+  );
+  const configurationStats = await stat(configurationPath);
+
+  try {
+    await writeFile(temporaryPath, preview.proposedConfiguration, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: configurationStats.mode,
+    });
+    await rename(temporaryPath, configurationPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+
+  return {
+    status: 'configured',
+    activated: false,
+    previewHash: preview.previewHash,
   };
 };
 
@@ -830,8 +1548,8 @@ const parseArguments = (argumentsList) => {
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
 
-    if (argument === '--discover') {
-      options.discover = true;
+    if (['--discover', '--migrate-v4', '--configure-gate'].includes(argument)) {
+      options[argument.slice(2)] = true;
       continue;
     }
 
@@ -872,6 +1590,36 @@ const runCli = async () => {
 
   if (options.discover) {
     console.log(JSON.stringify(await discoverProject(projectRoot), null, 2));
+    return;
+  }
+
+  if (options['migrate-v4']) {
+    if (!options.mapping) {
+      throw new Error('--mapping is required when migrating to schema v4');
+    }
+
+    const mappings = JSON.parse(await readFile(path.resolve(options.mapping), 'utf8'));
+    const migrationOptions = { projectRoot, mappings };
+    const result = options.confirm
+      ? await migrateConfiguration({ ...migrationOptions, confirmation: options.confirm })
+      : await previewConfigurationMigration(migrationOptions);
+
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (options['configure-gate']) {
+    if (!options.policy) {
+      throw new Error('--policy is required when configuring the Gate');
+    }
+
+    const policy = JSON.parse(await readFile(path.resolve(options.policy), 'utf8'));
+    const gateOptions = { projectRoot, policy };
+    const result = options.confirm
+      ? await configureGate({ ...gateOptions, confirmation: options.confirm })
+      : await previewGateConfiguration(gateOptions);
+
+    console.log(JSON.stringify(result, null, 2));
     return;
   }
 
