@@ -847,21 +847,64 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         wants only a timeout.
       </p>
 
+      <div class="note note-critical">
+        <span class="note-tag">Do not paste this output into mapping.json</span>
+        <p>
+          This is a list of questions, not a form. The mapping file has a different shape, and the
+          two are inverted: the report lists a <code>path</code> and says which field is
+          <em>missing</em>; the mapping uses that path as a <em>key</em> and supplies the field.
+        </p>
+        <p>
+          In particular, <code>"required": ["timeout_seconds"]</code> means "this command has no
+          timeout yet". It is not a slot to write <code>30</code> into. And
+          <code>status</code>, <code>fromVersion</code>, <code>previewHash</code> and
+          <code>ambiguities</code> are not mapping sections — only <code>profiles</code> and
+          <code>commands</code> exist, so leaving them in fails with
+          <code>Unsupported migration mapping section</code>.
+        </p>
+      </div>
+
       <p class="cmd-label">3 — Answer those exact paths</p>
+      <p>
+        Each ambiguity's <code>path</code> becomes a key, and you supply the field it said was
+        missing. A real Laravel project with a frontend usually looks like this:
+      </p>
       <pre><code>{
-  "profiles": { "backend": "express-typescript" },
   "commands": {
-    "verification.commands.test.both[0]": { "timeout_seconds": 900 }
+    "verification.commands.format.backend[0]":           { "timeout_seconds": 30 },
+    "verification.commands.format.frontend[0]":          { "timeout_seconds": 30 },
+    "verification.commands.static_analysis.backend[0]":  { "timeout_seconds": 60 },
+    "verification.commands.static_analysis.frontend[0]": { "timeout_seconds": 30 },
+    "verification.commands.test.backend[0]":             { "timeout_seconds": 600 },
+    "verification.commands.build.frontend[0]":           { "timeout_seconds": 300 }
   }
 }</code></pre>
       <p>
-        Only two sections exist: <code>profiles</code> and <code>commands</code>. A profile may be
-        mapped only where the schema v3 value was <code>unknown</code>. Per command you may set
-        <code>runner</code> (one of <code>composer-bin</code>, <code>php-script</code>,
-        <code>package-script</code>, <code>repository-script</code>), <code>args</code>,
-        <code>working_directory</code>, <code>timeout_seconds</code>, and
-        <code>allowed_environment</code>.
+        Only two sections exist: <code>profiles</code> and <code>commands</code>. Add
+        <code>profiles</code> only if a profile was reported ambiguous, which happens when its
+        schema v3 value was <code>unknown</code>:
       </p>
+      <pre><code>{
+  "profiles": { "backend": "laravel" },
+  "commands": { }
+}</code></pre>
+      <p>
+        Per command you may set <code>runner</code> (one of <code>composer-bin</code>,
+        <code>php-script</code>, <code>package-script</code>, <code>repository-script</code>),
+        <code>args</code>, <code>working_directory</code>, <code>timeout_seconds</code>, and
+        <code>allowed_environment</code>. Usually only the timeout is needed — the tool works out
+        the runner and splits the arguments itself.
+      </p>
+
+      <div class="note note-caution">
+        <span class="note-tag">Choose timeouts generously</span>
+        <p>
+          A check that exceeds its timeout reports <span class="pill p-unver">unverified</span>,
+          which blocks — absence of evidence is never success. A full test suite or a cold build
+          is easily slower than it feels. Start high, then tighten once you have seen real
+          durations; these are ordinary configuration values you can edit any time.
+        </p>
+      </div>
       <p>
         Re-run the command from step 1. You now get <code>"status": "ready"</code>, a
         <code>previewHash</code>, and the complete proposed configuration to read. Still nothing
