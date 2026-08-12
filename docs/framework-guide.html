@@ -952,6 +952,80 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         so the two can never disagree.
       </p>
 
+      <h4>A policy that works</h4>
+      <p>
+        Start here. Configuration activates nothing, so an empty required list is harmless — and
+        it lets you add identities once you have confirmed what your checks are really called.
+      </p>
+      <pre><code>{
+  "checks":    { "required": [], "advisory": [] },
+  "budget":    { "total_seconds": 900 },
+  "bypass":    { },
+  "execution": { },
+  "evidence":  { }
+}</code></pre>
+
+      <h4>Four things that will trip you up</h4>
+
+      <div class="note note-caution">
+        <span class="note-tag">1 — All five are mandatory, even empty</span>
+        <p>
+          You cannot omit <code>bypass</code> because you do not want bypass. Leaving it out fails
+          with <code>Missing Gate policy subcontract: bypass</code>. Write <code>{}</code>. Only
+          <code>checks</code> and <code>budget</code> are strictly validated at this point; the
+          other three need only be objects.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">2 — budget takes exactly one key</span>
+        <p>
+          Adding anything beside <code>total_seconds</code> fails with <em>"Gate budget policy must
+          contain a positive total_seconds integer"</em> — which is misleading, because your
+          integer was fine. The extra key was the problem. Per-check timeouts belong in
+          <code>execution</code>, not here.
+        </p>
+      </div>
+
+      <div class="note note-critical">
+        <span class="note-tag">3 — Some field names are refused anywhere</span>
+        <p>
+          Writing <code>"execution": {"commands": {…}}</code> is the obvious move and it is
+          rejected: <code>Gate policy cannot own verification or activation field: commands</code>.
+          These names are refused at any nesting depth —
+          <code>command</code>, <code>commands</code>, <code>args</code>, <code>runner</code>,
+          <code>executable</code>, <code>working_directory</code>,
+          <code>allowed_environment</code>, <code>evidence_category</code>,
+          <code>source_scope</code>, <code>version</code>, <code>profile</code>,
+          <code>profiles</code>, <code>capabilities</code>, <code>client</code>,
+          <code>hook</code>, <code>trust</code>, <code>receipt</code>,
+          <code>activation</code>, <code>activated</code>.
+        </p>
+        <p>
+          That is command ownership enforced structurally rather than by convention. Name your keys
+          around it — <code>"execution": {"timeouts": {"my-check": 60}}</code> is accepted, and an
+          innocent <code>"version": 1</code> inside your evidence policy is not.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">4 — Check identities are not verified here</span>
+        <p>
+          A policy naming a check that does not exist is accepted without complaint. A typo will not
+          surface until evaluation, when the check you meant quietly is not the one running. Add
+          identities only after you have confirmed the exact names your verification configuration
+          uses.
+        </p>
+      </div>
+
+      <p>
+        Configuration is one-shot. Running it again fails with <code>The Gate is already
+        configured</code> — to change policy afterwards, edit the <code>evaluation_gate</code>
+        block in <code>.agent-framework.yaml</code> directly, or remove it and configure again.
+        The block lands as inline JSON, one line per subcontract, which is valid YAML if not
+        especially pretty.
+      </p>
+
       <h3>Step 4 — Activate on your machine</h3>
 
       <div class="note note-critical">
