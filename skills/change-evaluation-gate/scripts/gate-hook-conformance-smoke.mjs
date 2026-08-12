@@ -21,10 +21,17 @@
  *    trust leaves no integration active, refuses to resume once the
  *    configuration identity changes, and completes only when every transaction
  *    identity is identical (AC-LIFE-009, FR-LIFE-016).
+ * 5. `desktop-registration` — two adapters declaring different registration
+ *    files and different block schemas both register through their own
+ *    declarations into real client configuration files, every unrelated key and
+ *    entry in those files survives, drift is reported and never repaired, and
+ *    removal returns both files byte for byte to what their owners wrote
+ *    (AC-ADAPT-003, FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
- * and this Node runtime — in particular no hook manager is ever installed or
- * executed — and is safe to run repeatedly on a clean machine.
+ * and this Node runtime — in particular no hook manager and no desktop client
+ * is ever installed or executed — and is safe to run repeatedly on a clean
+ * machine.
  *
  * SAFETY: every fixture is a throwaway repository created under the OS
  * temporary directory and removed afterwards. `assertThrowawayRepository`
@@ -55,6 +62,7 @@ import { createBoundedExecutor } from './lib/bounded-execution.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
 import { collectChecks } from './lib/gate-core.mjs';
+import { deactivateGate, statusGate } from './lib/lifecycle.mjs';
 import laravelProvider from './lib/providers/laravel.mjs';
 
 const CAPABILITY = 'gate-hook-conformance-smoke';
@@ -743,6 +751,145 @@ const trustPauseAndResume = async () => {
   return { name: 'trust-pause-and-resume', ok: findings.length === 0, findings };
 };
 
+/**
+ * Two desktop registration surfaces, in real client configuration files.
+ *
+ * This is the scenario `AC-ADAPT-003` exists for: not "an entry was written"
+ * but "each entry was written in ITS OWN declared file and block schema, every
+ * unrelated key and entry in those files survived registration, reconciliation
+ * reported the truth without repairing it, and removal gave the files back
+ * byte for byte".
+ *
+ * No desktop client is installed or executed. The files are fixtures in the
+ * shapes real captures recorded (FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
+ */
+const desktopRegistration = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const general = path.join(root, '.claude/settings.local.json');
+  const dedicated = path.join(root, '.cursor/hooks.json');
+  const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
+  const writeJson = async (file, value) => writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+
+  await mkdir(path.dirname(general), { recursive: true });
+  await mkdir(path.dirname(dedicated), { recursive: true });
+  // A GENERAL settings file that holds `permissions` beside its hooks, and a
+  // DEDICATED, independently versioned file with a flat block shape. Both
+  // already carry a hook entry the Gate does not own.
+  await writeJson(general, {
+    permissions: { allow: ['Bash(ls:*)'], deny: [] },
+    hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'somebody-elses-hook' }] }] },
+  });
+  await writeJson(dedicated, { version: 1, hooks: { stop: [{ command: 'somebody-elses-hook' }] } });
+
+  const pristine = {
+    general: await readFile(general, 'utf8'),
+    dedicated: await readFile(dedicated, 'utf8'),
+  };
+  const request = activationRequest(root, {
+    adapters: [
+      { id: 'git', version: '1.0.0', authoritative: true },
+      { id: 'claude-code-desktop', version: '1.0.0', authoritative: false },
+      { id: 'cursor', version: '1.0.0', authoritative: false },
+    ],
+  });
+  const { result } = await activateFixture(root, request, { evidenceStore: store });
+
+  check(findings, result.activated === true, `Desktop registration did not activate: ${result.reasonCode}.`);
+
+  const command = `"${process.execPath}" "${path.join(root, 'tools/gate-runner.mjs')}"`;
+  const registered = { general: await readJson(general), dedicated: await readJson(dedicated) };
+
+  check(
+    findings,
+    JSON.stringify(registered.general.hooks.Stop.at(-1))
+      === JSON.stringify({ matcher: '', hooks: [{ type: 'command', command }] }),
+    'The general settings surface was not registered in its own declared block schema.',
+  );
+  check(
+    findings,
+    JSON.stringify(registered.dedicated.hooks.stop.at(-1)) === JSON.stringify({ command }),
+    'The dedicated versioned surface was not registered in its own declared block schema.',
+  );
+
+  // Survivors: every unrelated key and every unrelated entry, in both files.
+  check(
+    findings,
+    JSON.stringify(registered.general.permissions) === JSON.stringify({ allow: ['Bash(ls:*)'], deny: [] })
+      && registered.dedicated.version === 1,
+    'Registration rewrote a part of a client configuration file the adapter does not own.',
+  );
+  check(
+    findings,
+    registered.general.hooks.Stop[0].hooks[0].command === 'somebody-elses-hook'
+      && registered.dedicated.hooks.stop[0].command === 'somebody-elses-hook',
+    'Registration disturbed an unrelated hook entry in the same client file.',
+  );
+
+  const healthy = await statusGate({ evidenceStore: store, repositoryRoot: root });
+
+  check(findings, healthy.status === 'healthy', `A registered clone reported ${healthy.status}.`);
+
+  // Somebody edits the Gate's own entry. Health reports it and repairs nothing.
+  const drifted = await readJson(general);
+
+  drifted.hooks.Stop.at(-1).matcher = '*';
+  await writeJson(general, drifted);
+
+  const beforeStatus = await readFile(general, 'utf8');
+  const degraded = await statusGate({ evidenceStore: store, repositoryRoot: root });
+
+  check(
+    findings,
+    degraded.status === 'degraded'
+      && degraded.findings.some((finding) => finding.code === 'adapter-registration-drifted'),
+    `A drifted registration was not reported: ${degraded.status}.`,
+  );
+  check(
+    findings,
+    degraded.repaired === false && (await readFile(general, 'utf8')) === beforeStatus,
+    'Observing a drifted registration changed it.',
+  );
+
+  // Removal refuses while that drift stands, and takes nothing at all.
+  const refused = await deactivateGate({ evidenceStore: store, repositoryRoot: root });
+
+  check(
+    findings,
+    refused.deactivated === false && refused.reasonCode === 'registration-drifted',
+    `A drifted registration did not refuse the whole deactivation: ${refused.reasonCode}.`,
+  );
+  check(
+    findings,
+    refused.removed.length === 0 && (await readFile(dedicated, 'utf8')) === JSON.stringify(registered.dedicated, null, 2) + '\n',
+    'A refused deactivation still removed something.',
+  );
+
+  // The operator puts their edit back; removal then takes exactly the two Gate
+  // entries and gives both files back byte for byte.
+  drifted.hooks.Stop.at(-1).matcher = '';
+  await writeJson(general, drifted);
+
+  const removal = await deactivateGate({ evidenceStore: store, repositoryRoot: root });
+
+  check(findings, removal.deactivated === true, `Deactivation refused: ${removal.reasonCode}.`);
+  check(
+    findings,
+    JSON.stringify(removal.removed.filter((entry) => entry.kind === 'adapter-registration').map((entry) => entry.adapter))
+      === JSON.stringify(['claude-code-desktop', 'cursor']),
+    'Deactivation did not withdraw both declared registrations.',
+  );
+  check(
+    findings,
+    (await readFile(general, 'utf8')) === pristine.general
+      && (await readFile(dedicated, 'utf8')) === pristine.dedicated,
+    'Removal did not return both client configuration files to exactly what their owners wrote.',
+  );
+
+  return { name: 'desktop-registration', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -753,6 +900,7 @@ const main = async () => {
       await strategyOrder(),
       await markerDrift(),
       await trustPauseAndResume(),
+      await desktopRegistration(),
     ];
   } finally {
     for (const root of temporaryRoots) {

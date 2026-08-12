@@ -1,6 +1,6 @@
 # TB-016 — Reconcile desktop adapter registration surfaces
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent
@@ -109,15 +109,15 @@ registered when only the file's existence was checked.
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-003`: each supported desktop adapter declares its registration
+- [x] `AC-ADAPT-003`: each supported desktop adapter declares its registration
   file, block schema, and schema-versioning behaviour, and activation registers
   through that declaration with no client-name branch in activation or Gate core.
-- [ ] `AC-ADAPT-003`: `gate status` reconciles a registered adapter, reports
+- [x] `AC-ADAPT-003`: `gate status` reconciles a registered adapter, reports
   drift when the registered block no longer matches the declaration, and repairs
   nothing.
-- [ ] `AC-ADAPT-003`: `gate deactivate` removes only an unchanged Gate-owned
+- [x] `AC-ADAPT-003`: `gate deactivate` removes only an unchanged Gate-owned
   registration entry and preserves every unrelated entry in the same client file.
-- [ ] `AC-ADAPT-003`: an adapter whose declared registration surface cannot be
+- [x] `AC-ADAPT-003`: an adapter whose declared registration surface cannot be
   confirmed on disk is `unverified` and never counted as registered.
 
 ## Verification Matrix

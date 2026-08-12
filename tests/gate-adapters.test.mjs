@@ -21,6 +21,7 @@ import {
   runCompatibilityBaseline,
   SUPPORT_TIERS,
   validateAdapterDeclaration,
+  validateRegistrationDeclaration,
 } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
 import {
   REASON_OUTCOMES,
@@ -1303,4 +1304,71 @@ test('FR-ADAPT-003 prohibited behavior: gate core carries no client-name branch,
       true,
     );
   }
+});
+
+/**
+ * TB-016 — `FR-ADAPT-008`, `AC-ADAPT-003`.
+ *
+ * A registration surface is declared data, on the same footing as an adapter's
+ * event names and identity fields. An adapter that does not state one has not
+ * told anyone where it registers, and a gate that defaulted it would be
+ * assuming another client's file, block shape, or format version.
+ */
+test('FR-ADAPT-008: every adapter declares its own registration surface, and an incomplete declaration is rejected', () => {
+  for (const adapterId of ADAPTER_IDS) {
+    assert.deepEqual(
+      validateRegistrationDeclaration(describeAdapter(adapterId).registration),
+      [],
+      `${adapterId} does not declare a complete registration surface.`,
+    );
+  }
+
+  const desktop = DESKTOP_ADAPTER_IDS.map((id) => describeAdapter(id).registration);
+
+  // Three declarations, in three different files. Two of them share a block
+  // shape today; that is an observation, not a shared contract.
+  assert.equal(new Set(desktop.map((surface) => surface.file)).size, 3);
+  assert.equal(new Set(desktop.map((surface) => surface.blockSchema)).size, 2);
+
+  // Exactly one surface can signal a breaking change to its own registration
+  // format, and it is the one that carries a version key.
+  assert.deepEqual(
+    desktop.filter((surface) => surface.schemaVersion !== null).map((surface) => surface.schemaVersion),
+    [{ key: 'version', value: 1 }],
+  );
+
+  // A surface that omits what FR-ADAPT-008 requires is an error, never a
+  // default: `schemaVersion` in particular must be stated even when it is null,
+  // because "not versioned" is a claim about the client.
+  assert.deepEqual(
+    validateRegistrationDeclaration({
+      kind: 'client-configuration-file',
+      file: '.some-client/hooks.json',
+      container: ['hooks'],
+      trigger: 'work-complete',
+      matcher: null,
+      commandType: null,
+    }).map((error) => error.path).sort(),
+    ['registration.blockSchema', 'registration.ownership', 'registration.schemaVersion'],
+  );
+
+  // And a block schema nothing implements is rejected rather than guessed at.
+  assert.deepEqual(
+    validateRegistrationDeclaration({
+      kind: 'client-configuration-file',
+      file: '.some-client/hooks.json',
+      ownership: 'dedicated-hooks-file',
+      container: ['hooks'],
+      trigger: 'work-complete',
+      blockSchema: 'some-shape-nobody-declared',
+      matcher: null,
+      commandType: null,
+      schemaVersion: null,
+    }).map((error) => error.code),
+    ['adapter-registration-schema-unknown'],
+  );
+
+  // An adapter is free to declare that it does not register in a client file at
+  // all, and that declaration is complete on its own terms.
+  assert.deepEqual(validateRegistrationDeclaration({ kind: 'repository-hook-chain' }), []);
 });

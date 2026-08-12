@@ -7,8 +7,13 @@ itself, and what has to be proved before any of them may be called *supported*.
 Implemented by `scripts/lib/adapters.mjs`. Verified by
 `tests/gate-adapters.test.mjs` and the `gate-adapter-conformance` capability.
 
-Traces `FR-ADAPT-001` … `FR-ADAPT-007`, `NFR-COMP-001`, `AC-ADAPT-001`,
-`AC-ADAPT-002`, `SG-SUPPORT-001`, `RISK-004`, `Q-003`, `Q-004`.
+Traces `FR-ADAPT-001` … `FR-ADAPT-008`, `NFR-COMP-001`, `AC-ADAPT-001`,
+`AC-ADAPT-002`, `AC-ADAPT-003`, `SG-HOOK-001`, `SG-OWNER-001`,
+`SG-SUPPORT-001`, `RISK-004`, `Q-003`, `Q-004`.
+
+Registration surfaces are implemented by `scripts/lib/adapter-registration.mjs`
+and verified by `tests/gate-adapter-registration.test.mjs` and the
+`gate-hook-conformance-smoke` capability.
 
 ## 1. An adapter is thin
 
@@ -158,6 +163,94 @@ The request that reaches gate core is exactly the process contract's shape.
 `validateEvaluationRequest` rejects unknown fields, so a leak would be refused
 by core even if the adapter layer regressed.
 
+## 5a. Declared registration surfaces
+
+A client does not run the Gate because the Gate is installed. It runs it because
+an entry naming the Gate's command sits in that client's own configuration
+file — and the three v1 surfaces disagree about which file that is, what shape
+the entry has, and whether the format is versioned at all. So each adapter
+declares its registration surface, and activation, health reconciliation, and
+removal act on a desktop registration only through that declaration
+(`FR-ADAPT-008`, `AC-ADAPT-003`).
+
+| Adapter | File | File is | Container | Block schema | Event key | Format version |
+| --- | --- | --- | --- | --- | --- | --- |
+| `git` | — | this clone's own hook chain | — | — | — | — |
+| `claude-code-desktop` | `.claude/settings.local.json` | a general settings file, shared with `permissions` | `hooks` | `matcher-group` | `Stop` | none |
+| `codex-desktop` | `.codex/hooks.json` | dedicated to hooks | `hooks` | `matcher-group` | `Stop` | none |
+| `cursor` | `.cursor/hooks.json` | dedicated to hooks | `hooks` | `flat-command` | `stop` | `version: 1` |
+
+Two block schemas, declared per adapter:
+
+- `matcher-group` — `{ matcher, hooks: [{ type, command }] }`: a matcher group
+  wrapping a typed inner array.
+- `flat-command` — `{ command }`: no matcher, no type.
+
+The event key is not declared twice. Each registration declares a *trigger*, and
+the key is that adapter's own declared native event for it — so registration and
+trigger matching can never disagree about a client's event-name casing.
+
+Two surfaces share a block shape today. That is an observation, not a shared
+contract: `FR-ADAPT-004`'s intent is that one client's change cannot silently
+redefine another's, so the declarations stay separate. Only one surface carries
+its own format version, and only that one can signal a breaking change to its
+registration format without changing the Gate (`RISK-004`).
+
+### What is owned, and what is never touched
+
+The adapter owns one entry and nothing else in the file. Registration merges
+that entry into the declared array; every other key, every other event, and
+every other entry is written back exactly as its owner wrote it — including the
+`permissions` beside one surface's hooks and the `version` in another's. What a
+registration had to create around its own entry is recorded, so a removal that
+takes the entry also takes the empty container it created and returns the
+document to the shape its owner wrote (`SG-HOOK-001`).
+
+Because these documents are JSON, ownership is proved by content rather than by
+a marker comment the format cannot carry: the receipt pins the entry's content
+identity and the exact command it names. The Gate's entry is located by that
+command — never by position — and removed only when it is still byte-for-byte
+what was written.
+
+### Reconciled states
+
+`gate status` reconciles each pinned registration through the declaration and
+repairs nothing:
+
+| State | Reported as | Meaning |
+| --- | --- | --- |
+| `registered` | *(no finding)* | the pinned entry is still exactly what was written |
+| `drifted` | `adapter-registration-drifted` | the entry names the Gate command but is no longer the entry the activation wrote |
+| `absent` | `adapter-registration-absent` | no entry under the declared event names the Gate command |
+| `ambiguous` | `adapter-registration-ambiguous` | several entries do, so which one is the Gate's cannot be told |
+| `unverified` | `adapter-registration-unverified` | the declared surface could not be confirmed on disk at all |
+
+**A surface that cannot be confirmed is `unverified`, never registered.** The
+Gate does not create a client's configuration file: it cannot know a format it
+has never confirmed, including whether that format carries its own version. An
+activation whose declared surface is missing completes, pins the surface as
+`unverified`, and the clone reports `degraded` — an honest partial integration,
+never a claimed one.
+
+Removal is all-or-nothing across every registration and the authoritative hook
+together. A drifted or ambiguous entry refuses the whole deactivation and
+nothing is removed anywhere; an entry whose command somebody edited is not the
+Gate's entry and is left exactly where it is.
+
+None of this is validated by a client-name branch. Activation, the lifecycle
+commands, and the registration mechanics name no client at all; every client
+name in the module set lives in the adapter declarations
+(`SG-OWNER-001`).
+
+### Still unconfirmed
+
+Registration surfaces carry the same evidence caveat as payloads. Only two block
+shapes were read from disk, each from one machine and one client version; the
+third was reported rather than captured. Whether any of them is stable across
+client versions is unknown — which is exactly why the schema-versioning
+behaviour is declared rather than assumed. Registration evidence belongs in the
+release manifest alongside payload evidence (`RISK-004`, `Q-004`).
+
 ## 6. Failure handling
 
 Five failure families, one honest answer. All five reason codes normalize to
@@ -248,5 +341,6 @@ one requires its own Wayfinder effort and its own compatibility evidence.
 Installing the plugin ships the adapter library and this contract. It registers
 nothing. Adapters are self-tested and registered only by the explicit
 clone-local Activation transaction, which pins the receipt that proves it
-(`SG-DIST-001`). Losing a registered preflight adapter afterwards makes the
-clone `degraded`; losing authoritative Git makes it `broken`.
+(`SG-DIST-001`). Losing a registered preflight adapter afterwards — or losing,
+drifting, or being unable to confirm its declared registration surface — makes
+the clone `degraded`; losing authoritative Git makes it `broken`.

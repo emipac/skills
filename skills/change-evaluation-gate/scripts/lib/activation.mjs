@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { resolveExecutables } from './command-descriptor.mjs';
 
@@ -1080,6 +1081,66 @@ export const previewActivation = async (request, dependencies = {}) => {
 };
 
 /**
+ * Register one selected adapter in the surface that adapter declares.
+ *
+ * This is the whole of activation's knowledge of desktop registration: which
+ * clone it is in and which command it should run. Which file, which container,
+ * which block schema, which event-key casing, and whether the format carries
+ * its own version all come from the adapter's declaration (FR-ADAPT-008).
+ */
+const registerDeclaredSurface = async (adapter, { repository, command }) => registerAdapterSurface({
+  adapterId: adapter.id,
+  repositoryRoot: repository.root,
+  command,
+});
+
+/**
+ * Withdraw one registration this transaction wrote — and only that.
+ *
+ * The compensating action is the mirror of the registration: it takes back the
+ * one entry the transaction added, when that entry is still exactly what was
+ * written, and leaves every other byte of the client's file alone.
+ */
+const withdrawDeclaredSurface = async (adapter, { repository, registration }) => (
+  withdrawAdapterRegistration({
+    adapterId: adapter.id,
+    repositoryRoot: repository.root,
+    registration,
+  })
+);
+
+/**
+ * What a receipt pins about one adapter registration.
+ *
+ * Only a registration in a client-owned configuration file is pinned here. An
+ * adapter that registers through this clone's own hook chain is already pinned
+ * by the receipt's `hookChain`, and an injected fixture seam that returns
+ * something else pins nothing at all rather than a guess at its meaning.
+ */
+const pinnedRegistration = (result) => (
+  result?.kind === 'client-configuration-file'
+    ? {
+      kind: result.kind,
+      path: result.path ?? null,
+      eventKey: result.eventKey ?? null,
+      blockSchema: result.blockSchema ?? null,
+      command: result.command ?? null,
+      entryIdentity: result.entryIdentity ?? null,
+      // What the registration had to add around its own entry, so a later
+      // removal returns the client's file to the shape its owner wrote.
+      created: result.created ?? null,
+      registered: result.registered === true,
+      confirmed: result.confirmed === true,
+      // A surface the transaction could not confirm is pinned as `unverified`,
+      // so the receipt records what the clone actually has rather than what was
+      // selected (FR-ADAPT-008, AC-ADAPT-003).
+      state: result.registered === true ? 'registered' : 'unverified',
+      reason: result.reason ?? null,
+    }
+    : null
+);
+
+/**
  * Run one Activation transaction.
  *
  * Every seam that touches the machine is injected, so a fixture can inject a
@@ -1091,8 +1152,12 @@ export const activate = async (request, dependencies = {}) => {
     revokeTrust = null,
     selfTestEvaluation,
     selfTestAdapter,
-    registerAdapter = null,
-    unregisterAdapter = null,
+    // Desktop adapter registration goes through the adapter's own declared
+    // surface. The seam stays injectable so a fixture can fail it on purpose,
+    // but the default is the real declaration-driven write: activation carries
+    // no knowledge of any client (FR-ADAPT-008, SG-OWNER-001).
+    registerAdapter = registerDeclaredSurface,
+    unregisterAdapter = withdrawDeclaredSurface,
     registerHook = registerOwnedHook,
     unregisterHook = removeOwnedHook,
     composeHook = registerManagedBlock,
@@ -1387,6 +1452,19 @@ export const activate = async (request, dependencies = {}) => {
   }
 
   const adapters = [];
+  // The one command a desktop surface would run: the same pinned runtime the
+  // authoritative hook execs. A program the gate cannot safely quote yields no
+  // command, and a registration without one refuses rather than inventing one.
+  let adapterCommand = null;
+
+  try {
+    adapterCommand = quotedProgram({
+      program: request.runtime?.hookProgram ?? null,
+      repositoryRoot: request.repository.root,
+    });
+  } catch {
+    adapterCommand = null;
+  }
 
   // An adapter becomes active only after it has proved itself, and the set is
   // all-or-nothing: the first failure unwinds every adapter already registered,
@@ -1401,16 +1479,28 @@ export const activate = async (request, dependencies = {}) => {
       return fail('self-test', 'adapter-self-test-failed', [{ adapter: adapter.id, ...selfTest }]);
     }
 
-    adapters.push({ ...adapter, selfTest });
+    if (!registerAdapter) {
+      adapters.push({ ...adapter, selfTest });
 
-    if (registerAdapter) {
-      await registerAdapter(adapter, { repository: described.repository });
+      continue;
+    }
 
+    const registration = await registerAdapter(adapter, {
+      repository: described.repository,
+      command: adapterCommand,
+    });
+    const pinned = pinnedRegistration(registration);
+
+    adapters.push({ ...adapter, selfTest, ...(pinned === null ? {} : { registration: pinned }) });
+
+    // An adapter that registers nothing has nothing to compensate. Journalling
+    // it anyway would claim a rollback action that never had anything to undo.
+    if (registration !== null && (pinned === null || pinned.registered === true)) {
       journal.push({
         name: `adapter:${adapter.id}`,
         undo: async () => {
           if (unregisterAdapter) {
-            await unregisterAdapter(adapter, { repository: described.repository });
+            await unregisterAdapter(adapter, { repository: described.repository, registration: pinned });
           }
         },
       });

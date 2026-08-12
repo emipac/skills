@@ -128,6 +128,13 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'git-pre-commit',
     role: 'authoritative',
+    // Authoritative Git does not register in a client configuration file at
+    // all: its registration surface is this clone's own hook chain, which
+    // activation composes through the declared hook strategy order. It says so
+    // rather than leaving the field absent, because an adapter that declares no
+    // registration surface has not told anyone where it registers
+    // (FR-ADAPT-008).
+    registration: Object.freeze({ kind: 'repository-hook-chain' }),
     nativeEvents: Object.freeze({ 'commit-attempt': 'pre-commit' }),
     // Nothing here is pending observation: Git's hook contract is specified,
     // and this surface is driven by the Gate's own hook program.
@@ -167,6 +174,26 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'claude-code-desktop-local-code-tab',
     role: 'preflight',
+    // Observed from a real client configuration: this surface registers inside a
+    // GENERAL settings file that also holds `permissions`, so registration is a
+    // merge into a document the adapter mostly does not own (FR-ADAPT-008,
+    // SG-HOOK-001).
+    registration: Object.freeze({
+      kind: 'client-configuration-file',
+      file: '.claude/settings.local.json',
+      ownership: 'shared-settings-file',
+      container: Object.freeze(['hooks']),
+      // Registration is keyed by the SAME declared native event the trigger
+      // table already carries. One declared event name per adapter serves both
+      // registration and trigger matching — but only per client, never shared.
+      trigger: 'work-complete',
+      blockSchema: 'matcher-group',
+      matcher: '',
+      commandType: 'command',
+      // This file carries no version key of its own, so this client cannot
+      // signal a breaking change to its registration format.
+      schemaVersion: null,
+    }),
     // Observed from a real client payload: `hook_event_name: "Stop"`.
     //
     // This client's hook events are fully enumerated and NONE of them is a
@@ -213,6 +240,22 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'codex-desktop-local-project',
     role: 'preflight',
+    // Observed from a real client configuration: a DEDICATED hooks file whose
+    // block shape happens to match the other capitalised-event surface today.
+    // That convergence is an observation, not a guarantee, so this declaration
+    // is its own and is not shared: one client's change may never silently
+    // redefine another's (FR-ADAPT-004, FR-ADAPT-008).
+    registration: Object.freeze({
+      kind: 'client-configuration-file',
+      file: '.codex/hooks.json',
+      ownership: 'dedicated-hooks-file',
+      container: Object.freeze(['hooks']),
+      trigger: 'work-complete',
+      blockSchema: 'matcher-group',
+      matcher: '',
+      commandType: 'command',
+      schemaVersion: null,
+    }),
     // This surface exposes no deterministic pre-commit event. The optional
     // `before-commit-attempt` mapping is therefore simply absent; the adapter
     // does not invent one (FR-ADAPT-003).
@@ -256,6 +299,26 @@ const ADAPTER_REGISTRY = Object.freeze({
     version: '1.0.0',
     surface: 'cursor-ide-local-agent',
     role: 'preflight',
+    // A DEDICATED hooks file that is INDEPENDENTLY VERSIONED and whose block
+    // shape is FLAT: no matcher, no type, just a command. It is the only v1
+    // surface that can signal a breaking change to its own registration format,
+    // which is exactly why the schema-versioning behaviour is declared rather
+    // than assumed (FR-ADAPT-008, RISK-004).
+    //
+    // Reported by the Product Owner rather than read from a live configuration,
+    // unlike this surface's payload evidence. It is declared here so a real
+    // client-driven run can confirm or refute it.
+    registration: Object.freeze({
+      kind: 'client-configuration-file',
+      file: '.cursor/hooks.json',
+      ownership: 'dedicated-hooks-file',
+      container: Object.freeze(['hooks']),
+      trigger: 'work-complete',
+      blockSchema: 'flat-command',
+      matcher: null,
+      commandType: null,
+      schemaVersion: Object.freeze({ key: 'version', value: 1 }),
+    }),
     // Observed from a real client payload: `hook_event_name: "stop"`, in
     // lowercase, where the other two surfaces send `"Stop"`.
     nativeEvents: Object.freeze({ 'work-complete': 'stop' }),
@@ -1152,4 +1215,82 @@ export const classifySupport = ({
     reason: 'baseline-passed',
     versions: baseline.versions ?? null,
   };
+};
+
+/** The registration surface kinds an adapter may declare (FR-ADAPT-008). */
+export const REGISTRATION_SURFACE_KINDS = Object.freeze([
+  'client-configuration-file',
+  'repository-hook-chain',
+]);
+
+/** The block schemas a declared client configuration surface may use. */
+export const REGISTRATION_BLOCK_SCHEMAS = Object.freeze(['matcher-group', 'flat-command']);
+
+/**
+ * What a client-configuration registration surface must state.
+ *
+ * `schemaVersion` is required even when it is `null`, because "this format is
+ * not independently versioned" is a claim about the client, not an absence.
+ */
+const REGISTRATION_FIELDS = Object.freeze([
+  'file',
+  'ownership',
+  'container',
+  'trigger',
+  'blockSchema',
+  'matcher',
+  'commandType',
+  'schemaVersion',
+]);
+
+/**
+ * Validate one adapter registration declaration.
+ *
+ * A missing field is an error rather than a default and an unknown block schema
+ * is an error rather than a guess: an adapter that has not stated where and how
+ * it registers has not declared a registration surface, and a gate that filled
+ * one in would be assuming another client's file, block shape, or format
+ * version (FR-ADAPT-008, AC-ADAPT-003).
+ */
+export const validateRegistrationDeclaration = (registration) => {
+  if (!isPlainObject(registration)) {
+    return [{
+      code: 'adapter-registration-invalid',
+      path: 'registration',
+      message: 'An adapter must declare its registration surface.',
+    }];
+  }
+
+  if (!REGISTRATION_SURFACE_KINDS.includes(registration.kind)) {
+    return [{
+      code: 'adapter-registration-kind-unknown',
+      path: 'registration.kind',
+      message: `${registration.kind} is not a declared registration surface kind.`,
+    }];
+  }
+
+  // A surface that registers through this clone's own hook chain states that,
+  // and owes nothing about a client configuration file it never writes.
+  if (registration.kind !== 'client-configuration-file') {
+    return [];
+  }
+
+  const errors = REGISTRATION_FIELDS
+    .filter((field) => !(field in registration))
+    .map((field) => ({
+      code: 'adapter-registration-incomplete',
+      path: `registration.${field}`,
+      message: `A client configuration registration surface must state ${field}.`,
+    }));
+
+  if ('blockSchema' in registration
+    && !REGISTRATION_BLOCK_SCHEMAS.includes(registration.blockSchema)) {
+    errors.push({
+      code: 'adapter-registration-schema-unknown',
+      path: 'registration.blockSchema',
+      message: `${registration.blockSchema} is not a declared registration block schema.`,
+    });
+  }
+
+  return errors;
 };

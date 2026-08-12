@@ -30,6 +30,10 @@ import {
   restoreHookRegistration,
   withdrawHookRegistration,
 } from './activation.mjs';
+import {
+  reconcileAdapterRegistration,
+  withdrawAdapterRegistration,
+} from './adapter-registration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { contentIdentity } from './evidence-store.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
@@ -51,6 +55,20 @@ export const UPDATE_STEPS = Object.freeze([
 
 /** The health values `gate status` may report (FR-LIFE-009). */
 export const GATE_HEALTH = Object.freeze(['healthy', 'degraded', 'broken']);
+
+/**
+ * What each reconciled registration state is reported as.
+ *
+ * `unverified` is deliberately its own code rather than a kind of absence: a
+ * surface the Gate could not confirm is not a surface it knows is gone
+ * (FR-ADAPT-008).
+ */
+const REGISTRATION_FINDING_CODES = Object.freeze({
+  drifted: 'adapter-registration-drifted',
+  absent: 'adapter-registration-absent',
+  ambiguous: 'adapter-registration-ambiguous',
+  unverified: 'adapter-registration-unverified',
+});
 
 const releaseOf = (gate) => (gate === null || gate === undefined ? null : {
   id: gate.id ?? null,
@@ -387,6 +405,7 @@ export const statusGate = async ({
   evidenceStore = null,
   adapters = null,
   controlSurface = null,
+  repositoryRoot = null,
 } = {}, dependencies = {}) => {
   const { probeAdapter = async () => ({ ok: true }) } = dependencies;
 
@@ -482,6 +501,35 @@ export const statusGate = async ({
     });
   }
 
+  // A desktop registration is reconciled through the adapter's own declared
+  // surface, never through a client-name branch, and a surface that cannot be
+  // confirmed on disk is reported rather than assumed healthy. Reconciliation
+  // reads; it never creates, repairs, or removes (FR-ADAPT-008, SG-LIFE-001).
+  const root = repositoryRoot ?? receipt.repository?.root ?? null;
+
+  for (const adapter of receipt.adapters ?? []) {
+    const observation = await reconcileAdapterRegistration({
+      adapterId: adapter.id,
+      repositoryRoot: root,
+      registration: adapter.registration ?? null,
+    });
+
+    if (observation === null
+      || observation.state === 'registered'
+      || observation.state === 'unpinned') {
+      continue;
+    }
+
+    findings.push({
+      area: 'adapter',
+      severity: adapter.authoritative === true ? 'authoritative' : 'supporting',
+      code: REGISTRATION_FINDING_CODES[observation.state],
+      adapter: adapter.id,
+      path: observation.path,
+      detail: observation.detail,
+    });
+  }
+
   // Independent drift of a pinned Gate control surface: the clone can no longer
   // say what it is enforcing, so it is `broken` rather than merely degraded
   // (AC-SEC-001, NFR-SEC-004). A caller that observed nothing reconciles
@@ -520,8 +568,14 @@ export const statusGate = async ({
  * where it is: deactivation never repairs and never forces (FR-LIFE-010,
  * SG-LIFE-001, NFR-REL-002, AC-LIFE-005).
  */
-export const deactivateGate = async ({ evidenceStore = null } = {}, dependencies = {}) => {
-  const { withdrawRegistration = withdrawHookRegistration } = dependencies;
+export const deactivateGate = async ({
+  evidenceStore = null,
+  repositoryRoot = null,
+} = {}, dependencies = {}) => {
+  const {
+    withdrawRegistration = withdrawHookRegistration,
+    withdrawAdapterSurface = withdrawAdapterRegistration,
+  } = dependencies;
 
   const receipt = await evidenceStore?.activationReceipt().read() ?? null;
 
@@ -573,6 +627,32 @@ export const deactivateGate = async ({ evidenceStore = null } = {}, dependencies
     priorIdentity: pinned.priorIdentity ?? null,
   }));
 
+  // The desktop registrations this receipt pins, each withdrawn through its own
+  // adapter's declaration rather than through anything this module knows about a
+  // client (FR-ADAPT-008, SG-OWNER-001).
+  const root = repositoryRoot ?? receipt.repository?.root ?? null;
+  const adapterTargets = (receipt.adapters ?? [])
+    .filter((adapter) => adapter.registration?.kind === 'client-configuration-file')
+    .map((adapter) => ({
+      adapterId: adapter.id,
+      repositoryRoot: root,
+      registration: adapter.registration,
+    }));
+
+  /**
+   * Reasons a registration is already in the desired state.
+   *
+   * None of them is a safety condition, so none may refuse the operation the way
+   * a drifted entry does: an entry that is gone, a surface whose file the client
+   * itself removed, and a receipt that pinned nothing all leave nothing to take.
+   */
+  const satisfied = new Set([
+    'registration-absent',
+    'surface-unverified',
+    'unknown-registration',
+    'no-registration-surface',
+  ]);
+
   // Prove first, remove second. Nothing below this point may discover a reason
   // to stop half way through.
   const blocked = [];
@@ -582,6 +662,18 @@ export const deactivateGate = async ({ evidenceStore = null } = {}, dependencies
 
     if (!check.removable && check.reason !== 'already-absent') {
       blocked.push({ path: target.path, hook: target.hook, reason: check.reason });
+    }
+  }
+
+  for (const target of adapterTargets) {
+    const check = await withdrawAdapterSurface({ ...target, dryRun: true });
+
+    if (!check.removable && !satisfied.has(check.reason)) {
+      blocked.push({
+        path: target.registration.path,
+        adapter: target.adapterId,
+        reason: check.reason,
+      });
     }
   }
 
@@ -603,6 +695,18 @@ export const deactivateGate = async ({ evidenceStore = null } = {}, dependencies
 
     if (result.removed) {
       removed.push({ kind: 'hook-registration', hook: target.hook, path: target.path });
+    }
+  }
+
+  for (const target of adapterTargets) {
+    const result = await withdrawAdapterSurface(target);
+
+    if (result.removed) {
+      removed.push({
+        kind: 'adapter-registration',
+        adapter: target.adapterId,
+        path: target.registration.path,
+      });
     }
   }
 
