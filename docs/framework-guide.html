@@ -828,7 +828,27 @@
         the mapping file up front — let the tool tell you what it needs.
       </p>
 
+      <div class="note">
+        <span class="note-tag">You create these files yourself</span>
+        <p>
+          <code>mapping.json</code> and <code>policy.json</code> are files <strong>you write</strong>.
+          Nothing generates them, and neither exists until you create it — pointing
+          <code>--mapping</code> or <code>--policy</code> at a file that is not there fails with
+          <code>ENOENT: no such file or directory</code>.
+        </p>
+        <p>
+          Put them wherever you run the command, usually your project root. They are one-shot
+          inputs: once the change is confirmed nothing reads them again, because the real state
+          lives in <code>.agent-framework.yaml</code>. Delete them afterwards or keep them as a
+          record of your decisions — but there is no reason to commit them.
+        </p>
+      </div>
+
       <p class="cmd-label">1 — Ask with an empty mapping</p>
+      <p>
+        Here, and only here, an empty file is the right starting point: it is what makes the tool
+        report back what it cannot work out on its own.
+      </p>
       <pre><code>echo '{}' &gt; mapping.json
 node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping mapping.json</code></pre>
 
@@ -953,17 +973,30 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
       </p>
 
       <h4>A policy that works</h4>
+
+      <div class="note note-caution">
+        <span class="note-tag">Do not start this one empty</span>
+        <p>
+          <code>policy.json</code> is another file <strong>you create</strong>, but the habit
+          migration teaches does not carry over. An empty <code>{}</code> here does not produce a
+          helpful report — it stops at <code>Missing Gate policy subcontract: checks</code> and
+          tells you nothing about the other four. Write the whole file up front.
+        </p>
+      </div>
+
       <p>
-        Start here. Configuration activates nothing, so an empty required list is harmless — and
-        it lets you add identities once you have confirmed what your checks are really called.
+        Start from this. Configuration activates nothing, so an empty required list is harmless —
+        and it lets you add identities once you have confirmed what your checks are really called.
       </p>
-      <pre><code>{
+      <pre><code>cat &gt; policy.json &lt;&lt;'JSON'
+{
   "checks":    { "required": [], "advisory": [] },
   "budget":    { "total_seconds": 900 },
   "bypass":    { },
   "execution": { },
   "evidence":  { }
-}</code></pre>
+}
+JSON</code></pre>
 
       <h4>Four things that will trip you up</h4>
 
