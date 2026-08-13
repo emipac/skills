@@ -5,6 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  configureGate,
+  migrateConfiguration,
+  previewConfigurationMigration,
+  previewGateConfiguration,
+} from '../skills/framework-setup/scripts/configure.mjs';
+import {
   CONFIGURATION_FILE,
   parseConfigurationDocument,
   readRepositoryConfiguration,
@@ -95,6 +101,128 @@ test('a sequence of command descriptors is read as a list of objects', () => {
     backend: [],
     frontend: [],
   });
+});
+
+test('a migrated and Gate-configured repository reads like equivalent block YAML', async (context) => {
+  const root = await temporaryRoot();
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const mappings = {
+    profiles: { backend: 'none' },
+    commands: {
+      'verification.commands.test.both[0]': { timeout_seconds: 300 },
+    },
+  };
+  const policy = {
+    checks: { required: ['configuration.broad-tests.test'], advisory: [] },
+    budget: { total_seconds: 300 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+
+  await writeFile(configurationPath, [
+    'schema_version: 3',
+    'backend: unknown',
+    'frontend: none',
+    'verification:',
+    '  profile: unknown',
+    '  capabilities: []',
+    '  commands:',
+    '    test:',
+    '      backend: []',
+    '      frontend: []',
+    '      both:',
+    '        - "npm run test:unit"',
+    'history:',
+    '  path: null',
+    '  required: false',
+    '',
+  ].join('\n'));
+
+  const migration = await previewConfigurationMigration({ projectRoot: root, mappings });
+
+  await migrateConfiguration({
+    projectRoot: root,
+    mappings,
+    confirmation: migration.previewHash,
+  });
+
+  const gateConfiguration = await previewGateConfiguration({ projectRoot: root, policy });
+
+  await configureGate({
+    projectRoot: root,
+    policy,
+    confirmation: gateConfiguration.previewHash,
+  });
+
+  const written = await readRepositoryConfiguration({ repositoryRoot: root });
+  const equivalentBlockConfiguration = parseConfigurationDocument([
+    'schema_version: 4',
+    'backend: none',
+    'frontend: none',
+    'verification:',
+    '  profile: tooling',
+    '  capabilities: []',
+    '  commands:',
+    '    test:',
+    '      backend: []',
+    '      frontend: []',
+    '      both:',
+    '        - runner: package-script',
+    '          args:',
+    '            - test:unit',
+    '          working_directory: "."',
+    '          timeout_seconds: 300',
+    '          allowed_environment: []',
+    '          evidence_category: test',
+    '          source_scope: both',
+    'evaluation_gate:',
+    '  checks:',
+    '    required:',
+    '      - configuration.broad-tests.test',
+    '    advisory: []',
+    '  budget:',
+    '    total_seconds: 300',
+    '  bypass: {}',
+    '  execution: {}',
+    '  evidence: {}',
+    'history:',
+    '  path: null',
+    '  required: false',
+    '',
+  ].join('\n'));
+
+  assert.equal(written.ok, true, written.detail ?? '');
+  assert.equal(equivalentBlockConfiguration.ok, true, equivalentBlockConfiguration.detail ?? '');
+  assert.deepEqual(written.configuration, equivalentBlockConfiguration.value);
+});
+
+test('non-JSON flow YAML and YAML references keep their existing refusals', () => {
+  for (const value of [
+    '{runner: "package-script"}',
+    '[test:unit, test:install]',
+    '{"runner":"package-script",}',
+    "{'runner':'package-script'}",
+  ]) {
+    const result = parseConfigurationDocument(`value: ${value}\n`);
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.detail,
+      `${CONFIGURATION_FILE} could not be read at line 1: flow collections are outside the supported configuration subset.`,
+    );
+  }
+
+  for (const value of ['&defaults', '*defaults', '!custom']) {
+    const result = parseConfigurationDocument(`value: ${value}\n`);
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.detail,
+      `${CONFIGURATION_FILE} could not be read at line 1: anchors, aliases, and tags are outside the supported configuration subset.`,
+    );
+  }
 });
 
 test('this repository\'s own configuration is readable through the supported reader', async () => {

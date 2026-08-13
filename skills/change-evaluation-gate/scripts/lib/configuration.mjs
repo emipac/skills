@@ -8,13 +8,14 @@
  * attempt that surfaced TB-018 did exactly that with a regular expression whose
  * quote substitution corrupted any value containing an apostrophe.
  *
- * So this module reads the file properly, for the block-structured subset the
- * framework configuration is written in, and reports what it cannot read
- * instead of guessing. Anything outside that subset — anchors, aliases, tags,
- * flow mappings, multi-line scalars, tab indentation — is refused by name. A
- * reader that silently accepted a construction it does not model would hand its
- * caller a configuration the file does not contain, which is the failure this
- * module exists to end.
+ * So this module reads the file properly, for the block-structured subset and
+ * strict JSON collection values the framework configuration writers produce,
+ * and reports what it cannot read instead of guessing. Anything outside that
+ * subset — anchors, aliases, tags, general YAML flow mappings, multi-line
+ * scalars, tab indentation — is refused by name. A reader that silently
+ * accepted a construction it does not model would hand its caller a
+ * configuration the file does not contain, which is the failure this module
+ * exists to end.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -96,7 +97,11 @@ const readScalar = (text, line) => {
   }
 
   if (commented.startsWith('[') || commented.startsWith('{')) {
-    return { error: refuse(line, 'flow collections are outside the supported configuration subset.') };
+    try {
+      return { value: JSON.parse(value) };
+    } catch {
+      return { error: refuse(line, 'flow collections are outside the supported configuration subset.') };
+    }
   }
 
   if (commented.startsWith('&') || commented.startsWith('*') || commented.startsWith('!')) {
