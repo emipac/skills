@@ -13,6 +13,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
+import { composeArguments } from './command-descriptor.mjs';
+
 /** Grace between the polite and the final signal to a timed-out tree. */
 export const TERMINATION_GRACE_MS = 100;
 
@@ -108,7 +110,21 @@ export const createBoundedExecutor = ({
     const limitMs = Math.max(Math.min(...bounds), 1);
     const startedAt = Date.now();
 
-    const child = spawn(resolution.executable, command.args, {
+    // Execution never composes its own argument vector. It derives it from the
+    // runner's own rule, the same rule the preview used, so the command a
+    // maintainer approved is the command that runs.
+    const composition = composeArguments(command);
+
+    if (composition.error) {
+      return {
+        executed: false,
+        exitCode: null,
+        durationMs: 0,
+        reasonCode: 'configuration-invalid',
+      };
+    }
+
+    const child = spawn(resolution.executable, composition.args, {
       cwd: path.join(executionRoot, command.working_directory ?? '.'),
       env: environmentFor(command.allowed_environment, environment),
       stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',

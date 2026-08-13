@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A step-by-step guide to installing, configuring, and using the AI Skills Framework, including the optional Change Evaluation Gate module.">
+<meta name="color-scheme" content="light dark">
+<title>AI Skills Framework — Setup and Change Evaluation Gate Guide</title>
+
+<style>
+  :root {
+    --ground:      #F6F7F7;
+    --surface:     #FFFFFF;
+    --surface-alt: #ECEEEE;
+    --ink:         #14181B;
+    --ink-muted:   #5A646B;
+    --ink-faint:   #808C93;
+    --rule:        #D4DADB;
+    --rule-strong: #A9B4B7;
+    --accent:      #0F6B4A;
+    --accent-soft: #E3EFE9;
+    --deny:        #B3261E;
+    --deny-soft:   #F7E4E2;
+    --warn:        #8A5800;
+    --warn-soft:   #F7EEDC;
+    --unver:       #5A646B;
+    --unver-soft:  #E8EAEB;
+
+    --step: 1.25;
+    --f-xs:   0.75rem;
+    --f-sm:   0.875rem;
+    --f-base: 1rem;
+    --f-md:   1.125rem;
+    --f-lg:   1.35rem;
+    --f-xl:   1.7rem;
+    --f-2xl:  2.15rem;
+    --f-3xl:  2.7rem;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --serif: "Iowan Old Style", "Charter", "Bitstream Charter", "Source Serif 4", Georgia, serif;
+
+    --col: 68ch;
+    --pad: clamp(1.1rem, 4vw, 2.5rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:      #0E1214;
+      --surface:     #161B1E;
+      --surface-alt: #1D2427;
+      --ink:         #E7EBEC;
+      --ink-muted:   #97A3A9;
+      --ink-faint:   #74838A;
+      --rule:        #2A3338;
+      --rule-strong: #3E4A50;
+      --accent:      #3DBE8B;
+      --accent-soft: #122A22;
+      --deny:        #F2857A;
+      --deny-soft:   #2B1917;
+      --warn:        #E0A33A;
+      --warn-soft:   #2A2115;
+      --unver:       #97A3A9;
+      --unver-soft:  #1E2528;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0E1214;
+    --surface:     #161B1E;
+    --surface-alt: #1D2427;
+    --ink:         #E7EBEC;
+    --ink-muted:   #97A3A9;
+    --ink-faint:   #74838A;
+    --rule:        #2A3338;
+    --rule-strong: #3E4A50;
+    --accent:      #3DBE8B;
+    --accent-soft: #122A22;
+    --deny:        #F2857A;
+    --deny-soft:   #2B1917;
+    --warn:        #E0A33A;
+    --warn-soft:   #2A2115;
+    --unver:       #97A3A9;
+    --unver-soft:  #1E2528;
+  }
+
+  :root[data-theme="light"] {
+    --ground:      #F6F7F7;
+    --surface:     #FFFFFF;
+    --surface-alt: #ECEEEE;
+    --ink:         #14181B;
+    --ink-muted:   #5A646B;
+    --ink-faint:   #808C93;
+    --rule:        #D4DADB;
+    --rule-strong: #A9B4B7;
+    --accent:      #0F6B4A;
+    --accent-soft: #E3EFE9;
+    --deny:        #B3261E;
+    --deny-soft:   #F7E4E2;
+    --warn:        #8A5800;
+    --warn-soft:   #F7EEDC;
+    --unver:       #5A646B;
+    --unver-soft:  #E8EAEB;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: var(--f-base);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    background: var(--surface);
+  }
+  .masthead-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(2rem, 6vw, 3.5rem) var(--pad) clamp(1.6rem, 4vw, 2.4rem);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+  }
+  .eyebrow .ver {
+    color: var(--ink-muted);
+    border-left: 1px solid var(--rule-strong);
+    padding-left: 1rem;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(1.75rem, 5vw, var(--f-3xl));
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 0.9rem;
+  }
+  .standfirst {
+    font-size: var(--f-md);
+    color: var(--ink-muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 var(--pad) 5rem;
+    display: grid;
+    gap: clamp(2rem, 5vw, 3.5rem);
+    grid-template-columns: 1fr;
+  }
+  @media (min-width: 1000px) {
+    .shell { grid-template-columns: 15rem minmax(0, 1fr); align-items: start; }
+    .toc { position: sticky; top: 1.5rem; }
+  }
+
+  .toc {
+    font-family: var(--mono);
+    font-size: var(--f-sm);
+    padding-top: 2.5rem;
+  }
+  .toc h2 {
+    font-size: var(--f-xs);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 0.85rem;
+    font-weight: 600;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; counter-reset: toc; }
+  .toc a {
+    display: block;
+    padding: 0.32rem 0 0.32rem 2.1rem;
+    color: var(--ink-muted);
+    text-decoration: none;
+    border-left: 2px solid var(--rule);
+    position: relative;
+    line-height: 1.35;
+  }
+  .toc li { counter-increment: toc; }
+  .toc a::before {
+    content: counter(toc, decimal-leading-zero);
+    position: absolute;
+    left: 0.7rem;
+    color: var(--ink-faint);
+    font-size: var(--f-xs);
+  }
+  .toc a:hover, .toc a:focus-visible { color: var(--accent); border-left-color: var(--accent); }
+
+  main { padding-top: 2.5rem; min-width: 0; }
+  main > section { max-width: var(--col); }
+
+  section + section { margin-top: clamp(3rem, 7vw, 4.5rem); }
+
+  .sec-head { border-top: 2px solid var(--ink); padding-top: 1rem; margin-bottom: 1.6rem; }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.14em;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: clamp(1.3rem, 3.6vw, var(--f-xl));
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h3 {
+    font-family: var(--mono);
+    font-size: var(--f-md);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 2.4rem 0 0.7rem;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: var(--f-sm);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 1.8rem 0 0.5rem;
+  }
+  p { margin: 0 0 1.05rem; }
+  main a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  ul, ol { margin: 0 0 1.05rem; padding-left: 1.35rem; display: flex; flex-direction: column; gap: 0.45rem; }
+  li { padding-left: 0.2rem; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--surface-alt);
+    padding: 0.12em 0.36em;
+    border: 1px solid var(--rule);
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: var(--f-sm);
+    line-height: 1.6;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid var(--accent);
+    padding: 0.95rem 1.1rem;
+    overflow-x: auto;
+    margin: 0 0 1.05rem;
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  .cmd-label {
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 0.4rem;
+  }
+
+  /* Signal strip — the three lifecycle states */
+  .signals { display: grid; gap: 0; margin: 1.6rem 0 1.2rem; border: 1px solid var(--rule-strong); background: var(--surface); }
+  @media (min-width: 640px) { .signals { grid-template-columns: repeat(3, 1fr); } }
+  .signal { padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--rule); }
+  @media (min-width: 640px) {
+    .signal { border-bottom: 0; border-right: 1px solid var(--rule); }
+    .signal:last-child { border-right: 0; }
+  }
+  .signal-lamp { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.55rem; }
+  .lamp { width: 0.7rem; height: 0.7rem; border-radius: 50%; flex: none; }
+  .lamp-off { background: var(--rule-strong); }
+  .lamp-half { background: var(--warn); }
+  .lamp-on { background: var(--accent); }
+  .signal-name { font-family: var(--mono); font-size: var(--f-sm); font-weight: 600; letter-spacing: 0.02em; }
+  .signal p { margin: 0; font-size: var(--f-sm); color: var(--ink-muted); line-height: 1.5; }
+
+  /* Callouts — enamel plates, squared */
+  .note {
+    border: 1px solid var(--rule-strong);
+    border-top: 3px solid var(--accent);
+    background: var(--surface);
+    padding: 1rem 1.15rem;
+    margin: 0 0 1.2rem;
+  }
+  .note-critical { border-top-color: var(--deny); }
+  .note-caution  { border-top-color: var(--warn); }
+  .note-tag {
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.45rem;
+    font-weight: 600;
+  }
+  .note-critical .note-tag { color: var(--deny); }
+  .note-caution .note-tag  { color: var(--warn); }
+  .note p:last-child, .note ul:last-child, .note ol:last-child { margin-bottom: 0; }
+  .note p, .note li { font-size: var(--f-sm); }
+
+  .table-wrap { overflow-x: auto; margin: 0 0 1.2rem; border: 1px solid var(--rule-strong); }
+  table { border-collapse: collapse; width: 100%; font-size: var(--f-sm); background: var(--surface); }
+  th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    font-weight: 600;
+    background: var(--surface-alt);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { font-size: 0.82em; }
+
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    letter-spacing: 0.05em;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .p-pass  { color: var(--accent); background: var(--accent-soft); }
+  .p-deny  { color: var(--deny);   background: var(--deny-soft); }
+  .p-warn  { color: var(--warn);   background: var(--warn-soft); }
+  .p-unver { color: var(--unver);  background: var(--unver-soft); }
+
+  .ladder { counter-reset: rung; list-style: none; padding: 0; margin: 0 0 1.2rem; display: flex; flex-direction: column; gap: 0; border: 1px solid var(--rule-strong); }
+  .ladder li {
+    counter-increment: rung;
+    padding: 0.5rem 0.9rem 0.5rem 2.9rem;
+    position: relative;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: var(--f-sm);
+  }
+  .ladder li:last-child { border-bottom: 0; }
+  .ladder li::before {
+    content: counter(rung);
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2.1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-faint);
+    font-size: var(--f-xs);
+    background: var(--surface-alt);
+    border-right: 1px solid var(--rule);
+  }
+  .ladder .rung-note { color: var(--ink-muted); font-family: var(--serif); font-size: var(--f-sm); }
+
+  dl.glossary { margin: 0; display: grid; gap: 0; border: 1px solid var(--rule-strong); }
+  dl.glossary > div { padding: 0.75rem 0.9rem; border-bottom: 1px solid var(--rule); background: var(--surface); }
+  dl.glossary > div:last-child { border-bottom: 0; }
+  dl.glossary dt { font-family: var(--mono); font-size: var(--f-sm); font-weight: 600; margin-bottom: 0.25rem; }
+  dl.glossary dd { margin: 0; font-size: var(--f-sm); color: var(--ink-muted); }
+
+  .footer {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 2rem var(--pad) 3.5rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    color: var(--ink-faint);
+    letter-spacing: 0.03em;
+  }
+
+  a:focus-visible, .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  :target { scroll-margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">
+      <span>AI Skills Framework</span>
+      <span class="ver">Release 0.9.0 · first Gate-capable</span>
+    </p>
+    <h1>Setting up the framework, and switching on the Change Evaluation Gate</h1>
+    <p class="standfirst">
+      A step-by-step guide for developers who have never used this framework before.
+      It covers what the framework is for, how to install and configure it, the daily
+      working loop, and how the optional commit gate is installed, configured, and
+      activated — three things that sound the same and are not.
+    </p>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#what">What this framework is</a></li>
+      <li><a href="#model">The mental model</a></li>
+      <li><a href="#install">Installing it</a></li>
+      <li><a href="#configure">Configuring a project</a></li>
+      <li><a href="#loop">The daily working loop</a></li>
+      <li><a href="#gate">The Change Evaluation Gate</a></li>
+      <li><a href="#gate-states">Installed, configured, activated</a></li>
+      <li><a href="#gate-setup">Turning the Gate on</a></li>
+      <li><a href="#gate-commit">What happens at a commit</a></li>
+      <li><a href="#gate-off">Status, repair, turning it off</a></li>
+      <li><a href="#limits">Limits you should know</a></li>
+      <li><a href="#glossary">Glossary</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="what">
+      <div class="sec-head">
+        <span class="sec-num">Section 01</span>
+        <h2>What this framework is</h2>
+      </div>
+
+      <p>
+        The AI Skills Framework is a set of <strong>29 skills</strong> — written procedures an
+        AI coding agent follows — that turn "ask an agent to build a feature" into a
+        repeatable process with checkable evidence at every step.
+      </p>
+
+      <p>
+        A skill is not a program. It is a Markdown document that tells the agent how to
+        do one job well: how to write requirements, how to break a feature into tickets,
+        how to implement one ticket test-first, how to review a diff. Some skills also
+        ship small Node scripts that check the agent's work deterministically.
+      </p>
+
+      <p>The problem it solves is a specific one. Agents are fast and confident, and confidence
+      is not evidence. Left alone, an agent will happily report that a feature is complete
+      because it wrote code that looks complete. This framework makes that harder by keeping
+      four things in separate places:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Artifact</th><th>Answers</th><th>Lives in</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>SRS</strong></td><td>What should the system do?</td><td><code>docs/specifications/</code></td></tr>
+            <tr><td><strong>Feature contract</strong></td><td>What is this one feature, exactly?</td><td>your tracker</td></tr>
+            <tr><td><strong>Delivery contract</strong></td><td>What is this one ticket, and how is it proved?</td><td>your tracker</td></tr>
+            <tr><td><strong>Code &amp; tests</strong></td><td>What does it actually do?</td><td>the repo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Requirements never live in code comments. Evidence never lives in a commit message.
+        Each artifact has one owner, and changing one on the strength of another requires an
+        explicit decision.
+      </p>
+
+      <div class="note">
+        <span class="note-tag">If you read one thing</span>
+        <p>
+          The framework's core claim is <em>traceability</em>: every ticket points at an
+          acceptance criterion, every acceptance criterion points at a requirement, and every
+          requirement has a stable ID that never gets renumbered. When something is
+          unproved, the framework is designed to say <span class="pill p-unver">unverified</span>
+          rather than guess.
+        </p>
+      </div>
+    </section>
+
+    <section id="model">
+      <div class="sec-head">
+        <span class="sec-num">Section 02</span>
+        <h2>The mental model</h2>
+      </div>
+
+      <p>
+        Work flows in one direction, and each stage refuses to start until the previous one
+        is complete. That refusal is the point — it is what stops an agent from implementing
+        a ticket nobody has actually specified.
+      </p>
+
+      <ol class="ladder">
+        <li>framework-setup <span class="rung-note">— discovers your project and writes its configuration</span></li>
+        <li>srs-modeling <span class="rung-note">— the durable requirements baseline</span></li>
+        <li>to-spec <span class="rung-note">— one traceable feature contract from the SRS</span></li>
+        <li>to-tickets <span class="rung-note">— vertical tickets with an acyclic blocker graph</span></li>
+        <li>implement <span class="rung-note">— one ticket, red-green, one fresh context</span></li>
+        <li>verify-change <span class="rung-note">— run the ticket's evidence matrix</span></li>
+        <li>code-review <span class="rung-note">— Standards, Contract, Security, Evidence</span></li>
+      </ol>
+
+      <p>
+        You do not have to use all of it. A small change can go straight to
+        <code>implement</code> with an agreed contract in the conversation. The full chain earns
+        its cost on work that spans several sessions, where the risk is drift rather than typos.
+      </p>
+
+      <h3>The other skills</h3>
+
+      <p>The remaining skills are tools you reach for as needed, not stages you pass through:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>When you are…</th><th>Reach for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Not sure where to start</td><td><code>framework-router</code></td></tr>
+            <tr><td>Planning work bigger than one session</td><td><code>wayfinder</code></td></tr>
+            <tr><td>Pinning down vague requirements</td><td><code>grilling</code>, <code>grill-me</code>, <code>grill-with-docs</code></td></tr>
+            <tr><td>Naming things consistently</td><td><code>domain-modeling</code></td></tr>
+            <tr><td>Designing a module or seam</td><td><code>codebase-design</code>, <code>improve-codebase-architecture</code></td></tr>
+            <tr><td>Chasing a hard bug</td><td><code>diagnosing-bugs</code></td></tr>
+            <tr><td>Writing tests first</td><td><code>tdd</code></td></tr>
+            <tr><td>Checking for vulnerabilities</td><td><code>audit-security</code></td></tr>
+            <tr><td>Running out of context mid-task</td><td><code>handoff</code></td></tr>
+            <tr><td>Setting up a fresh Laravel app</td><td><code>setup-laravel-development</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="install">
+      <div class="sec-head">
+        <span class="sec-num">Section 03</span>
+        <h2>Installing it</h2>
+      </div>
+
+      <p>Pick the route that matches your agent. All three install the same released skills.</p>
+
+      <h3>Universal CLI — works with most agents</h3>
+      <p class="cmd-label">Run in your project root</p>
+      <pre><code>npx skills@latest add emipac/skills</code></pre>
+      <p>The installer asks which skills and which coding agents to configure. You can select a subset.</p>
+
+      <h3>Claude Code plugin</h3>
+      <pre><code>/plugin marketplace add emipac/skills
+/plugin install ai-skills-framework@minic</code></pre>
+
+      <h3>Codex plugin</h3>
+      <pre><code>codex plugin marketplace add emipac/skills</code></pre>
+      <p>Then install <strong>AI Skills Framework</strong> from the Minic marketplace inside Codex.</p>
+
+      <div class="note">
+        <span class="note-tag">Installing changes nothing</span>
+        <p>
+          Installation copies skill files so your agent can read them. It does not edit your
+          project configuration, does not create Git hooks, and cannot block a commit. This
+          matters most for the Change Evaluation Gate: shipping its files never switches it on.
+        </p>
+      </div>
+
+      <h3>Updating later</h3>
+      <p>
+        Re-run the same install command. Versions are synchronised from <code>package.json</code>,
+        so the CLI, the Claude plugin, and the Codex plugin always report the same release.
+      </p>
+    </section>
+
+    <section id="configure">
+      <div class="sec-head">
+        <span class="sec-num">Section 04</span>
+        <h2>Configuring a project</h2>
+      </div>
+
+      <p>
+        Before the lifecycle skills work, the framework needs to know your project: which
+        backend and frontend you use, where your source lives, which commands prove a change
+        is good, and which tracker holds your tickets. That lives in one file at your project
+        root, <code>.agent-framework.yaml</code>.
+      </p>
+
+      <p>
+        The intended way to create it is to ask your agent to run <code>framework-setup</code>.
+        It inspects the repository, proposes a configuration, and asks you to confirm anything
+        it could not prove. Underneath, it uses a script you can also run directly:
+      </p>
+
+      <p class="cmd-label">Discover what the project looks like</p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs --discover</code></pre>
+
+      <div class="note">
+        <span class="note-tag">Adjust the path to your install</span>
+        <p>
+          Commands on this page assume the installer put the skills in
+          <code>.agents/skills</code>. Claude Code installs commonly use
+          <code>.claude/skills</code> instead — check which one exists in your project and
+          swap that one segment. Everything after it is the same.
+        </p>
+      </div>
+
+      <h3>What ends up in the file</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>schema_version</code></td><td>3 or 4. Version 4 is required for the Gate.</td></tr>
+            <tr><td><code>backend</code> / <code>frontend</code></td><td>Which profiles are active. <code>none</code> means proved absent; <code>unknown</code> means not yet determined.</td></tr>
+            <tr><td><code>source_scopes</code></td><td>Which directories belong to backend, frontend, or both.</td></tr>
+            <tr><td><code>verification.commands</code></td><td>The exact commands that prove a change: format, static analysis, test, smoke, build, e2e.</td></tr>
+            <tr><td><code>tracker</code></td><td>Where tickets live — for example <code>local-markdown</code>.</td></tr>
+            <tr><td><code>protected_files</code></td><td>Files the agent must never modify, such as <code>AGENTS.md</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">The unknown / none distinction</span>
+        <p>
+          <code>unknown</code> and <code>none</code> are not the same. <code>none</code> means
+          "we checked, there is no frontend." <code>unknown</code> means "nobody has established
+          this yet." The framework refuses to silently convert one into the other, because that
+          would change which checks run without anyone deciding to.
+        </p>
+      </div>
+    </section>
+
+    <section id="loop">
+      <div class="sec-head">
+        <span class="sec-num">Section 05</span>
+        <h2>The daily working loop</h2>
+      </div>
+
+      <p>Once configured, a typical feature runs like this. You are talking to your agent throughout — these are skill names you ask it to use, not shell commands.</p>
+
+      <h3>1. Write down what the system should do</h3>
+      <p>
+        Ask for <code>srs-modeling</code>. It interviews you, then writes requirements with stable
+        IDs (<code>FR-…</code>), acceptance criteria (<code>AC-…</code>), safeguards
+        (<code>SG-…</code> — things that must never happen), risks, and open questions. Unknowns
+        are recorded as visible questions rather than guessed at.
+      </p>
+
+      <h3>2. Cut one feature out of it</h3>
+      <p>
+        Ask for <code>to-spec</code>. It produces a feature contract: the problem, the traceability
+        table linking requirements to acceptance criteria, the public seams where behaviour will
+        be observed, and the safeguards that constrain it.
+      </p>
+
+      <h3>3. Break it into tickets</h3>
+      <p>
+        Ask for <code>to-tickets</code>. Each ticket is a <em>vertical slice</em> — a complete thin
+        behaviour end to end, not "write the database layer." Every ticket carries a Verification
+        Matrix listing the exact commands that will prove it, and a blocker graph that must be acyclic.
+      </p>
+
+      <h3>4. Implement one ticket</h3>
+      <p>
+        Ask for <code>implement</code>, naming the ticket. It refuses to start if a blocker is
+        incomplete or the ticket lacks traceability. Then it works in red-green cycles: write one
+        failing test at the agreed seam, watch it fail <em>for the right reason</em>, write the
+        minimum code to pass, repeat.
+      </p>
+
+      <div class="note">
+        <span class="note-tag">Why red-before-green matters</span>
+        <p>
+          A test that has never failed proves nothing — it might be asserting something that was
+          already true, or nothing at all. Watching it fail first, for the reason you expect, is
+          what makes the green meaningful. If an agent tells you tests pass but never showed you
+          them failing, you have not been given evidence.
+        </p>
+      </div>
+
+      <h3>5. Verify and review</h3>
+      <p>
+        <code>verify-change</code> runs the ticket's evidence matrix through the ordered ladder.
+        <code>code-review</code> then examines the diff on four independent axes: Standards,
+        Contract, Security, and Evidence.
+      </p>
+
+      <h4>The evidence ladder</h4>
+      <p>Eight ordered stages, cheapest and most specific first:</p>
+      <ol class="ladder">
+        <li>focused</li>
+        <li>format</li>
+        <li>static-analysis</li>
+        <li>affected-tests</li>
+        <li>smoke</li>
+        <li>build</li>
+        <li>browser</li>
+        <li>broad-tests <span class="rung-note">— regression evidence, not proof the feature works</span></li>
+      </ol>
+    </section>
+
+    <section id="gate">
+      <div class="sec-head">
+        <span class="sec-num">Section 06</span>
+        <h2>The Change Evaluation Gate</h2>
+      </div>
+
+      <p>
+        Everything so far depends on an agent choosing to follow a process. The Change Evaluation
+        Gate is the part that does not depend on choice: it is an <strong>optional module</strong>
+        that evaluates the exact content of every local commit before Git accepts it.
+      </p>
+
+      <p>
+        When it is active and you run <code>git commit</code>, the Gate takes an isolated snapshot
+        of precisely what you are committing, runs your configured checks against that snapshot,
+        and either allows the commit or blocks it. The same enforcement applies whether the commit
+        came from you or from an agent.
+      </p>
+
+      <h3>What makes it different from a normal pre-commit hook</h3>
+
+      <ul>
+        <li><strong>It grades a snapshot, not your working directory.</strong> If you edit a file
+        while checks are running, the result still describes exactly what you are committing.</li>
+        <li><strong>Absence of evidence is never success.</strong> A crash, a timeout, a missing
+        tool, malformed output, or two runs of the same check disagreeing all produce
+        <span class="pill p-unver">unverified</span> — which blocks, rather than passing.</li>
+        <li><strong>It keeps an append-only evidence record</strong> under your Git metadata, with
+        secrets redacted before anything is written.</li>
+        <li><strong>It cannot weaken itself.</strong> A commit that changes the Gate's own policy is
+        evaluated against the <em>previous</em> trusted policy as well as the new one.</li>
+      </ul>
+
+      <h3>The four outcomes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Outcome</th><th>Meaning</th><th>Blocks?</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill p-pass">passed</span></td><td>The check ran and succeeded.</td><td>No</td></tr>
+            <tr><td><span class="pill p-deny">failed</span></td><td>The check ran and failed.</td><td>Yes, if required</td></tr>
+            <tr><td><span class="pill p-unver">unverified</span></td><td>The check could not be trusted to have run correctly.</td><td>Yes, if required</td></tr>
+            <tr><td><span class="pill p-warn">not-applicable</span></td><td>The check does not apply to this change.</td><td>No</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <code>required</code> and <code>advisory</code> are policy settings you choose, not outcomes.
+        An advisory check never blocks, and an advisory pass never compensates for a required failure.
+      </p>
+    </section>
+
+    <section id="gate-states">
+      <div class="sec-head">
+        <span class="sec-num">Section 07</span>
+        <h2>Installed, configured, activated</h2>
+      </div>
+
+      <p>
+        These three words are the most important thing to understand about the Gate, and they are
+        easy to conflate. Each is a separate, deliberate step. None implies the next.
+      </p>
+
+      <div class="signals">
+        <div class="signal">
+          <div class="signal-lamp"><span class="lamp lamp-off"></span><span class="signal-name">installed</span></div>
+          <p>The Gate's files exist where your agent can read them. Your repository is untouched. No hook, no config change, no effect on commits.</p>
+        </div>
+        <div class="signal">
+          <div class="signal-lamp"><span class="lamp lamp-half"></span><span class="signal-name">configured</span></div>
+          <p>Your <code>.agent-framework.yaml</code> holds an approved <code>evaluation_gate</code> policy. Still no hook. Commits are still unaffected.</p>
+        </div>
+        <div class="signal">
+          <div class="signal-lamp"><span class="lamp lamp-on"></span><span class="signal-name">activated</span></div>
+          <p>This clone has a receipt and a registered Git hook. Only now does anything block a commit.</p>
+        </div>
+      </div>
+
+      <p>
+        Configuration is <strong>shared</strong> — it lives in a file you commit, so your whole team
+        sees the same policy. Activation is <strong>clone-local</strong> — it applies to your machine
+        only. Cloning a repository whose policy is configured does not activate anything for you;
+        you activate deliberately, or you do not.
+      </p>
+
+      <div class="note note-caution">
+        <span class="note-tag">Why separate them</span>
+        <p>
+          Because installing a tool should never quietly start blocking your colleagues' commits.
+          A teammate can pull a branch that configures Gate policy and notice no change in behaviour
+          at all until they choose to activate.
+        </p>
+      </div>
+    </section>
+
+    <section id="gate-setup">
+      <div class="sec-head">
+        <span class="sec-num">Section 08</span>
+        <h2>Turning the Gate on</h2>
+      </div>
+
+      <h3>Step 1 — Install the module</h3>
+      <p>
+        Select <strong>change-evaluation-gate</strong> during installation. It is independently
+        selectable; if you install the whole plugin instead, its files ship dormant.
+      </p>
+
+      <h3>Step 2 — Move to schema v4</h3>
+      <p>
+        Gate policy exists only in schema version 4. If your <code>.agent-framework.yaml</code> says
+        <code>schema_version: 3</code>, migrate first:
+      </p>
+      <p>
+        Migration runs in four steps and writes nothing until the last one. Do not try to guess
+        the mapping file up front — let the tool tell you what it needs.
+      </p>
+
+      <div class="note">
+        <span class="note-tag">You create these files yourself</span>
+        <p>
+          <code>mapping.json</code> and <code>policy.json</code> are files <strong>you write</strong>.
+          Nothing generates them, and neither exists until you create it — pointing
+          <code>--mapping</code> or <code>--policy</code> at a file that is not there fails with
+          <code>ENOENT: no such file or directory</code>.
+        </p>
+        <p>
+          Put them wherever you run the command, usually your project root. They are one-shot
+          inputs: once the change is confirmed nothing reads them again, because the real state
+          lives in <code>.agent-framework.yaml</code>. Delete them afterwards or keep them as a
+          record of your decisions — but there is no reason to commit them.
+        </p>
+      </div>
+
+      <p class="cmd-label">1 — Ask with an empty mapping</p>
+      <p>
+        Here, and only here, an empty file is the right starting point: it is what makes the tool
+        report back what it cannot work out on its own.
+      </p>
+      <pre><code>echo '{}' &gt; mapping.json
+node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping mapping.json</code></pre>
+
+      <p class="cmd-label">2 — Read exactly what it cannot prove</p>
+      <pre><code>{
+  "status": "requires-mapping",
+  "ambiguities": [
+    { "path": "backend", "value": "unknown", "required": ["profile"] },
+    { "path": "verification.commands.test.both[0]", "value": "npm run test",
+      "required": ["timeout_seconds"] }
+  ]
+}</code></pre>
+      <p>
+        Nothing has been written. It asks only about what it genuinely cannot determine — here it
+        already worked out the runner and arguments for <code>npm run test</code> by itself and
+        wants only a timeout.
+      </p>
+
+      <div class="note note-critical">
+        <span class="note-tag">Do not paste this output into mapping.json</span>
+        <p>
+          This is a list of questions, not a form. The mapping file has a different shape, and the
+          two are inverted: the report lists a <code>path</code> and says which field is
+          <em>missing</em>; the mapping uses that path as a <em>key</em> and supplies the field.
+        </p>
+        <p>
+          In particular, <code>"required": ["timeout_seconds"]</code> means "this command has no
+          timeout yet". It is not a slot to write <code>30</code> into. And
+          <code>status</code>, <code>fromVersion</code>, <code>previewHash</code> and
+          <code>ambiguities</code> are not mapping sections — only <code>profiles</code> and
+          <code>commands</code> exist, so leaving them in fails with
+          <code>Unsupported migration mapping section</code>.
+        </p>
+      </div>
+
+      <p class="cmd-label">3 — Answer those exact paths</p>
+      <p>
+        Each ambiguity's <code>path</code> becomes a key, and you supply the field it said was
+        missing. A real Laravel project with a frontend usually looks like this:
+      </p>
+      <pre><code>{
+  "commands": {
+    "verification.commands.format.backend[0]":           { "timeout_seconds": 30 },
+    "verification.commands.format.frontend[0]":          { "timeout_seconds": 30 },
+    "verification.commands.static_analysis.backend[0]":  { "timeout_seconds": 60 },
+    "verification.commands.static_analysis.frontend[0]": { "timeout_seconds": 30 },
+    "verification.commands.test.backend[0]":             { "timeout_seconds": 600 },
+    "verification.commands.build.frontend[0]":           { "timeout_seconds": 300 }
+  }
+}</code></pre>
+      <p>
+        Only two sections exist: <code>profiles</code> and <code>commands</code>. Add
+        <code>profiles</code> only if a profile was reported ambiguous, which happens when its
+        schema v3 value was <code>unknown</code>:
+      </p>
+      <pre><code>{
+  "profiles": { "backend": "laravel" },
+  "commands": { }
+}</code></pre>
+      <p>
+        Per command you may set <code>runner</code> (one of <code>composer-bin</code>,
+        <code>php-script</code>, <code>package-script</code>, <code>repository-script</code>),
+        <code>args</code>, <code>working_directory</code>, <code>timeout_seconds</code>, and
+        <code>allowed_environment</code>. Usually only the timeout is needed — the tool works out
+        the runner and splits the arguments itself.
+      </p>
+
+      <div class="note note-caution">
+        <span class="note-tag">Choose timeouts generously</span>
+        <p>
+          A check that exceeds its timeout reports <span class="pill p-unver">unverified</span>,
+          which blocks — absence of evidence is never success. A full test suite or a cold build
+          is easily slower than it feels. Start high, then tighten once you have seen real
+          durations; these are ordinary configuration values you can edit any time.
+        </p>
+      </div>
+      <p>
+        Re-run the command from step 1. You now get <code>"status": "ready"</code>, a
+        <code>previewHash</code>, and the complete proposed configuration to read. Still nothing
+        written.
+      </p>
+
+      <p class="cmd-label">4 — Confirm that exact preview</p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --migrate-v4 --mapping mapping.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
+      <p>
+        Only now does <code>.agent-framework.yaml</code> change. The hash is bound to the exact
+        preview you were shown, so if the file changes underneath you the confirmation stops
+        matching and nothing is written — which is the entire point of it.
+      </p>
+      <p>
+        Migration never configures or activates the Gate; it only makes configuration possible.
+        Schema v3 stays readable throughout <code>0.x</code>.
+      </p>
+
+      <h3>Step 3 — Configure the policy</h3>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --configure-gate --policy policy.json</code></pre>
+      <p>
+        Like migration, this previews first and returns a hash you confirm with
+        <code>--confirm</code>. Nothing is written until you do.
+      </p>
+
+      <p>The policy has exactly five parts, and nothing else:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Part</th><th>What you decide</th></tr></thead>
+          <tbody>
+            <tr><td>Check identities</td><td>Which checks are <code>required</code> and which are <code>advisory</code>.</td></tr>
+            <tr><td>Total budget</td><td>How long a whole evaluation may take.</td></tr>
+            <tr><td>Bypass policy</td><td>Whether an escape hatch exists at all, and what it demands.</td></tr>
+            <tr><td>Execution policy</td><td>Per-check timeouts, and which advisory checks may be skipped when the budget runs short.</td></tr>
+            <tr><td>Evidence policy</td><td>Retention limits, never above the built-in ceilings.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Notice what is <em>not</em> here: commands. The Gate references check identities that
+        <code>verify-change</code> already owns. There is exactly one place a command is defined,
+        so the two can never disagree.
+      </p>
+
+      <h4>A policy that works</h4>
+
+      <div class="note note-caution">
+        <span class="note-tag">Do not start this one empty</span>
+        <p>
+          <code>policy.json</code> is another file <strong>you create</strong>, but the habit
+          migration teaches does not carry over. An empty <code>{}</code> here does not produce a
+          helpful report — it stops at <code>Missing Gate policy subcontract: checks</code> and
+          tells you nothing about the other four. Write the whole file up front.
+        </p>
+      </div>
+
+      <p>
+        Start from this. Configuration activates nothing, so an empty required list is harmless —
+        and it lets you add identities once you have confirmed what your checks are really called.
+      </p>
+      <pre><code>cat &gt; policy.json &lt;&lt;'JSON'
+{
+  "checks":    { "required": [], "advisory": [] },
+  "budget":    { "total_seconds": 900 },
+  "bypass":    { },
+  "execution": { },
+  "evidence":  { }
+}
+JSON</code></pre>
+
+      <h4>Four things that will trip you up</h4>
+
+      <div class="note note-caution">
+        <span class="note-tag">1 — All five are mandatory, even empty</span>
+        <p>
+          You cannot omit <code>bypass</code> because you do not want bypass. Leaving it out fails
+          with <code>Missing Gate policy subcontract: bypass</code>. Write <code>{}</code>. Only
+          <code>checks</code> and <code>budget</code> are strictly validated at this point; the
+          other three need only be objects.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">2 — budget takes exactly one key</span>
+        <p>
+          Adding anything beside <code>total_seconds</code> fails with <em>"Gate budget policy must
+          contain a positive total_seconds integer"</em> — which is misleading, because your
+          integer was fine. The extra key was the problem. Per-check timeouts belong in
+          <code>execution</code>, not here.
+        </p>
+      </div>
+
+      <div class="note note-critical">
+        <span class="note-tag">3 — Some field names are refused anywhere</span>
+        <p>
+          Writing <code>"execution": {"commands": {…}}</code> is the obvious move and it is
+          rejected: <code>Gate policy cannot own verification or activation field: commands</code>.
+          These names are refused at any nesting depth —
+          <code>command</code>, <code>commands</code>, <code>args</code>, <code>runner</code>,
+          <code>executable</code>, <code>working_directory</code>,
+          <code>allowed_environment</code>, <code>evidence_category</code>,
+          <code>source_scope</code>, <code>version</code>, <code>profile</code>,
+          <code>profiles</code>, <code>capabilities</code>, <code>client</code>,
+          <code>hook</code>, <code>trust</code>, <code>receipt</code>,
+          <code>activation</code>, <code>activated</code>.
+        </p>
+        <p>
+          That is command ownership enforced structurally rather than by convention. Name your keys
+          around it — <code>"execution": {"timeouts": {"my-check": 60}}</code> is accepted, and an
+          innocent <code>"version": 1</code> inside your evidence policy is not.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">4 — Check identities are not verified here</span>
+        <p>
+          A policy naming a check that does not exist is accepted without complaint. A typo will not
+          surface until evaluation, when the check you meant quietly is not the one running. Add
+          identities only after you have confirmed the exact names your verification configuration
+          uses.
+        </p>
+      </div>
+
+      <p>
+        Configuration is one-shot. Running it again fails with <code>The Gate is already
+        configured</code> — to change policy afterwards, edit the <code>evaluation_gate</code>
+        block in <code>.agent-framework.yaml</code> directly, or remove it and configure again.
+        The block lands as inline JSON, one line per subcontract, which is valid YAML if not
+        especially pretty.
+      </p>
+
+      <h3>Step 4 — Activate on your machine</h3>
+
+      <div class="note note-critical">
+        <span class="note-tag">There is no gate activate command yet</span>
+        <p>
+          In release 0.9.0 the Gate is <strong>agent-operated</strong>. There is no <code>bin</code>
+          entry and no CLI: activation, status, repair, update, and removal exist as library functions
+          that your agent calls by following the <code>change-evaluation-gate</code> skill. Ask your
+          agent to use that skill rather than looking for a command to type. A typed
+          <code>gate</code> command is a reasonable future addition, but it does not exist today.
+        </p>
+      </div>
+
+      <p>Activation runs as one transaction, in a fixed order, and enables Git <em>last</em>:</p>
+
+      <ol class="ladder">
+        <li>repository-identity <span class="rung-note">— confirm which clone this is</span></li>
+        <li>preview <span class="rung-note">— show the exact changes and commands</span></li>
+        <li>consent <span class="rung-note">— you approve that specific preview</span></li>
+        <li>runner-resolution <span class="rung-note">— resolve each command to a real executable</span></li>
+        <li>trust <span class="rung-note">— client-controlled, never granted on your behalf</span></li>
+        <li>hook-chain-validation <span class="rung-note">— inspect existing hooks without touching them</span></li>
+        <li>self-test <span class="rung-note">— prove the machinery works before relying on it</span></li>
+        <li>receipt <span class="rung-note">— record what was pinned</span></li>
+        <li>git-enablement <span class="rung-note">— only now can a commit be blocked</span></li>
+      </ol>
+
+      <p>
+        If any step fails, everything already done is unwound and your clone is left
+        <em>configured</em> — never half-activated. Existing hooks are never overwritten: the Gate
+        composes into a hook chain, or refuses and tells you why.
+      </p>
+    </section>
+
+    <section id="gate-commit">
+      <div class="sec-head">
+        <span class="sec-num">Section 09</span>
+        <h2>What happens at a commit</h2>
+      </div>
+
+      <p>You run <code>git commit</code>. Before Git accepts it:</p>
+
+      <ol>
+        <li>The Gate materialises an isolated snapshot of exactly what you are committing.</li>
+        <li>It resolves which checks apply, in ladder order.</li>
+        <li>It runs them against the snapshot, never against your live files.</li>
+        <li>It applies your policy: required failures and unverifieds deny; advisory ones do not.</li>
+        <li>It writes an evidence record and returns a decision.</li>
+      </ol>
+
+      <p>
+        A denial tells you which check failed and why, without you having to dig through logs.
+        Your working directory is never modified by an evaluation — checks that would rewrite
+        your code are rejected at commit time and belong to a separate explicit fix operation.
+      </p>
+
+      <h3>If you genuinely need to commit anyway</h3>
+      <p>
+        Bypass is <em>optional</em> — a project can disable it entirely. Where it is enabled it is
+        deliberately awkward: one-shot, bound to that exact snapshot, requires a written reason and
+        any reference your policy demands, and emits a commit-visible marker. It returns
+        <span class="pill p-warn">bypassed</span>, never
+        <span class="pill p-pass">passed</span>, and the failures it stepped over stay recorded.
+      </p>
+
+      <div class="note">
+        <span class="note-tag">Evidence limits</span>
+        <p>
+          Records are bounded so they cannot fill your disk: 32 KiB inline per attempt, 4 MiB per
+          output blob, 32 MiB of blobs per evaluation. Projects may lower these, never raise them.
+          Truncation keeps the beginning and end of output and records how much was dropped. Nothing
+          is ever deleted automatically — pruning is manual and preview-bound.
+        </p>
+      </div>
+    </section>
+
+    <section id="gate-off">
+      <div class="sec-head">
+        <span class="sec-num">Section 10</span>
+        <h2>Status, repair, turning it off</h2>
+      </div>
+
+      <p>All of these are agent-driven through the Gate skill, for the reason given in Section 08.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>. Repairs nothing and writes nothing — observation never mutates.</td></tr>
+            <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned registrations, only after you confirm a preview.</td></tr>
+            <tr><td><strong>update</strong></td><td>Switches to a newer Gate release atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately.</td></tr>
+            <tr><td><strong>deactivate</strong></td><td>Removes the hook and receipt. Keeps your configuration and all historical evidence.</td></tr>
+            <tr><td><strong>uninstall</strong></td><td>Removes project-installed assets. Requires deactivation first.</td></tr>
+            <tr><td><strong>cleanup</strong></td><td>Removes only Gate keys from <code>.agent-framework.yaml</code>. Never deletes the file.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Every removal is conservative: it touches only unchanged Gate-owned state, and refuses the
+        whole operation rather than half-doing it. Anything that drifted is reported and left exactly
+        where it is.
+      </p>
+    </section>
+
+    <section id="limits">
+      <div class="sec-head">
+        <span class="sec-num">Section 11</span>
+        <h2>Limits you should know</h2>
+      </div>
+
+      <p>These are real constraints in 0.9.0, not disclaimers. Plan around them.</p>
+
+      <h3>It is not tamper-proof</h3>
+      <div class="note note-critical">
+        <span class="note-tag">Trust boundary</span>
+        <p>
+          The Gate is a <strong>cooperative local process</strong> running with your own permissions.
+          Anyone can pass <code>--no-verify</code>, delete the hook, or edit the evidence files. It
+          does not resist the machine owner and is not a sandbox. It is reproducible pre-commit
+          enforcement for a trusted developer machine — <em>not</em> a substitute for CI, and not
+          protection against hostile code.
+        </p>
+      </div>
+
+      <h3>Desktop client support is narrow</h3>
+      <p>
+        Desktop editors can show <em>preflight</em> feedback before you commit, but they never
+        authorise anything — only the Git integration does. Support is claimed only where a real
+        client has actually been tested:
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Surface</th><th>Status</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td>Cursor 3.15.6</td><td><span class="pill p-pass">supported</span></td><td>Passed the full baseline driven by a real client invocation.</td></tr>
+            <tr><td>Claude Code Desktop</td><td><span class="pill p-unver">experimental</span></td><td>No client-driven baseline run yet.</td></tr>
+            <tr><td>Codex Desktop</td><td><span class="pill p-unver">experimental</span></td><td>No client-driven baseline run yet.</td></tr>
+            <tr><td>Git</td><td><span class="pill p-unver">experimental</span></td><td>Authoritative regardless of tier; tier reflects baseline provenance.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>One environment is claimed</h3>
+      <p>
+        The release records exactly one tested environment: <strong>macOS 26.6.1, arm64, Node
+        v24.6.0, git 2.51.0</strong>. Every other combination is
+        <span class="pill p-unver">unverified</span> — not refused. Running the portability matrix on
+        another machine is how that machine earns a claim. This is deliberate: tested versions are an
+        evidence snapshot, never a permanent allowlist.
+      </p>
+
+      <h3>Two risks stay open</h3>
+      <ul>
+        <li><strong>Slow checks encourage bypass.</strong> If your required checks are slow, people
+        route around them. Keep the commit gate fast and put slow suites in CI.</li>
+        <li><strong>Flaky checks block delivery.</strong> Two runs of one unchanged check that
+        disagree produce <span class="pill p-unver">unverified</span> and block, by design. Fix the
+        flake rather than retrying it away.</li>
+      </ul>
+    </section>
+
+    <section id="glossary">
+      <div class="sec-head">
+        <span class="sec-num">Section 12</span>
+        <h2>Glossary</h2>
+      </div>
+
+      <dl class="glossary">
+        <div><dt>Skill</dt><dd>A Markdown procedure an agent follows. Some ship deterministic Node scripts alongside.</dd></div>
+        <div><dt>SRS</dt><dd>Software Requirements Specification — the durable record of intended behaviour, with stable IDs.</dd></div>
+        <div><dt>Stable ID</dt><dd>An identifier such as <code>FR-EVAL-001</code> that is never renumbered or reused, so links stay valid forever.</dd></div>
+        <div><dt>Safeguard</dt><dd>A negative-space rule: something that must never happen, plus what to do if it does.</dd></div>
+        <div><dt>Vertical slice</dt><dd>A thin complete behaviour end to end, rather than one horizontal layer.</dd></div>
+        <div><dt>Evidence ladder</dt><dd>The eight ordered check stages, cheapest and most specific first.</dd></div>
+        <div><dt>Snapshot</dt><dd>An isolated copy of exactly the content being committed, so results cannot be confused with unstaged edits.</dd></div>
+        <div><dt>unverified</dt><dd>The check could not be trusted to have run correctly. Treated as blocking, never as a pass.</dd></div>
+        <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned.</dd></div>
+        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit.</dd></div>
+      </dl>
+    </section>
+
+  </main>
+</div>
+
+<footer class="footer">
+  AI Skills Framework 0.9.0 · 29 released skills · Gate module optional and dormant by default ·
+  Derived from Matt Pocock's skills, with concepts from OpenSPDD
+</footer>
+</body>
+</html>

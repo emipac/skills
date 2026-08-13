@@ -212,7 +212,85 @@ export const graderSurfaces = (checks) => {
   return surfaces;
 };
 
-export const commandPreview = (command, executable) => [executable, ...command.args].join(' ');
+/**
+ * How each logical runner combines its resolved executable with its stored
+ * arguments.
+ *
+ * The rule lives with the runner, never with the resolver and never with a
+ * caller. The resolver's job is to find an executable and record its identity
+ * and version; if it also had to know how each runner shapes its arguments,
+ * every caller would carry a copy of that knowledge and they would drift —
+ * which is exactly how a preview came to describe a command that would not run.
+ *
+ * A rule only ever selects, reorders, or prefixes whole stored arguments. It
+ * never parses, splits, joins, or re-quotes one (`SG-CMD-001`).
+ */
+const RUNNER_ARGUMENTS = Object.freeze({
+  // The leading argument names the binary under the vendor directory and is
+  // already consumed by resolution to find it, so only the rest is passed on.
+  'composer-bin': (args) => (args.length > 0
+    ? { args: args.slice(1) }
+    : {
+      error: {
+        code: 'command-args-uncomposable',
+        message: 'A composer-bin descriptor must name its binary as its first argument.',
+      },
+    }),
+  'php-script': (args) => ({ args: [...args] }),
+  // The descriptor stores a package script name, and a package manager reaches
+  // a script through its `run` subcommand.
+  'package-script': (args) => (args.length > 0
+    ? { args: ['run', ...args] }
+    : {
+      error: {
+        code: 'command-args-uncomposable',
+        message: 'A package-script descriptor must name its script as its first argument.',
+      },
+    }),
+  'repository-script': (args) => ({ args: [...args] }),
+});
+
+/**
+ * Compose the argument list one descriptor hands to its resolved executable.
+ *
+ * Returns `{ args }` when the runner can compose its stored arguments, and
+ * `{ error }` when it cannot. A descriptor that cannot be composed is reported;
+ * it is never silently adjusted into something that happens to run.
+ *
+ * @param {object} command a schema v4 Command descriptor
+ * @returns {{ args: string[] | null, error: object | null }}
+ */
+export const composeArguments = (command) => {
+  const compose = RUNNER_ARGUMENTS[command?.runner];
+
+  if (!compose) {
+    return {
+      args: null,
+      error: {
+        code: 'runner-unresolved',
+        message: `Runner ${JSON.stringify(command?.runner ?? null)} is not a settled logical runner.`,
+      },
+    };
+  }
+
+  if (!Array.isArray(command.args) || command.args.some((argument) => typeof argument !== 'string')) {
+    return {
+      args: null,
+      error: {
+        code: 'command-args-uncomposable',
+        message: 'Command descriptor requires an array of string arguments.',
+      },
+    };
+  }
+
+  return { args: null, error: null, ...compose(command.args) };
+};
+
+export const commandPreview = (command, executable) => {
+  const { args, error } = composeArguments(command);
+
+  return error ? null : [executable, ...args].join(' ');
+};
 
 /**
  * Activation-time executable resolution.
@@ -239,6 +317,21 @@ export const resolveExecutables = (checks, resolve) => {
           role,
           runner: command.runner,
           reason: 'runner-unresolved',
+        });
+
+        continue;
+      }
+
+      // A descriptor its own runner cannot compose is reported, never quietly
+      // reshaped into something that happens to run.
+      const composition = composeArguments(command);
+
+      if (composition.error) {
+        unresolved.push({
+          check_id: check.id,
+          role,
+          runner: command.runner,
+          reason: composition.error.code,
         });
 
         continue;

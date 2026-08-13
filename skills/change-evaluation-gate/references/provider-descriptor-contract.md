@@ -89,6 +89,26 @@ evidence category, and source scope.
   pins its identity and version, and previews the human-readable command. An
   unresolved runner is reported, never looked up through a shell.
 
+### Argument composition
+
+How a resolved executable and a stored argument array combine is stated by the
+runner, not by the resolver and not by each caller. One rule serves both the
+preview and the executor, so the previewed invocation is byte-identical to the
+one execution runs.
+
+| Runner | Composition |
+| --- | --- |
+| `composer-bin` | The leading argument names the binary under the vendor directory and is consumed by resolution; the rest is passed to it. |
+| `package-script` | The arguments name a package script, reached through the `run` subcommand. |
+| `php-script` | Arguments are passed through unchanged. |
+| `repository-script` | Arguments are passed through unchanged. |
+
+Composition only selects, reorders, or prefixes whole stored arguments. It never
+parses, splits, joins, or re-quotes one. A descriptor whose arguments its runner
+cannot compose — a `composer-bin` descriptor with no binary name, for example —
+is reported as `command-args-uncomposable` and refused, never adjusted into
+something that happens to run.
+
 ## Capability gaps
 
 A plan entry with no proved command, or a focused/affected check with no

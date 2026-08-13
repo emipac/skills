@@ -72,10 +72,25 @@ const throwawayRepository = async (t) => {
   await assertThrowawayRepository(root);
   await runFile('git', ['init', '--quiet'], { cwd: root, env: isolatedGitEnvironment() });
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), `${SELF_TEST_GUARD}process.exitCode = 0;\n`, 'utf8');
 
   return root;
 };
+
+/**
+ * The self-test protocol every registered hook program must satisfy.
+ *
+ * Activation runs the program against a throwaway subject it must deny before
+ * it will register it, so a fixture program says so explicitly rather than
+ * evaluating the directory it happens to be started in.
+ */
+const SELF_TEST_GUARD = [
+  'if (process.env.CHANGE_EVALUATION_GATE_SELF_TEST) {',
+  '  process.stdout.write("change-evaluation-gate: denied\\n");',
+  '  process.exit(1);',
+  '}',
+  '',
+].join('\n');
 
 const gatePolicy = (overrides = {}) => ({
   checks: { required: ['broad_test'], advisory: [] },
@@ -164,6 +179,7 @@ const activateFixture = async (root, request, deps) => {
 const observableRunner = (root) => [
   "import { writeFileSync } from 'node:fs';",
   '',
+  SELF_TEST_GUARD,
   `writeFileSync(${JSON.stringify(path.join(root, 'gate-ran'))}, 'gate\\n');`,
   'process.exitCode = 0;',
   '',

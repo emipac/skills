@@ -70,7 +70,7 @@ const laravelFacts = () => ({
       prerequisites: [{ kind: 'service', name: 'database' }],
     },
     build: {
-      evaluate: command('package-script', ['run', 'build'], 'frontend', 'build'),
+      evaluate: command('package-script', ['build'], 'frontend', 'build'),
     },
     browser: {
       evaluate: command('composer-bin', ['pest', '--group', 'browser'], 'backend', 'e2e'),
@@ -86,19 +86,19 @@ const nodeFacts = () => ({
   scopes: { backend: ['src'], frontend: ['web/src'] },
   proved: {
     format: {
-      evaluate: command('package-script', ['run', 'format:check'], 'both', 'format'),
-      fix: command('package-script', ['run', 'format'], 'both', 'format'),
+      evaluate: command('package-script', ['format:check'], 'both', 'format'),
+      fix: command('package-script', ['format'], 'both', 'format'),
     },
     static_analysis: {
-      evaluate: command('package-script', ['run', 'typecheck'], 'both', 'static_analysis'),
+      evaluate: command('package-script', ['typecheck'], 'both', 'static_analysis'),
       covers_tests: true,
     },
     focused_test: {
-      evaluate: command('package-script', ['run', 'test:unit'], 'backend', 'test'),
+      evaluate: command('package-script', ['test:unit'], 'backend', 'test'),
       selection: { kind: 'explicit-filter', value: 'orders' },
     },
     broad_test: {
-      evaluate: command('package-script', ['run', 'test'], 'both', 'test'),
+      evaluate: command('package-script', ['test'], 'both', 'test'),
     },
   },
 });
@@ -299,7 +299,7 @@ const descriptorFrom = (provider, overrides) => ({
   applicability: { changed_path_globs: ['**'], required_facts: [] },
   prerequisites: [],
   policy: 'required',
-  evaluate: command('package-script', ['run', 'format:check'], 'both', 'format'),
+  evaluate: command('package-script', ['format:check'], 'both', 'format'),
   fix: null,
   timeout_seconds: 120,
   declared_writes: [],
@@ -467,7 +467,7 @@ test('AC-CFG-002: shell syntax is rejected before anything can execute it (SG-CM
   }
 
   assert.deepEqual(
-    validateCommandDescriptor(command('package-script', ['run', 'test:unit'], 'both', 'test'), 'ok'),
+    validateCommandDescriptor(command('package-script', ['test:unit'], 'both', 'test'), 'ok'),
     [],
   );
 });
@@ -494,9 +494,11 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
   const result = collectChecks([{ provider: laravelProvider, facts: laravelFacts() }]);
   const formatter = result.checks.filter((check) => check.capability === 'formatter');
 
-  const activation = resolveExecutables(formatter, (runner) => (
+  // Resolution finds the binary the descriptor's leading argument names, so the
+  // executable is the binary itself rather than the directory holding it.
+  const activation = resolveExecutables(formatter, (runner, command_) => (
     runner === 'composer-bin'
-      ? { executable: 'vendor/bin', version: '1.18.1' }
+      ? { executable: `vendor/bin/${command_.args[0]}`, version: '1.18.1' }
       : null
   ));
 
@@ -505,20 +507,20 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
       check_id: 'laravel.format.formatter',
       role: 'evaluate',
       runner: 'composer-bin',
-      executable: 'vendor/bin',
+      executable: 'vendor/bin/pint',
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin', version: '1.18.1' },
-      preview: 'vendor/bin pint --test',
+      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      preview: 'vendor/bin/pint --test',
       working_directory: '.',
     },
     {
       check_id: 'laravel.format.formatter',
       role: 'fix',
       runner: 'composer-bin',
-      executable: 'vendor/bin',
+      executable: 'vendor/bin/pint',
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin', version: '1.18.1' },
-      preview: 'vendor/bin pint',
+      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      preview: 'vendor/bin/pint',
       working_directory: '.',
     },
   ]);

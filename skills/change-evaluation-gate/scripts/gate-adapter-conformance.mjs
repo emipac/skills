@@ -152,12 +152,24 @@ const check = (findings, condition, detail) => {
  * anything: the exit status is the adapter's presentation, which is the whole
  * claim of FR-ADAPT-001.
  */
-const HOOK_RUNNER = `import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+const HOOK_RUNNER = `import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { evaluate } from ${JSON.stringify(path.join(LIBRARY_ROOT, 'evaluate.mjs'))};
 import { presentDecision } from ${JSON.stringify(path.join(LIBRARY_ROOT, 'adapters.mjs'))};
+
+// Activation proves this program denies before it registers it. The subject is
+// named explicitly so the proof never runs against somebody's own work.
+const selfTestSubject = process.env.CHANGE_EVALUATION_GATE_SELF_TEST ?? null;
+
+if (selfTestSubject !== null) {
+  const subject = JSON.parse(await readFile(selfTestSubject, 'utf8'));
+  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');
+
+  process.stdout.write(\`change-evaluation-gate: \${denied ? 'denied' : 'allowed'} / self-test\\n\`);
+  process.exit(denied ? 1 : 0);
+}
 
 const repositoryRoot = process.cwd();
 const verdict = process.env.GATE_FIXTURE_VERDICT ?? 'pass';
@@ -194,7 +206,7 @@ const decision = await evaluate({
     policy: 'required',
     evaluate: {
       runner: 'package-script',
-      args: ['run', 'test'],
+      args: ['test'],
       working_directory: '.',
       timeout_seconds: 60,
       allowed_environment: ['PATH'],

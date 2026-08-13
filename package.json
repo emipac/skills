@@ -9,6 +9,9 @@
     "url": "https://github.com/emipac/skills"
   },
   "license": "MIT",
+  "bin": {
+    "change-evaluation-gate-precommit": "skills/change-evaluation-gate/scripts/gate-precommit.mjs"
+  },
   "scripts": {
     "changeset": "changeset",
     "sync-version": "node scripts/sync-version.mjs",
