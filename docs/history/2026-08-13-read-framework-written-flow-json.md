@@ -19,6 +19,8 @@ the Change Evaluation Gate configuration reader.
   writers. Activation preview, the packaged hook runner, blocked commits, and
   allowed commits now exercise the same writer-to-reader boundary that failed
   in a real activation.
+- Named that fixture `SCHEMA_V3_MIGRATION_INPUT` and clarified its comment so it
+  cannot be mistaken for the schema v4 configuration consumed by the Gate.
 
 Scope held: no writer changes, no general YAML flow grammar, no activation or
 lifecycle surface change, and no new SRS requirement.

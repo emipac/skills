@@ -156,14 +156,14 @@ const CHECK_SCRIPT = [
 ].join('\n');
 
 /**
- * The clone configuration the packaged runner reads.
+ * The schema v3 input the framework migrates before the packaged runner reads it.
  *
  * It is the single source for this fixture's Gate policy and its one required
  * check: the activation request derives both from it through the supported
  * configuration reader, and the registered runner reads the same file again at
  * commit time. Nothing here restates a command the configuration already owns.
  */
-const SCHEMA_V3_CONFIGURATION = [
+const SCHEMA_V3_MIGRATION_INPUT = [
   'schema_version: 3',
   'backend: unknown',
   'frontend: none',
@@ -224,7 +224,7 @@ const fixtureRepository = async () => {
   await mkdir(path.join(root, 'app'), { recursive: true });
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
-  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_CONFIGURATION, 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_MIGRATION_INPUT, 'utf8');
 
   const migration = await previewConfigurationMigration({
     projectRoot: root,
