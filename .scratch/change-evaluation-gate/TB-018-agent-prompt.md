@@ -2,7 +2,8 @@
 
 Hand the block below to one fresh implementation agent. It is written to be
 pasted whole; everything it asserts was verified against the repository at
-`c9a8668`.
+`c9a8668`, then re-confirmed unchanged at `21ca95b` (which only added this file
+and fixed TB-019's status line — no gate code moved).
 
 Update the baseline block if commits land before it is used.
 
@@ -195,8 +196,8 @@ eight capabilities: `gate-runtime-binding-smoke`, `gate-fix-smoke`,
 
 ## Baseline (verify before you start; update if commits landed since)
 
-HEAD `c9a8668`, tree clean. `npm run test:unit` **268 pass, 0 fail**;
-`npm run validate` OK (29 skills, 218 Markdown files); `npm run test:install` OK;
+HEAD `21ca95b`, tree clean. `npm run test:unit` **268 pass, 0 fail**;
+`npm run validate` OK (29 skills, 219 Markdown files); `npm run test:install` OK;
 all nine capabilities exit 0. Do not break these.
 
 ## Open decision to make and record

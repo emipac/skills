@@ -45,7 +45,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
@@ -56,14 +56,27 @@ import {
   registerOwnedHook,
 } from './lib/activation.mjs';
 import { createBoundedExecutor } from './lib/bounded-execution.mjs';
+import {
+  CONFIGURATION_FILE,
+  gateChecksFromConfiguration,
+  parseConfigurationDocument,
+} from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
-import { collectChecks } from './lib/gate-core.mjs';
-import laravelProvider from './lib/providers/laravel.mjs';
 
 const CAPABILITY = 'gate-activation-smoke';
 
-const LIBRARY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'lib');
+/**
+ * The packaged runner an activated clone registers.
+ *
+ * This capability used to write its own fixture hook program, which is why it
+ * passed while `registerOwnedHook` had nothing to point at. It now drives the
+ * shipped entry point, so a clone that cannot be enforced fails here.
+ */
+const PACKAGED_RUNNER = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'gate-precommit.mjs',
+);
 
 /** This repository. No fixture may ever touch its Git state or its hooks. */
 const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -72,6 +85,9 @@ const SOURCE = 'app/Order.php';
 
 /** The token that makes the graded source fail its required check. */
 const BREAKAGE = 'BROKEN';
+
+/** The one check identity this fixture's Gate policy requires. */
+const REQUIRED_CHECK = 'configuration.broad-tests.test';
 
 const runFile = promisify(execFile);
 
@@ -134,92 +150,67 @@ const CHECK_SCRIPT = [
 ].join('\n');
 
 /**
- * The program the registered hook execs.
+ * The clone configuration the packaged runner reads.
  *
- * It runs the real evaluation process against the real snapshot and exits
- * non-zero unless the authoritative decision authorizes the commit. Nothing
- * about it is a simulation: this is what makes the fixture authoritative.
+ * It is the single source for this fixture's Gate policy and its one required
+ * check: the activation request derives both from it through the supported
+ * configuration reader, and the registered runner reads the same file again at
+ * commit time. Nothing here restates a command the configuration already owns.
  */
-const runnerScript = () => [
-  `import { createBoundedExecutor } from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'bounded-execution.mjs')).href)};`,
-  `import { evaluate } from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'evaluate.mjs')).href)};`,
-  `import { collectChecks } from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'gate-core.mjs')).href)};`,
-  `import laravelProvider from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'providers', 'laravel.mjs')).href)};`,
-  "import { mkdtemp, readFile, rm } from 'node:fs/promises';",
-  "import { tmpdir } from 'node:os';",
-  "import path from 'node:path';",
-  '',
-  // Activation proves this program denies before it registers it. The subject
-  // is named explicitly so the proof never runs against somebody's own work.
-  "const selfTestSubject = process.env.CHANGE_EVALUATION_GATE_SELF_TEST ?? null;",
-  '',
-  'if (selfTestSubject !== null) {',
-  "  const subject = JSON.parse(await readFile(selfTestSubject, 'utf8'));",
-  "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
-  '',
-  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test\\n`);',
-  '  process.exit(denied ? 1 : 0);',
-  '}',
-  '',
-  `const SOURCE = ${JSON.stringify(SOURCE)};`,
-  'const root = process.cwd();',
-  "const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-hook-exec-'));",
-  '',
-  'try {',
-  '  const collected = collectChecks([{',
-  '    provider: laravelProvider,',
-  '    facts: {',
-  "      scopes: { backend: ['app'], frontend: [] },",
-  '      proved: {',
-  '        broad_test: {',
-  '          evaluate: {',
-  "            runner: 'repository-script',",
-  "            args: ['tools/check.mjs', SOURCE],",
-  "            working_directory: '.',",
-  '            timeout_seconds: 60,',
-  "            allowed_environment: ['PATH'],",
-  "            evidence_category: 'test',",
-  "            source_scope: 'backend',",
-  '          },',
-  '        },',
-  '      },',
-  '    },',
-  '  }]);',
-  '  const executor = createBoundedExecutor({',
-  '    resolveExecutable: (command) => (',
-  "      command.runner === 'repository-script' ? { executable: process.execPath } : null",
-  '    ),',
-  '  });',
-  '  const decision = await evaluate({',
-  "    protocolVersion: '1.0',",
-  "    operation: 'evaluate',",
-  '    repository: { root },',
-  "    change: { kind: 'worktree', baseRevision: 'HEAD' },",
-  "    evaluation: { purpose: 'regression-only', contractRef: null },",
-  '    invocation: {',
-  "      role: 'authoritative',",
-  "      trigger: 'work-complete',",
-  "      adapter: { id: 'git', surface: 'git-pre-commit', version: '1.0.0', capabilities: { nativeBlocking: true } },",
-  "      sessionId: 'gate-activation-smoke-hook',",
-  '    },',
-  '  }, {',
-  '    executionRoot,',
-  "    runnerVersion: 'gate-activation-smoke/1.0.0',",
-  "    providerVersions: { laravel: '1.0.0' },",
-  '    resolvePrerequisite: () => true,',
-  '    checks: collected.checks,',
-  '    execute: executor.execute,',
-  '  });',
-  '',
-  '  process.stdout.write(`change-evaluation-gate: ${decision.outcome} / ${decision.authorization}\\n`);',
-  "  process.exitCode = decision.authorization === 'allow' ? 0 : 1;",
-  '} finally {',
-  '  await rm(executionRoot, { recursive: true, force: true });',
-  '}',
+const CONFIGURATION = [
+  'schema_version: 4',
+  'backend: unknown',
+  'frontend: none',
+  'tracker: local-markdown',
+  'artifacts:',
+  '  srs: null',
+  '  glossary: null',
+  '  adrs: null',
+  'guidelines: []',
+  'source_scopes:',
+  '  backend:',
+  '    - app',
+  '  frontend: []',
+  '  shared: []',
+  'verification:',
+  '  profile: gate-activation-smoke',
+  '  capabilities: []',
+  '  commands:',
+  '    test:',
+  '      backend: []',
+  '      frontend: []',
+  '      both:',
+  '        - runner: repository-script',
+  '          args:',
+  '            - tools/check.mjs',
+  `            - ${SOURCE}`,
+  '          working_directory: "."',
+  '          timeout_seconds: 60',
+  '          allowed_environment:',
+  '            - PATH',
+  '          evidence_category: test',
+  '          source_scope: both',
+  'evaluation_gate:',
+  '  checks:',
+  '    required:',
+  `      - ${REQUIRED_CHECK}`,
+  '    advisory: []',
+  '  budget:',
+  '    total_seconds: 600',
+  '  bypass:',
+  '    enabled: false',
+  '    marker: null',
+  '  execution:',
+  '    budget_skippable: []',
+  '  evidence: {}',
+  'history:',
+  '  path: docs/history',
+  '  required: false',
+  'protected_files: []',
   '',
 ].join('\n');
 
-/** A throwaway clone with one baseline commit, a check, and a hook program. */
+/** A throwaway clone with one baseline commit, a check, and a configuration. */
 const fixtureRepository = async () => {
   const root = await temporaryDirectory('gate-activation-smoke-repo-');
 
@@ -227,7 +218,7 @@ const fixtureRepository = async () => {
   await mkdir(path.join(root, 'app'), { recursive: true });
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), runnerScript(), 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), CONFIGURATION, 'utf8');
   await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
   await git(root, ['init', '--quiet']);
   await git(root, ['add', '--all']);
@@ -247,13 +238,31 @@ const storeFor = async (root) => openEvidenceStore({
   },
 });
 
-const gatePolicy = () => ({
-  checks: { required: ['broad_test'], advisory: [] },
-  budget: { total_seconds: 600 },
-  bypass: { enabled: false, marker: null },
-  execution: { budget_skippable: [] },
-  evidence: {},
-});
+/**
+ * The fixture's Gate policy and checks, read from the clone configuration.
+ *
+ * They are read rather than restated so the activation transaction and the
+ * registered runner are bound by the same file. A fixture that stated its own
+ * copy is exactly how release qualification came to pass while no packaged
+ * runner existed at all.
+ */
+const configured = () => {
+  const parsed = parseConfigurationDocument(CONFIGURATION);
+
+  if (!parsed.ok) {
+    throw new Error(`the fixture configuration is unreadable: ${parsed.detail}`);
+  }
+
+  const { checks, errors } = gateChecksFromConfiguration(parsed.value);
+
+  if (errors.length > 0) {
+    throw new Error(`the fixture configuration resolves no checks: ${JSON.stringify(errors)}`);
+  }
+
+  return { policy: parsed.value.evaluation_gate, checks };
+};
+
+const gatePolicy = () => configured().policy;
 
 const activationRequest = (root) => ({
   scope: 'repository',
@@ -265,20 +274,12 @@ const activationRequest = (root) => ({
   actor: { name: 'gate-activation-smoke', source: 'fixture' },
   runtime: {
     runnerVersion: 'gate-activation-smoke/1.0.0',
-    hookProgram: { interpreter: process.execPath, script: 'tools/gate-runner.mjs', args: [] },
+    // The PACKAGED runner, not a fixture. This substitution is the point of
+    // the extension: the fixture supplying its own hook program is why release
+    // qualification passed while no packaged runner existed.
+    hookProgram: { interpreter: process.execPath, script: PACKAGED_RUNNER, args: [] },
   },
-  checks: [{
-    id: 'broad_test',
-    evaluate: {
-      runner: 'repository-script',
-      args: ['tools/check.mjs', SOURCE],
-      working_directory: '.',
-      timeout_seconds: 60,
-      allowed_environment: ['PATH'],
-      evidence_category: 'test',
-      source_scope: 'backend',
-    },
-  }],
+  checks: configured().checks,
   adapters: [{ id: 'git', version: '1.0.0', authoritative: true }],
   runtimeInputs: [{ name: 'APP_TOKEN', source: 'approved-environment-file' }],
 });
@@ -288,13 +289,7 @@ const activationRequest = (root) => ({
  * spawns the check, and requires a contract decision before Git may be enabled.
  */
 const selfTestEvaluation = async ({ repository }) => {
-  const collected = collectChecks([{
-    provider: laravelProvider,
-    facts: {
-      scopes: { backend: ['app'], frontend: [] },
-      proved: { broad_test: { evaluate: activationRequest(repository.root).checks[0].evaluate } },
-    },
-  }]);
+  const collected = { checks: configured().checks };
   const executor = createBoundedExecutor({
     resolveExecutable: (command) => (
       command.runner === 'repository-script' ? { executable: process.execPath } : null
@@ -473,6 +468,14 @@ const packagedActivation = async () => {
     findings,
     (((await stat(hookPath).catch(() => ({ mode: 0 }))).mode) & 0o111) !== 0,
     'The registered hook is not executable.',
+  );
+  // The substitution this capability was extended to make. A fixture runner
+  // here is what let release qualification pass while no packaged runner
+  // existed, so it is asserted rather than assumed.
+  check(
+    findings,
+    (shim ?? '').includes(PACKAGED_RUNNER),
+    `The registered hook does not run the packaged runner at ${PACKAGED_RUNNER}.`,
   );
 
   const events = await store.readEvents();

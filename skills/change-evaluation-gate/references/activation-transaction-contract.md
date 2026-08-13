@@ -204,6 +204,44 @@ required separately: a flag never implies it.
 | `receipt` | `receipt-write-failed` |
 | `git-enablement` | `hook-registration-failed`, `activation-record-failed` |
 
+## The packaged runner
+
+The hook program is supplied by the caller, and for a real clone that program is
+the one this skill ships:
+`skills/change-evaluation-gate/scripts/gate-precommit.mjs`, exposed as the
+`change-evaluation-gate-precommit` bin. It is a bare packaged script rather than
+a `gate` subcommand: the lifecycle command surface is a contract of its own, and
+a CLI whose only subcommand was this one would commit that surface to a shape it
+has not settled. A later `gate` CLI can delegate to this entry point without
+changing what an activated clone already registered.
+
+The runner adds no policy. It resolves the repository root, reads the clone's
+configuration through the supported reader and its Activation receipt, builds
+the versioned evaluation request for the `commit-attempt` trigger against the
+`git-index` snapshot, invokes `evaluate`, and prints the decision.
+
+| Situation | Result |
+| --- | --- |
+| `allow` authorization | Exits `0`; the commit proceeds |
+| Any other authorization | Exits non-zero, naming every check that did not pass |
+| Configuration absent, unreadable, or carrying no valid Gate policy | Exits non-zero with that reason |
+| Activation receipt absent or unreadable | Exits non-zero; a clone it cannot prove was activated authorizes nothing |
+| A logical runner that resolves to no executable | Exits non-zero; it never falls back to a shell |
+| A descriptor its own runner cannot compose | Exits non-zero with `command-args-uncomposable` |
+| Internal failure, or a decision it cannot read | Exits non-zero; absence of a denial is not an allow |
+
+Argument composition goes through `composeArguments`, the same rule
+`commandPreview` and bounded execution derive from, so what a preview described
+is what runs.
+
+When `CHANGE_EVALUATION_GATE_SELF_TEST` is set the runner is being proved. It
+reads the named subject and denies it **because** it carries a failing required
+check, and refuses a subject it cannot read, whose version it does not model, or
+that carries nothing deniable, each by its own reason. Since this step accepts
+any non-zero exit as proof, a runner that merely crashed would pass too — and
+would then block every real commit; deliberate denial is what distinguishes the
+two.
+
 ## Deliberately not here
 
 The receipt records the composition strategy, the location, and the prior chain

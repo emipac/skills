@@ -1,9 +1,9 @@
 # TB-018 — Package the authoritative Git hook runner
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 18-package-the-authoritative-git-hook-runner
 Draft key: TB-018
@@ -114,10 +114,10 @@ expressions.
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVAL-001`: in an activated throwaway clone, a commit whose required
+- [x] `AC-EVAL-001`: in an activated throwaway clone, a commit whose required
   check fails is refused by the registered hook with a non-zero exit and a
   stated reason, and a commit whose required checks pass is accepted.
-- [ ] `AC-EVAL-001`: the runner exits non-zero when it cannot read the
+- [x] `AC-EVAL-001`: the runner exits non-zero when it cannot read the
   configuration, cannot find the receipt, cannot resolve a runner, or fails
   internally; no failure path exits `0`.
 
