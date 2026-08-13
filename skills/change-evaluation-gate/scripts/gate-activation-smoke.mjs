@@ -49,6 +49,12 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
+  configureGate,
+  migrateConfiguration,
+  previewConfigurationMigration,
+  previewGateConfiguration,
+} from '../../framework-setup/scripts/configure.mjs';
+import {
   ACTIVATION_RECEIPT_VERSION,
   ACTIVATION_STEPS,
   activate,
@@ -59,7 +65,7 @@ import { createBoundedExecutor } from './lib/bounded-execution.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
-  parseConfigurationDocument,
+  readRepositoryConfiguration,
 } from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
@@ -157,8 +163,8 @@ const CHECK_SCRIPT = [
  * configuration reader, and the registered runner reads the same file again at
  * commit time. Nothing here restates a command the configuration already owns.
  */
-const CONFIGURATION = [
-  'schema_version: 4',
+const SCHEMA_V3_CONFIGURATION = [
+  'schema_version: 3',
   'backend: unknown',
   'frontend: none',
   'tracker: local-markdown',
@@ -180,35 +186,35 @@ const CONFIGURATION = [
   '      backend: []',
   '      frontend: []',
   '      both:',
-  '        - runner: repository-script',
-  '          args:',
-  '            - tools/check.mjs',
-  `            - ${SOURCE}`,
-  '          working_directory: "."',
-  '          timeout_seconds: 60',
-  '          allowed_environment:',
-  '            - PATH',
-  '          evidence_category: test',
-  '          source_scope: both',
-  'evaluation_gate:',
-  '  checks:',
-  '    required:',
-  `      - ${REQUIRED_CHECK}`,
-  '    advisory: []',
-  '  budget:',
-  '    total_seconds: 600',
-  '  bypass:',
-  '    enabled: false',
-  '    marker: null',
-  '  execution:',
-  '    budget_skippable: []',
-  '  evidence: {}',
+  '        - "node tools/check.mjs app/Order.php"',
   'history:',
   '  path: docs/history',
   '  required: false',
   'protected_files: []',
   '',
 ].join('\n');
+
+const MIGRATION_MAPPINGS = {
+  profiles: { backend: 'express-typescript' },
+  commands: {
+    'verification.commands.test.both[0]': {
+      runner: 'repository-script',
+      args: ['tools/check.mjs', SOURCE],
+      timeout_seconds: 60,
+      allowed_environment: ['PATH'],
+    },
+  },
+};
+
+const GATE_POLICY = {
+  checks: { required: [REQUIRED_CHECK], advisory: [] },
+  budget: { total_seconds: 600 },
+  bypass: { enabled: false, marker: null },
+  execution: { budget_skippable: [] },
+  evidence: {},
+};
+
+const fixtureConfigurations = new Map();
 
 /** A throwaway clone with one baseline commit, a check, and a configuration. */
 const fixtureRepository = async () => {
@@ -218,7 +224,37 @@ const fixtureRepository = async () => {
   await mkdir(path.join(root, 'app'), { recursive: true });
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
-  await writeFile(path.join(root, CONFIGURATION_FILE), CONFIGURATION, 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_CONFIGURATION, 'utf8');
+
+  const migration = await previewConfigurationMigration({
+    projectRoot: root,
+    mappings: MIGRATION_MAPPINGS,
+  });
+
+  await migrateConfiguration({
+    projectRoot: root,
+    mappings: MIGRATION_MAPPINGS,
+    confirmation: migration.previewHash,
+  });
+
+  const gateConfiguration = await previewGateConfiguration({
+    projectRoot: root,
+    policy: GATE_POLICY,
+  });
+
+  await configureGate({
+    projectRoot: root,
+    policy: GATE_POLICY,
+    confirmation: gateConfiguration.previewHash,
+  });
+
+  const configured = await readRepositoryConfiguration({ repositoryRoot: root });
+
+  if (!configured.ok) {
+    throw new Error(`the migrated and Gate-configured fixture is unreadable: ${configured.detail}`);
+  }
+
+  fixtureConfigurations.set(root, configured.configuration);
   await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
   await git(root, ['init', '--quiet']);
   await git(root, ['add', '--all']);
@@ -246,29 +282,29 @@ const storeFor = async (root) => openEvidenceStore({
  * copy is exactly how release qualification came to pass while no packaged
  * runner existed at all.
  */
-const configured = () => {
-  const parsed = parseConfigurationDocument(CONFIGURATION);
+const configured = (root) => {
+  const configuration = fixtureConfigurations.get(root);
 
-  if (!parsed.ok) {
-    throw new Error(`the fixture configuration is unreadable: ${parsed.detail}`);
+  if (!configuration) {
+    throw new Error(`the fixture configuration was not read for ${root}`);
   }
 
-  const { checks, errors } = gateChecksFromConfiguration(parsed.value);
+  const { checks, errors } = gateChecksFromConfiguration(configuration);
 
   if (errors.length > 0) {
     throw new Error(`the fixture configuration resolves no checks: ${JSON.stringify(errors)}`);
   }
 
-  return { policy: parsed.value.evaluation_gate, checks };
+  return { policy: configuration.evaluation_gate, checks };
 };
 
-const gatePolicy = () => configured().policy;
+const gatePolicy = (root) => configured(root).policy;
 
 const activationRequest = (root) => ({
   scope: 'repository',
   trigger: 'explicit',
   repository: { root },
-  configuration: { schemaVersion: 4, policy: gatePolicy() },
+  configuration: { schemaVersion: 4, policy: gatePolicy(root) },
   client: { id: 'git', surface: 'git-pre-commit', version: '1.0.0' },
   gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
   actor: { name: 'gate-activation-smoke', source: 'fixture' },
@@ -279,7 +315,7 @@ const activationRequest = (root) => ({
     // qualification passed while no packaged runner existed.
     hookProgram: { interpreter: process.execPath, script: PACKAGED_RUNNER, args: [] },
   },
-  checks: configured().checks,
+  checks: configured(root).checks,
   adapters: [{ id: 'git', version: '1.0.0', authoritative: true }],
   runtimeInputs: [{ name: 'APP_TOKEN', source: 'approved-environment-file' }],
 });
@@ -289,7 +325,7 @@ const activationRequest = (root) => ({
  * spawns the check, and requires a contract decision before Git may be enabled.
  */
 const selfTestEvaluation = async ({ repository }) => {
-  const collected = { checks: configured().checks };
+  const collected = { checks: configured(repository.root).checks };
   const executor = createBoundedExecutor({
     resolveExecutable: (command) => (
       command.runner === 'repository-script' ? { executable: process.execPath } : null
