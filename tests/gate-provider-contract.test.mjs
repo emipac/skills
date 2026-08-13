@@ -70,7 +70,7 @@ const laravelFacts = () => ({
       prerequisites: [{ kind: 'service', name: 'database' }],
     },
     build: {
-      evaluate: command('package-script', ['run', 'build'], 'frontend', 'build'),
+      evaluate: command('package-script', ['build'], 'frontend', 'build'),
     },
     browser: {
       evaluate: command('composer-bin', ['pest', '--group', 'browser'], 'backend', 'e2e'),
@@ -86,19 +86,19 @@ const nodeFacts = () => ({
   scopes: { backend: ['src'], frontend: ['web/src'] },
   proved: {
     format: {
-      evaluate: command('package-script', ['run', 'format:check'], 'both', 'format'),
-      fix: command('package-script', ['run', 'format'], 'both', 'format'),
+      evaluate: command('package-script', ['format:check'], 'both', 'format'),
+      fix: command('package-script', ['format'], 'both', 'format'),
     },
     static_analysis: {
-      evaluate: command('package-script', ['run', 'typecheck'], 'both', 'static_analysis'),
+      evaluate: command('package-script', ['typecheck'], 'both', 'static_analysis'),
       covers_tests: true,
     },
     focused_test: {
-      evaluate: command('package-script', ['run', 'test:unit'], 'backend', 'test'),
+      evaluate: command('package-script', ['test:unit'], 'backend', 'test'),
       selection: { kind: 'explicit-filter', value: 'orders' },
     },
     broad_test: {
-      evaluate: command('package-script', ['run', 'test'], 'both', 'test'),
+      evaluate: command('package-script', ['test'], 'both', 'test'),
     },
   },
 });
@@ -299,7 +299,7 @@ const descriptorFrom = (provider, overrides) => ({
   applicability: { changed_path_globs: ['**'], required_facts: [] },
   prerequisites: [],
   policy: 'required',
-  evaluate: command('package-script', ['run', 'format:check'], 'both', 'format'),
+  evaluate: command('package-script', ['format:check'], 'both', 'format'),
   fix: null,
   timeout_seconds: 120,
   declared_writes: [],
@@ -467,7 +467,7 @@ test('AC-CFG-002: shell syntax is rejected before anything can execute it (SG-CM
   }
 
   assert.deepEqual(
-    validateCommandDescriptor(command('package-script', ['run', 'test:unit'], 'both', 'test'), 'ok'),
+    validateCommandDescriptor(command('package-script', ['test:unit'], 'both', 'test'), 'ok'),
     [],
   );
 });

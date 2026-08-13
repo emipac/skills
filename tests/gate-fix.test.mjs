@@ -156,7 +156,7 @@ const provedLaravelFacts = () => ({
     },
     smoke: { evaluate: command('php-script', ['artisan', 'test', '--group', 'smoke'], 'smoke') },
     build: {
-      evaluate: command('package-script', ['run', 'build'], 'build', { source_scope: 'frontend' }),
+      evaluate: command('package-script', ['build'], 'build', { source_scope: 'frontend' }),
     },
     broad_test: { evaluate: command('php-script', ['artisan', 'test'], 'test') },
   },

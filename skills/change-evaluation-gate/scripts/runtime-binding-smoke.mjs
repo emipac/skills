@@ -118,7 +118,7 @@ const browserCheck = () => ({
   policy: 'required',
   evaluate: {
     runner: 'package-script',
-    args: ['run', 'test:browser'],
+    args: ['test:browser'],
     working_directory: '.',
     timeout_seconds: 60,
     allowed_environment: ['PATH'],
