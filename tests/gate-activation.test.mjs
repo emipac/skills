@@ -279,7 +279,9 @@ test('successful activation records the previewed identities and enables Git las
     runner: 'package-script',
     executable: '/usr/bin/package-script',
     version: '1.0.0',
-    preview: '/usr/bin/package-script test',
+    // The descriptor stores the script name; `package-script` reaches it
+    // through `run`, so that is what the maintainer is shown and what runs.
+    preview: '/usr/bin/package-script run test',
     working_directory: '.',
   }]);
   assert.deepEqual(preview.hooks, [{

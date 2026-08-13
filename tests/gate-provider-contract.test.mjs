@@ -494,9 +494,11 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
   const result = collectChecks([{ provider: laravelProvider, facts: laravelFacts() }]);
   const formatter = result.checks.filter((check) => check.capability === 'formatter');
 
-  const activation = resolveExecutables(formatter, (runner) => (
+  // Resolution finds the binary the descriptor's leading argument names, so the
+  // executable is the binary itself rather than the directory holding it.
+  const activation = resolveExecutables(formatter, (runner, command_) => (
     runner === 'composer-bin'
-      ? { executable: 'vendor/bin', version: '1.18.1' }
+      ? { executable: `vendor/bin/${command_.args[0]}`, version: '1.18.1' }
       : null
   ));
 
@@ -505,20 +507,20 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
       check_id: 'laravel.format.formatter',
       role: 'evaluate',
       runner: 'composer-bin',
-      executable: 'vendor/bin',
+      executable: 'vendor/bin/pint',
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin', version: '1.18.1' },
-      preview: 'vendor/bin pint --test',
+      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      preview: 'vendor/bin/pint --test',
       working_directory: '.',
     },
     {
       check_id: 'laravel.format.formatter',
       role: 'fix',
       runner: 'composer-bin',
-      executable: 'vendor/bin',
+      executable: 'vendor/bin/pint',
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin', version: '1.18.1' },
-      preview: 'vendor/bin pint',
+      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      preview: 'vendor/bin/pint',
       working_directory: '.',
     },
   ]);

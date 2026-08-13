@@ -1,14 +1,14 @@
 # TB-019 — Bind runner arguments to their resolved executable
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 19-bind-runner-arguments-to-their-resolved-executable
 Draft key: TB-019
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -108,10 +108,10 @@ correct a descriptor whose arguments cannot be composed — report it.
 
 ## Acceptance Criteria
 
-- [ ] `AC-CFG-002`: each declared runner composes its resolved executable with
+- [x] `AC-CFG-002`: each declared runner composes its resolved executable with
   its stored arguments into the invocation the original command described, and
   the previewed invocation is byte-identical to what execution runs.
-- [ ] `AC-CFG-002`: existing schema v4 descriptors produced by migration compose
+- [x] `AC-CFG-002`: existing schema v4 descriptors produced by migration compose
   correctly without being rewritten, and a descriptor whose arguments cannot be
   composed for its runner is reported rather than silently adjusted.
 
