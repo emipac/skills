@@ -992,21 +992,30 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
 {
   "checks":    { "required": [], "advisory": [] },
   "budget":    { "total_seconds": 900 },
-  "bypass":    { },
+  "bypass":    { "enabled": false },
   "execution": { },
   "evidence":  { }
 }
 JSON</code></pre>
 
+      <p>
+        This starter is configuration-valid, but it does not make any check blocking. Before
+        activation, decide which confirmed Verification identities are <code>required</code> and
+        which are <code>advisory</code>, then preview the resulting policy again. An identity not
+        listed as required remains advisory.
+      </p>
+
       <h4>Four things that will trip you up</h4>
 
       <div class="note note-caution">
-        <span class="note-tag">1 — All five are mandatory, even empty</span>
+        <span class="note-tag">1 — All five are mandatory; bypass is explicit</span>
         <p>
           You cannot omit <code>bypass</code> because you do not want bypass. Leaving it out fails
-          with <code>Missing Gate policy subcontract: bypass</code>. Write <code>{}</code>. Only
-          <code>checks</code> and <code>budget</code> are strictly validated at this point; the
-          other three need only be objects.
+          with <code>Missing Gate policy subcontract: bypass</code>. Write
+          <code>{"enabled": false}</code> when bypass is disabled. The same policy validator used
+          by the Gate runtime checks setup previews, so an enabled bypass also needs its
+          commit-visible marker. Empty <code>execution</code> and <code>evidence</code> objects are
+          valid when no additional policy is needed.
         </p>
       </div>
 

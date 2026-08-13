@@ -630,7 +630,7 @@ const gateForbiddenOwnershipField = (value) => {
   return null;
 };
 
-const validateGatePolicy = (policy) => {
+const validateGatePolicy = async (policy) => {
   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
     throw new Error('Gate policy must be an object');
   }
@@ -715,6 +715,17 @@ const validateGatePolicy = (policy) => {
       throw new Error(`Gate ${subcontract} policy must be an object`);
     }
   }
+
+  const { validateGatePolicy: validateRuntimeGatePolicy } = await import(
+    '../../change-evaluation-gate/scripts/lib/policy.mjs',
+  );
+  const runtimeIssues = validateRuntimeGatePolicy(policy);
+
+  if (runtimeIssues.length > 0) {
+    throw new Error(runtimeIssues
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join(' '));
+  }
 };
 
 const renderGateConfiguration = (contents, policy) => {
@@ -750,7 +761,7 @@ export const previewGateConfiguration = async ({ projectRoot, policy }) => {
     throw new Error('The Gate is already configured');
   }
 
-  validateGatePolicy(policy);
+  await validateGatePolicy(policy);
   const proposedConfiguration = renderGateConfiguration(contents, policy);
   const previewHash = createHash('sha256')
     .update(contents)
