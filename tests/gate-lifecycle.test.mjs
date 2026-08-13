@@ -153,12 +153,27 @@ const activationDependencies = (overrides = {}) => ({
   ...overrides,
 });
 
+/**
+ * The self-test protocol every registered hook program must satisfy.
+ *
+ * Activation runs the program against a throwaway subject it must deny before
+ * it will register it, so a fixture program says so explicitly rather than
+ * evaluating the directory it happens to be started in.
+ */
+const SELF_TEST_GUARD = [
+  'if (process.env.CHANGE_EVALUATION_GATE_SELF_TEST) {',
+  '  process.stdout.write("change-evaluation-gate: denied\\n");',
+  '  process.exit(1);',
+  '}',
+  '',
+].join('\n');
+
 /** A guarded activation: no fixture may activate anything outside a throwaway clone. */
 const activatedClone = async (t, overrides = {}) => {
   const root = await throwawayRepository(t);
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), `${SELF_TEST_GUARD}process.exitCode = 0;\n`, 'utf8');
 
   const store = await storeFor(root);
   const request = activationRequest(root, overrides);
@@ -551,7 +566,7 @@ const populatedClone = async (t) => {
   await assertThrowawayRepository(globalAssets);
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), `${SELF_TEST_GUARD}process.exitCode = 0;\n`, 'utf8');
   await writeFile(path.join(root, '.agent-framework.yaml'), SHARED_CONFIGURATION, 'utf8');
   await mkdir(path.join(root, '.claude', 'skills'), { recursive: true });
   await writeFile(path.join(root, '.claude/skills/gate.md'), '# project asset\n', 'utf8');

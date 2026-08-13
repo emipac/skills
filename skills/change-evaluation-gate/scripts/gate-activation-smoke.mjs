@@ -20,6 +20,11 @@
  *    Git enablement leaves no receipt, no registration, and a clone that still
  *    commits exactly as it did while merely configured (FR-LIFE-005,
  *    NFR-REL-002, SG-LIFE-001).
+ * 4. `hook-program-self-test` — a registered hook program that exits `0` for a
+ *    change it must deny is refused at the `self-test` step: the clone is left
+ *    configured with no receipt and no hook, the throwaway subject the proof
+ *    ran against is gone, and the clone still commits (AC-LIFE-002,
+ *    NFR-REL-003, SG-LIFE-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -37,7 +42,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -140,9 +145,21 @@ const runnerScript = () => [
   `import { evaluate } from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'evaluate.mjs')).href)};`,
   `import { collectChecks } from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'gate-core.mjs')).href)};`,
   `import laravelProvider from ${JSON.stringify(pathToFileURL(path.join(LIBRARY, 'providers', 'laravel.mjs')).href)};`,
-  "import { mkdtemp, rm } from 'node:fs/promises';",
+  "import { mkdtemp, readFile, rm } from 'node:fs/promises';",
   "import { tmpdir } from 'node:os';",
   "import path from 'node:path';",
+  '',
+  // Activation proves this program denies before it registers it. The subject
+  // is named explicitly so the proof never runs against somebody's own work.
+  "const selfTestSubject = process.env.CHANGE_EVALUATION_GATE_SELF_TEST ?? null;",
+  '',
+  'if (selfTestSubject !== null) {',
+  "  const subject = JSON.parse(await readFile(selfTestSubject, 'utf8'));",
+  "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
+  '',
+  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test\\n`);',
+  '  process.exit(denied ? 1 : 0);',
+  '}',
   '',
   `const SOURCE = ${JSON.stringify(SOURCE)};`,
   'const root = process.cwd();',
@@ -334,10 +351,10 @@ const check = (findings, condition, detail) => {
 };
 
 /** Activate one fixture clone for real, through the real registration seam. */
-const activateFixture = async (root, store, overrides = {}) => {
+const activateFixture = async (root, store, overrides = {}, requestOverrides = {}) => {
   await assertThrowawayRepository(root);
 
-  const request = activationRequest(root);
+  const request = { ...activationRequest(root), ...requestOverrides };
   const preview = await previewActivation(request, dependencies());
   const consent = {
     previewId: preview.previewId,
@@ -423,8 +440,13 @@ const packagedActivation = async () => {
   );
   check(
     findings,
-    (receipt.selfTests ?? []).length === 2 && receipt.selfTests.every((selfTest) => selfTest.ok),
+    (receipt.selfTests ?? []).length === 3 && receipt.selfTests.every((selfTest) => selfTest.ok),
     'The receipt does not pin the self-test results.',
+  );
+  check(
+    findings,
+    (receipt.selfTests ?? []).some((selfTest) => selfTest.name === 'hook-program' && selfTest.ok === true),
+    'The receipt does not record that the registered hook program was proved to deny.',
   );
   check(
     findings,
@@ -594,6 +616,93 @@ const rollbackLeavesNoTrace = async () => {
   return { name: 'rollback-leaves-no-trace', ok: findings.length === 0, findings };
 };
 
+/** Entries the self-test subject would leave behind if it left anything. */
+const selfTestSubjects = async () => (await readdir(tmpdir()).catch(() => []))
+  .filter((entry) => entry.startsWith('gate-hook-program-self-test-'));
+
+/**
+ * A registered hook program that enforces nothing is refused.
+ *
+ * The program here exits `0` for everything, which is exactly what a pure
+ * library does when it is mistaken for a runner. Every weaker check — does it
+ * exist, is it executable, does it run — passes on it. Only asserting that it
+ * denies a change it must deny catches it (NFR-REL-003).
+ */
+const hookProgramSelfTest = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+
+  await writeFile(path.join(root, 'tools/allowing-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+
+  const before = await selfTestSubjects();
+  const { preview, result } = await activateFixture(root, store, {}, {
+    runtime: {
+      runnerVersion: `${CAPABILITY}/1.0.0`,
+      hookProgram: { interpreter: process.execPath, script: 'tools/allowing-runner.mjs', args: [] },
+    },
+  });
+
+  check(findings, result.activated === false, 'A hook program that enforces nothing was activated.');
+  check(findings, result.state === 'configured', `Expected the configured state, got ${result.state}.`);
+  check(
+    findings,
+    result.step === 'self-test' && result.reasonCode === 'hook-program-self-test-failed',
+    `Expected a self-test refusal, got ${result.step}/${result.reasonCode}.`,
+  );
+  check(
+    findings,
+    result.errors?.[0]?.reason === 'hook-program-allowed-denied-change',
+    `The refusal does not say the program allowed a denied change: ${JSON.stringify(result.errors)}.`,
+  );
+
+  // No receipt, and no registered hook: the clone is left merely configured.
+  check(findings, result.receipt === null, 'A refused activation returned a receipt.');
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'A refused activation left a receipt on disk.',
+  );
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'A refused activation left a registered hook behind.',
+  );
+  check(
+    findings,
+    (await readdir(path.join(store.gitCommonDirectory, 'hooks')).catch(() => []))
+      .filter((entry) => !entry.endsWith('.sample')).length === 0,
+    'A refused activation left a hook in the clone.',
+  );
+
+  // The proof ran against a throwaway subject and took it with it.
+  check(
+    findings,
+    JSON.stringify(await selfTestSubjects()) === JSON.stringify(before),
+    'The hook-program self-test left its throwaway subject behind.',
+  );
+
+  const events = await store.readEvents();
+
+  check(
+    findings,
+    events.length === 1 && events[0].type === 'activation' && events[0].outcome === 'failed',
+    `Expected exactly one failed activation event, got ${JSON.stringify(events.map((event) => event.outcome))}.`,
+  );
+
+  // And the clone still commits exactly as it did while merely configured.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  check(
+    findings,
+    await commit(root, 'a configured clone still commits').then(() => true, () => false),
+    'A refused activation still blocked a commit.',
+  );
+
+  return { name: 'hook-program-self-test', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -611,6 +720,7 @@ const main = async () => {
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
       await rollbackLeavesNoTrace(),
+      await hookProgramSelfTest(),
     ];
   } finally {
     for (const root of temporaryRoots) {

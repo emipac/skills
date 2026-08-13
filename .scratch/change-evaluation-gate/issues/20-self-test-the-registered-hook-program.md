@@ -1,6 +1,6 @@
 # TB-020 — Self-test the registered hook program before enabling Git
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent, defect
@@ -118,10 +118,10 @@ contract into the runner's own implementation, which `TB-018` owns, or into
 
 ## Acceptance Criteria
 
-- [ ] `AC-LIFE-002`: activation whose registered hook program exits `0` for a
+- [x] `AC-LIFE-002`: activation whose registered hook program exits `0` for a
   change that must be denied fails at the `self-test` step, and the clone is left
   configured with no receipt and no registered hook.
-- [ ] `AC-LIFE-002`: activation whose hook program correctly denies that change
+- [x] `AC-LIFE-002`: activation whose hook program correctly denies that change
   completes, records the hook-program self-test and its outcome in the receipt,
   and still enables Git last.
 

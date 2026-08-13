@@ -79,6 +79,31 @@ const runGit = async (repositoryRoot, args) => {
   return stdout;
 };
 
+/**
+ * A hook program that honors the self-test protocol.
+ *
+ * Started with a self-test subject named in the environment, it evaluates that
+ * subject and denies it; started as a real hook it evaluates the change in
+ * front of it. Proving the first says nothing about the second, which is the
+ * whole reason the subject is explicit.
+ */
+const DENYING_RUNNER = [
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  'const subjectPath = process.env.CHANGE_EVALUATION_GATE_SELF_TEST ?? null;',
+  '',
+  'if (subjectPath === null) {',
+  '  process.exitCode = 0;',
+  '} else {',
+  "  const subject = JSON.parse(await readFile(subjectPath, 'utf8'));",
+  "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
+  '',
+  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"}\\n`);',
+  '  process.exitCode = denied ? 1 : 0;',
+  '}',
+  '',
+].join('\n');
+
 const gatePolicy = () => ({
   checks: { required: ['broad_test'], advisory: [] },
   budget: { total_seconds: 600 },
@@ -238,6 +263,9 @@ test('successful activation records the previewed identities and enables Git las
   const request = activationRequest(root);
   const timeline = [];
 
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
   const preview = await previewActivation(request, dependencies());
 
   // A preview is a statement of intent, not a change: it names the exact hook
@@ -351,6 +379,11 @@ test('successful activation records the previewed identities and enables Git las
   // ... and the self-test results.
   assert.deepEqual(receipt.selfTests, [
     { name: 'evaluation-process', ok: true, detail: 'evaluation process reached a decision' },
+    {
+      name: 'hook-program',
+      ok: true,
+      detail: 'The registered hook program denied the self-test subject with exit 1.',
+    },
     { name: 'adapter:git', ok: true, detail: 'git responded' },
   ]);
 
@@ -482,7 +515,7 @@ test('activation registers a gate-owned shim at the previewed location without c
   await runGit(root, ['config', '--local', 'core.hooksPath', '.githooks']);
   await mkdir(path.join(root, '.githooks'), { recursive: true });
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
 
   const store = await storeFor(root);
   const request = activationRequest(root);
@@ -522,7 +555,7 @@ test('an activation that cannot be recorded is rolled back and removes the hook 
   const store = await storeFor(root);
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
 
   const request = activationRequest(root);
   const preview = await previewActivation(request, dependencies());
@@ -565,7 +598,7 @@ test('rollback removes only unchanged gate-owned content and never repairs forei
   const store = await storeFor(root);
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
 
   const request = activationRequest(root);
   const preview = await previewActivation(request, dependencies());
@@ -1022,4 +1055,99 @@ test('AC-ADAPT-003: a declared registration surface that cannot be confirmed is 
   );
   assert.equal(status.repaired, false);
   assert.deepEqual(status.mutations, []);
+});
+
+/**
+ * A hook program that ignores the self-test subject entirely and exits `0`.
+ *
+ * This is the shape of the real defect: a program pointed at a pure library
+ * prints nothing, exits `0`, and would therefore allow every commit.
+ */
+const ALLOWING_RUNNER = 'process.exitCode = 0;\n';
+
+test('activation refuses a registered hook program that allows a change it must deny', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), ALLOWING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'self-test');
+  assert.equal(result.reasonCode, 'hook-program-self-test-failed');
+  assert.equal(result.receipt, null);
+
+  // The clone is left configured: no receipt, and no registered hook.
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+});
+
+test('activation whose hook program denies the change completes, records the self-test, and still enables Git last', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+  }));
+
+  assert.equal(result.activated, true, `Activation refused: ${result.reasonCode}.`);
+
+  // The receipt records that the program was proved, and what it proved.
+  const persisted = await store.activationReceipt().read();
+  const selfTest = persisted.selfTests.find((entry) => entry.name === 'hook-program');
+
+  assert.notEqual(selfTest, undefined, 'the receipt must record the hook-program self-test');
+  assert.equal(selfTest.ok, true);
+  assert.match(selfTest.detail, /denied/);
+
+  // The frozen pipeline is unchanged and Git is still enabled last.
+  assert.deepEqual(result.order, [...ACTIVATION_STEPS]);
+  assert.equal(result.order.at(-1), 'git-enablement');
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), ['pre-commit']);
+});
+
+test('activation refuses a hook program that cannot start, and never mistakes a failure to run for a denial', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  const request = activationRequest(root, {
+    runtime: {
+      runnerVersion: 'change-evaluation-gate/0.9.0',
+      // An interpreter that is not there at all: the program never runs, so
+      // nothing about it has been proved (NFR-REL-003).
+      hookProgram: {
+        interpreter: path.join(root, 'tools/no-such-interpreter'),
+        script: 'tools/gate-runner.mjs',
+        args: [],
+      },
+    },
+  });
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'self-test');
+  assert.equal(result.reasonCode, 'hook-program-self-test-failed');
+  assert.equal(result.errors[0].reason, 'hook-program-cannot-start');
+  assert.equal(result.receipt, null);
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
 });

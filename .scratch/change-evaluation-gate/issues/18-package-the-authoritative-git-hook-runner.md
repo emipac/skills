@@ -131,10 +131,36 @@ expressions.
 Frontend build and browser evidence are inapplicable; this is a local process
 entry point, not repository frontend code.
 
+## The runner must answer the activation self-test
+
+`TB-020` closed the hole that let a non-enforcing program be registered:
+activation now executes the hook program against a known-failing subject and
+refuses it unless it exits non-zero. **A runner that does not answer that
+protocol will be refused at activation**, so this is a hard requirement rather
+than a nicety.
+
+The protocol is documented in
+`skills/change-evaluation-gate/references/activation-transaction-contract.md`:
+
+- the absolute path of a `subject.json` arrives in the environment variable
+  `CHANGE_EVALUATION_GATE_SELF_TEST`, and the program starts with the subject
+  directory as its working directory;
+- a program that finds that variable set is being proved, not run against
+  somebody's work. It evaluates the named subject instead of its working tree;
+- the subject pins `subjectVersion`, a per-run `selfTestId`, `expect: "denied"`,
+  and the failing required check that makes it deniable;
+- exiting non-zero proves denial; exiting `0` is
+  `hook-program-allowed-denied-change` and activation refuses.
+
+Deny that subject **deliberately**. `TB-020` treats any non-zero exit as proof
+of denial, so a runner that merely crashes would also pass — fail-closed, but
+for the wrong reason, and it would then block every real commit too.
+
 ## Blocked By
 
 None. `TB-004` delivered the evaluation seam and `TB-010` delivered hook
-registration; both are done.
+registration; both are done. `TB-020` is also done and defines the self-test
+protocol above, which this runner must satisfy.
 
 ## Unresolved Assumptions
 

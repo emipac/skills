@@ -80,7 +80,9 @@ transaction defined by the
 [Activation transaction contract](references/activation-transaction-contract.md):
 it previews exact changes and commands, obtains repository-bound consent,
 resolves runners, establishes client-controlled trust, validates the existing
-hook chain, self-tests the adapters and the evaluation process, pins a receipt,
+hook chain, self-tests the adapters, the evaluation process, and the hook
+program it is about to register — by running it against a change it must deny
+and requiring a refusal — pins a receipt,
 and enables authoritative Git last. Configuring policy never starts it, and a
 failed transaction leaves the clone configured with no receipt and no
 registration.
