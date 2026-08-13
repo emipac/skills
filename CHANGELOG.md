@@ -1,5 +1,31 @@
 # ai-skills-framework
 
+## 0.10.0
+
+### Minor Changes
+
+- [#21](https://github.com/emipac/skills/pull/21) [`2aeced6`](https://github.com/emipac/skills/commit/2aeced6987b4bd14ecd5ab62f33493ff6e1212c2) Thanks [@emipac](https://github.com/emipac)! - Ship the packaged Change Evaluation Gate pre-commit runner an activated
+  repository actually invokes: it reads the clone's configuration through a
+  supported `.agent-framework.yaml` reader and its Activation receipt, builds the
+  versioned `commit-attempt` request, calls the existing `evaluate` seam without
+  adding policy of its own, prints the decision, denies the activation self-test
+  subject deliberately, and exits `0` only on an `allow` authorization — an
+  unreadable configuration, an absent receipt, an unresolved runner, a malformed
+  decision, or an internal failure all deny with a stated reason.
+
+### Patch Changes
+
+- [#21](https://github.com/emipac/skills/pull/21) [`7eaf25b`](https://github.com/emipac/skills/commit/7eaf25bc9bc5b67fdc0102d934273f87ea80e363) Thanks [@emipac](https://github.com/emipac)! - Bind each logical runner's stored arguments to its resolved executable through
+  one composition rule owned by the runner, so a previewed invocation is
+  byte-identical to the one execution runs. A `composer-bin` descriptor no longer
+  repeats its binary name and a `package-script` descriptor reaches its script
+  through `run`. Stored schema v4 descriptors are unchanged and a descriptor its
+  runner cannot compose is reported rather than silently adjusted.
+
+- [#21](https://github.com/emipac/skills/pull/21) [`ed87d8f`](https://github.com/emipac/skills/commit/ed87d8f2afdc495490ee754c35ca3542084185ba) Thanks [@emipac](https://github.com/emipac)! - Make Activation execute the hook program it is about to register against a
+  change that must be denied, and refuse it unless it denies, so a program that
+  enforces nothing can no longer pass its own self-test and be installed.
+
 ## 0.9.0
 
 ### Minor Changes
