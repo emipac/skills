@@ -8,7 +8,7 @@ Blocked by:
 Tracker ID: 19-bind-runner-arguments-to-their-resolved-executable
 Draft key: TB-019
 
-**Status:** done
+**Status:** ready-for-agent
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
