@@ -831,10 +831,13 @@
       <div class="note">
         <span class="note-tag">You create these files yourself</span>
         <p>
-          <code>mapping.json</code> and <code>policy.json</code> are files <strong>you write</strong>.
-          Nothing generates them, and neither exists until you create it — pointing
-          <code>--mapping</code> or <code>--policy</code> at a file that is not there fails with
-          <code>ENOENT: no such file or directory</code>.
+          <code>mapping.json</code> and <code>policy.json</code> are files <strong>you own</strong>.
+          Neither exists until you create it — pointing <code>--mapping</code> or
+          <code>--policy</code> at a file that is not there fails with
+          <code>ENOENT: no such file or directory</code>. You can start each one from a derived
+          draft (<code>--draft-mapping</code> and <code>--draft-policy</code>, both shown below),
+          but a draft is a starting point: it leaves a <code>null</code> wherever the framework
+          has proved nothing, and those are yours to answer.
         </p>
         <p>
           Put them wherever you run the command, usually your project root. They are one-shot
@@ -881,6 +884,19 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           <code>ambiguities</code> are not mapping sections — only <code>profiles</code> and
           <code>commands</code> exist, so leaving them in fails with
           <code>Unsupported migration mapping section</code>.
+        </p>
+        <p>
+          You do not have to perform that inversion by hand. <code>--draft-mapping</code> emits a
+          mapping already keyed by these exact paths, with a <code>null</code> where each answer
+          goes:
+        </p>
+        <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --draft-mapping --out mapping.json</code></pre>
+        <p>
+          It writes nothing else, refuses to overwrite an existing
+          <code>mapping.json</code>, and prints the draft to stdout when you omit
+          <code>--out</code>. Replace each <code>null</code> with a proved value; a mapping still
+          containing one is refused rather than filled in for you.
         </p>
       </div>
 
@@ -1036,16 +1052,78 @@ JSON</code></pre>
 
       <p>
         A plain Node project has only two — <code>format.formatter</code> and
-        <code>broad-tests.test</code>. Today the authoritative list is the provider file itself:
+        <code>broad-tests.test</code>. The source of that list is the provider file itself:
         <code>skills/change-evaluation-gate/scripts/lib/providers/laravel.mjs</code> or
-        <code>providers/node-package.mjs</code>. Each entry's <code>id</code> is what you write.
+        <code>providers/node-package.mjs</code>. Read the callout below before you copy any of
+        it into a policy — these are the provider's names, and the activated hook binds
+        different ones.
       </p>
 
-      <p>So a filled-in policy for a Laravel project looks like this:</p>
+      <p>
+        You do not have to transcribe that table. <code>--draft-policy</code> resolves the
+        provider that matches your project and emits all five subcontracts with these identities
+        already bound at each check's declared default:
+      </p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --draft-policy --out policy.json</code></pre>
+      <p>
+        It writes nothing else and refuses to overwrite an existing
+        <code>policy.json</code>. The draft proposes the provider's defaults, not a decision, so
+        review both lists before confirming. <code>budget.total_seconds</code> is the total of the
+        timeouts your configuration already proved, or <code>null</code> when it has none — and a
+        <code>null</code> budget is refused rather than replaced with a plausible number.
+      </p>
+
+      <div class="note note-critical">
+        <span class="note-tag">These are not the identities the commit hook binds</span>
+        <p>
+          The table above is the <em>provider's</em> catalogue. The activated Git hook does not
+          use it. It derives its checks from your <code>verification.commands</code> instead, and
+          names them <code>configuration.&lt;stage&gt;.&lt;capability&gt;</code> — so the identity
+          that actually binds at commit time is
+          <code>configuration.format.formatter</code>, not <code>format.formatter</code>.
+        </p>
+        <p>
+          For static analysis the difference is larger: the bound identity is
+          <code>configuration.static-analysis.static-analysis</code>. There is no
+          <code>application</code>, <code>rewrite-check</code>, or <code>tests</code> variant on
+          this path — one configured stage yields one check.
+        </p>
+        <p>
+          And the name depends on <em>how many</em> commands that stage configures. One command
+          across all scopes gives the plain identity; two or more append an ordinal, so a
+          project formatting both backend and frontend binds
+          <code>configuration.format.formatter.1</code> and
+          <code>configuration.format.formatter.2</code> and nothing named
+          <code>configuration.format.formatter</code> at all.
+        </p>
+        <p>
+          Since a policy naming a non-existent identity is accepted silently, a policy written
+          from the provider table configures cleanly and then enforces nothing. Until the
+          drafter emits bound identities, read yours from your own configuration using the
+          stage and capability mapping below.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Your <code>commands</code> key</th><th>Bound identity (single command)</th></tr></thead>
+          <tbody>
+            <tr><td><code>format</code></td><td><code>configuration.format.formatter</code></td></tr>
+            <tr><td><code>static_analysis</code></td><td><code>configuration.static-analysis.static-analysis</code></td></tr>
+            <tr><td><code>test</code></td><td><code>configuration.broad-tests.test</code></td></tr>
+            <tr><td><code>smoke</code></td><td><code>configuration.smoke.smoke</code></td></tr>
+            <tr><td><code>build</code></td><td><code>configuration.build.build</code></td></tr>
+            <tr><td><code>e2e</code></td><td><code>configuration.browser.browser</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>So a filled-in policy that actually enforces looks like this:</p>
       <pre><code>{
   "checks": {
-    "required": ["format.formatter", "static-analysis.application", "broad-tests.test"],
-    "advisory": ["affected-tests.test", "build.artifact"]
+    "required": ["configuration.format.formatter", "configuration.broad-tests.test"],
+    "advisory": ["configuration.build.build"]
   },
   "budget":    { "total_seconds": 900 },
   "bypass":    { "enabled": false },

@@ -1,6 +1,6 @@
 # TB-021 — Read the flow-JSON the framework's own writers produce
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent, defect
@@ -154,13 +154,13 @@ scope into activation, the packaged runner, or the lifecycle command surface.
 
 ## Acceptance Criteria
 
-- [ ] `AC-CFG-002`, `AC-LIFE-002`: a configuration file containing Command
+- [x] `AC-CFG-002`, `AC-LIFE-002`: a configuration file containing Command
   descriptors written exactly as `TB-001` migration produces them, and an
   `evaluation_gate` section written exactly as `TB-002` Gate policy
   configuration produces them, is read successfully by
   `readRepositoryConfiguration`, and the resulting value is identical to what
   the same semantic content written as block-mapping YAML produces.
-- [ ] `SG-CMD-001`: a value that is neither valid JSON nor a supported block
+- [x] `SG-CMD-001`: a value that is neither valid JSON nor a supported block
   construct is still refused with the existing reason message; general
   YAML flow syntax (anchors, aliases, tags, unquoted flow scalars) remains
   refused by name, unchanged.
@@ -171,6 +171,15 @@ scope into activation, the packaged runner, or the lifecycle command surface.
 | --- | --- | --- | --- | --- |
 | focused | both | `AC-CFG-002`, `AC-LIFE-002`, `SG-CMD-001`: fixtures built from real migration and Gate policy writer output, proving they now read successfully, plus negative fixtures proving general flow-YAML stays refused | `npm run test:unit` | Yes — configured unit suite owns the configuration reader seam |
 | smoke | both | `AC-CFG-002`: an activation preview against a genuinely migrated-and-configured fixture succeeds rather than refusing at `configuration-unreadable` | `gate-activation-smoke` capability extended by this slice | Yes — the existing activation selector should exercise a real migration-shaped file, not only a hand-written block-YAML fixture |
+
+## Delivered 2026-08-13
+
+The configuration reader now accepts strict JSON objects and arrays at scalar
+positions while preserving the existing refusal boundary for general flow-YAML.
+The public-seam regression uses the real schema v4 migration and Gate policy
+writers, and `gate-activation-smoke` exercises the same migrated-and-configured
+shape through activation. Delivery and verification evidence is recorded in
+`docs/history/2026-08-13-read-framework-written-flow-json.md`.
 
 Frontend build and browser evidence are inapplicable; this slice changes
 configuration parsing, not a frontend surface.

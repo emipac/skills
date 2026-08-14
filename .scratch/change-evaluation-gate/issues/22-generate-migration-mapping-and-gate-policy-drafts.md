@@ -1,6 +1,6 @@
 # TB-022 — Generate migration mapping and Gate policy drafts from proved project facts
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
 Labels: ready-for-agent, usability
@@ -8,7 +8,7 @@ Blocked by:
 Tracker ID: 22-generate-migration-mapping-and-gate-policy-drafts
 Draft key: TB-022
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -145,20 +145,20 @@ discoverable, it does not change which values are legal.
 
 ## Acceptance Criteria
 
-- [ ] `AC-CFG-002`, `SG-CMD-001`: `--draft-mapping` on a project with a known
+- [x] `AC-CFG-002`, `SG-CMD-001`: `--draft-mapping` on a project with a known
   set of ambiguities emits a document whose `commands` keys are exactly those
   ambiguity paths, containing exactly the fields each ambiguity's `required`
   array named, with `null` values; the document contains no `status`,
   `fromVersion`, `previewHash`, or `ambiguities` key; and once its `null`s are
   replaced it is accepted by `--migrate-v4 --mapping` and reaches
   `"status": "ready"`.
-- [ ] `FR-PROF-010`, `SG-OWNER-001`: `--draft-policy` emits all five
+- [x] `FR-PROF-010`, `SG-OWNER-001`: `--draft-policy` emits all five
   subcontracts, with `checks.required` and `checks.advisory` derived from the
   matching provider's declared per-check default binding and partitioned
   without overlap; the emitted document passes `validateGatePolicy` with zero
   issues; and the identities are obtained through the provider seam rather than
   a catalogue restated in `framework-setup`.
-- [ ] `SG-CMD-001`: neither draft mode writes `.agent-framework.yaml`, and a
+- [x] `SG-CMD-001`: neither draft mode writes `.agent-framework.yaml`, and a
   draft still containing `null` is refused by the corresponding reader rather
   than accepted with a guessed value.
 

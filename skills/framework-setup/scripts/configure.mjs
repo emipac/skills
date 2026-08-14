@@ -587,6 +587,206 @@ export const migrateConfiguration = async ({
   };
 };
 
+/**
+ * Emit one draft.
+ *
+ * Drafting is a read plus a document. It only ever touches the filesystem when
+ * an explicit `--out` names a path, and it refuses rather than overwriting a
+ * file the maintainer already filled in.
+ */
+const emitDraft = async (draft, out) => {
+  if (!out) {
+    return draft;
+  }
+
+  const target = path.resolve(out);
+
+  try {
+    await writeFile(target, `${JSON.stringify(draft, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new Error(`Refusing to overwrite a draft: ${target} already exists`);
+    }
+
+    throw error;
+  }
+
+  return draft;
+};
+
+/**
+ * Draft the migration mapping this project's own migration report asks for.
+ *
+ * The migration report names the field that is *missing*; the mapping supplies
+ * it. Inverting that by hand is the documented trap, so the draft is keyed by
+ * the reported ambiguity paths directly and carries only the field names the
+ * report itself named. No value is resolved, executed, or inferred here
+ * (SG-CMD-001): every leaf is `null` until the maintainer proves it, and a
+ * draft still carrying one is refused by `--mapping` rather than accepted.
+ *
+ * The report's own envelope — `status`, `fromVersion`, `previewHash`,
+ * `ambiguities` — is never a mapping section and never appears in the draft.
+ */
+export const draftMigrationMapping = async ({ projectRoot, out = null } = {}) => {
+  const report = await previewConfigurationMigration({ projectRoot, mappings: {} });
+  const profiles = {};
+  const commands = {};
+
+  for (const ambiguity of report.ambiguities ?? []) {
+    if (['backend', 'frontend'].includes(ambiguity.path)) {
+      profiles[ambiguity.path] = null;
+
+      continue;
+    }
+
+    commands[ambiguity.path] = Object.fromEntries(
+      ambiguity.required.map((field) => [field, null]),
+    );
+  }
+
+  return emitDraft({ profiles, commands }, out);
+};
+
+/**
+ * Which provider module speaks for which proved stack.
+ *
+ * This is a module table, not a check catalogue. `framework-setup` learns from
+ * it only where to ask; every check identity and every default binding is read
+ * back out of the provider's own declared plan, so a provider that changes its
+ * checks changes this draft with no edit here (SG-OWNER-001).
+ */
+const gateProviderModules = Object.freeze({
+  laravel: '../../change-evaluation-gate/scripts/lib/providers/laravel.mjs',
+  node: '../../change-evaluation-gate/scripts/lib/providers/node-package.mjs',
+});
+
+const resolveDraftProvider = async (projectRoot) => {
+  const existing = await readExistingConfiguration(projectRoot);
+  const backend = existing.backend && existing.backend !== 'unknown'
+    ? existing.backend
+    : (await discoverProject(projectRoot)).backend;
+  const specifier = backend === 'laravel'
+    ? gateProviderModules.laravel
+    : (await exists(path.join(path.resolve(projectRoot), 'package.json'))
+      ? gateProviderModules.node
+      : null);
+
+  if (!specifier) {
+    throw new Error('No verification provider matches this project; a Gate policy cannot be drafted');
+  }
+
+  return (await import(specifier)).default;
+};
+
+/**
+ * The total evaluation budget, summed from the timeouts this project proved.
+ *
+ * A schema v4 configuration states an exact timeout for every command it owns,
+ * so their total is a derived project fact rather than a default. A project
+ * that has proved none leaves the budget `null`, and a `null` budget is refused
+ * by `--policy` rather than silently replaced with a plausible number.
+ */
+const derivedBudgetSeconds = async (projectRoot) => {
+  const { readRepositoryConfiguration } = await import(
+    '../../change-evaluation-gate/scripts/lib/configuration.mjs',
+  );
+  const read = await readRepositoryConfiguration({ repositoryRoot: path.resolve(projectRoot) });
+
+  if (!read.ok) {
+    return null;
+  }
+
+  let total = 0;
+
+  for (const scopes of Object.values(read.configuration?.verification?.commands ?? {})) {
+    for (const scoped of Object.values(scopes ?? {})) {
+      if (!Array.isArray(scoped)) {
+        continue;
+      }
+
+      for (const command of scoped) {
+        if (!Number.isInteger(command?.timeout_seconds) || command.timeout_seconds <= 0) {
+          return null;
+        }
+
+        total += command.timeout_seconds;
+      }
+    }
+  }
+
+  return total > 0 ? total : null;
+};
+
+/**
+ * The check identities the activated Git hook actually binds through, read
+ * from this project's own schema v4 configuration.
+ *
+ * `gateChecksFromConfiguration` is the same function `hook-runner.mjs` calls
+ * at evaluation time, so the identities this returns are exactly the ones a
+ * configured, activated hook will bind (SG-OWNER-001, NFR-REL-003) — never a
+ * restated copy of its `configuration.<stage>.<capability>` naming rule.
+ *
+ * A project that has not migrated, or that has migrated but proved no
+ * verification command yet, has nothing this function can derive an identity
+ * from: the drafter refuses rather than guess or fall back to provider-plan
+ * names, because a draft that cannot bind is worse than no draft at all.
+ */
+const configuredChecksToDraft = async (projectRoot) => {
+  const { readRepositoryConfiguration, gateChecksFromConfiguration } = await import(
+    '../../change-evaluation-gate/scripts/lib/configuration.mjs',
+  );
+  const read = await readRepositoryConfiguration({ repositoryRoot: path.resolve(projectRoot) });
+  const { checks } = read.ok ? gateChecksFromConfiguration(read.configuration) : { checks: [] };
+
+  if (checks.length === 0) {
+    throw new Error(
+      'A Gate policy cannot be drafted before this project migrates to schema version 4 and '
+      + 'proves at least one verification command; run the schema v4 migration (--mapping) first.',
+    );
+  }
+
+  return checks;
+};
+
+/**
+ * Draft the Gate policy this project's own configuration and matching
+ * provider already describe.
+ *
+ * Check identities are read out of `gateChecksFromConfiguration`, the exact
+ * function the activated hook binds through, so the draft cannot name a check
+ * the hook will not enforce. The required/advisory binding for each identity
+ * is still read out of the provider's declared plan, matched by the stage and
+ * capability the configuration proves — a configured check with no matching
+ * plan entry binds advisory rather than guessing required. Nothing here
+ * restates either catalogue (SG-OWNER-001), and nothing unproved is invented:
+ * bypass stays disabled with no marker, and an unprovable budget stays `null`.
+ */
+export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
+  const provider = await resolveDraftProvider(projectRoot);
+  const checks = await configuredChecksToDraft(projectRoot);
+  const required = [];
+  const advisory = [];
+
+  for (const check of checks) {
+    const planEntry = provider.plan.find(
+      (entry) => entry.stage === check.stage && entry.capability === check.capability,
+    );
+
+    (planEntry?.policy === 'required' ? required : advisory).push(check.id);
+  }
+
+  return emitDraft({
+    checks: { required, advisory },
+    budget: { total_seconds: await derivedBudgetSeconds(projectRoot) },
+    bypass: { enabled: false, marker: null },
+    execution: { budget_skippable: [] },
+    evidence: {},
+  }, out);
+};
+
 const gatePolicyKeys = ['checks', 'budget', 'bypass', 'execution', 'evidence'];
 const gateForbiddenOwnershipFields = new Set([
   'activation',
@@ -1559,7 +1759,13 @@ const parseArguments = (argumentsList) => {
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
 
-    if (['--discover', '--migrate-v4', '--configure-gate'].includes(argument)) {
+    if ([
+      '--discover',
+      '--migrate-v4',
+      '--configure-gate',
+      '--draft-mapping',
+      '--draft-policy',
+    ].includes(argument)) {
       options[argument.slice(2)] = true;
       continue;
     }
@@ -1601,6 +1807,26 @@ const runCli = async () => {
 
   if (options.discover) {
     console.log(JSON.stringify(await discoverProject(projectRoot), null, 2));
+    return;
+  }
+
+  // Drafting is a distinct request with a distinct output. It is deliberately
+  // not folded into --discover and never chains into migration or the Gate.
+  if (options['draft-mapping']) {
+    console.log(JSON.stringify(
+      await draftMigrationMapping({ projectRoot, out: options.out ?? null }),
+      null,
+      2,
+    ));
+    return;
+  }
+
+  if (options['draft-policy']) {
+    console.log(JSON.stringify(
+      await draftGatePolicy({ projectRoot, out: options.out ?? null }),
+      null,
+      2,
+    ));
     return;
   }
 
