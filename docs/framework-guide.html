@@ -1059,29 +1059,15 @@ JSON</code></pre>
         different ones.
       </p>
 
-      <p>
-        You do not have to transcribe that table. <code>--draft-policy</code> resolves the
-        provider that matches your project and emits all five subcontracts with these identities
-        already bound at each check's declared default:
-      </p>
-      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
-  --draft-policy --out policy.json</code></pre>
-      <p>
-        It writes nothing else and refuses to overwrite an existing
-        <code>policy.json</code>. The draft proposes the provider's defaults, not a decision, so
-        review both lists before confirming. <code>budget.total_seconds</code> is the total of the
-        timeouts your configuration already proved, or <code>null</code> when it has none — and a
-        <code>null</code> budget is refused rather than replaced with a plausible number.
-      </p>
-
       <div class="note note-critical">
-        <span class="note-tag">These are not the identities the commit hook binds</span>
+        <span class="note-tag">The provider table above is not what the commit hook binds</span>
         <p>
-          The table above is the <em>provider's</em> catalogue. The activated Git hook does not
-          use it. It derives its checks from your <code>verification.commands</code> instead, and
-          names them <code>configuration.&lt;stage&gt;.&lt;capability&gt;</code> — so the identity
-          that actually binds at commit time is
-          <code>configuration.format.formatter</code>, not <code>format.formatter</code>.
+          The table above is the <em>provider's</em> catalogue, useful for knowing what checks
+          exist and their sensible default binding. The activated Git hook does not read it. It
+          derives its checks from your own <code>verification.commands</code> instead, and names
+          them <code>configuration.&lt;stage&gt;.&lt;capability&gt;</code> — so the identity that
+          actually binds at commit time is <code>configuration.format.formatter</code>, not
+          <code>format.formatter</code>.
         </p>
         <p>
           For static analysis the difference is larger: the bound identity is
@@ -1098,12 +1084,33 @@ JSON</code></pre>
           <code>configuration.format.formatter</code> at all.
         </p>
         <p>
-          Since a policy naming a non-existent identity is accepted silently, a policy written
-          from the provider table configures cleanly and then enforces nothing. Until the
-          drafter emits bound identities, read yours from your own configuration using the
-          stage and capability mapping below.
+          Since a policy naming a non-existent identity is accepted silently, hand-typing
+          identities from the provider table configures cleanly and then enforces nothing. Never
+          copy directly from that table — either use the drafter below, which reads the bound
+          identities for you, or work them out yourself from the stage-and-capability mapping
+          further down.
         </p>
       </div>
+
+      <p>
+        You do not have to work any of this out. <code>--draft-policy</code> reads your
+        project's own schema v4 configuration, derives the identities the activated hook will
+        actually bind — the same <code>configuration.*</code> names, including the ordinal
+        suffix where a stage configures more than one command — and emits all five subcontracts
+        with each one bound required or advisory from the matching provider's declared default:
+      </p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --draft-policy --out policy.json</code></pre>
+      <p>
+        It writes nothing else and refuses to overwrite an existing <code>policy.json</code>.
+        It also refuses outright — rather than guessing — when your project has not yet
+        migrated to schema v4 or has no commands configured, since there is nothing to derive an
+        identity from yet; migrate and configure your Verification commands first. The draft
+        proposes the provider's defaults, not a decision, so review both lists before
+        confirming. <code>budget.total_seconds</code> is the total of the timeouts your
+        configuration already proved, or <code>null</code> when it has none — and a
+        <code>null</code> budget is refused rather than replaced with a plausible number.
+      </p>
 
       <div class="table-wrap">
         <table>
@@ -1119,7 +1126,11 @@ JSON</code></pre>
         </table>
       </div>
 
-      <p>So a filled-in policy that actually enforces looks like this:</p>
+      <p>
+        So a filled-in policy that actually enforces looks like this — and is exactly what
+        <code>--draft-policy</code> now emits for a project configuring these three stages,
+        modulo which two you mark <code>required</code>:
+      </p>
       <pre><code>{
   "checks": {
     "required": ["configuration.format.formatter", "configuration.broad-tests.test"],
@@ -1144,13 +1155,17 @@ JSON</code></pre>
             <tbody>
               <tr><td>Ladder stages</td><td><code>static-analysis</code>, <code>affected-tests</code></td><td>evidence ordering</td></tr>
               <tr><td>Command categories</td><td><code>static_analysis</code>, <code>test</code>, <code>e2e</code></td><td><code>verification.commands</code></td></tr>
-              <tr><td><strong>Check identities</strong></td><td><code>static-analysis.application</code></td><td><strong>Gate policy — this file</strong></td></tr>
+              <tr><td>Provider check catalogue</td><td><code>static-analysis.application</code></td><td>the provider table above, not a file you write</td></tr>
+              <tr><td><strong>Bound check identities</strong></td><td><code>configuration.static-analysis.static-analysis</code></td><td><strong>Gate policy — this file</strong></td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          Note the underscore in the command category and the dash in the other two. Only the
-          third row belongs in <code>policy.json</code>.
+          Note the underscore in the command category versus the dashes elsewhere, and that the
+          provider catalogue and the bound identity both use dashes but are still different
+          strings. Only the last row belongs in <code>policy.json</code> — and
+          <code>--draft-policy</code> writes exactly that row for you, so you never need to
+          transcribe from any of the other three.
         </p>
       </div>
 
@@ -1159,9 +1174,11 @@ JSON</code></pre>
         <p>
           A check whose tool is not present does not get skipped — it resolves to
           <span class="pill p-unver">unverified</span>, and an unverified <em>required</em> check
-          blocks. If you have no PHPStan, do not require
-          <code>static-analysis.application</code>. If you have no browser tooling, leave
-          <code>browser.user-visible</code> advisory.
+          blocks. If you have not configured a <code>static_analysis</code> command, do not
+          require <code>configuration.static-analysis.static-analysis</code>. If you have no
+          <code>e2e</code> command configured, leave <code>configuration.browser.browser</code>
+          advisory. <code>--draft-policy</code> only ever proposes identities your configuration
+          actually proves, so this trap applies to hand-written policies, not drafted ones.
         </p>
       </div>
 
