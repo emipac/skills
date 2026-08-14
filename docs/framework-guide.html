@@ -1005,7 +1005,89 @@ JSON</code></pre>
         listed as required remains advisory.
       </p>
 
-      <h4>Four things that will trip you up</h4>
+      <h4>Which identities can you actually list?</h4>
+
+      <p>
+        This is the question the error messages will not answer for you. A check identity is
+        <strong>not</strong> a stage name and <strong>not</strong> a command category — it is a
+        third thing, written <code>stage.slug</code>, and the list depends on which provider
+        matches your project.
+      </p>
+
+      <p>For a Laravel project, these are the ten, with the binding each one defaults to:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Identity</th><th>Stage</th><th>Default binding</th></tr></thead>
+          <tbody>
+            <tr><td><code>focused.test</code></td><td>focused</td><td>advisory</td></tr>
+            <tr><td><code>format.formatter</code></td><td>format</td><td>required</td></tr>
+            <tr><td><code>static-analysis.rewrite-check</code></td><td>static-analysis</td><td>required</td></tr>
+            <tr><td><code>static-analysis.application</code></td><td>static-analysis</td><td>required</td></tr>
+            <tr><td><code>static-analysis.tests</code></td><td>static-analysis</td><td>required</td></tr>
+            <tr><td><code>affected-tests.test</code></td><td>affected-tests</td><td>advisory</td></tr>
+            <tr><td><code>smoke.runtime</code></td><td>smoke</td><td>advisory</td></tr>
+            <tr><td><code>build.artifact</code></td><td>build</td><td>advisory</td></tr>
+            <tr><td><code>browser.user-visible</code></td><td>browser</td><td>advisory</td></tr>
+            <tr><td><code>broad-tests.test</code></td><td>broad-tests</td><td>required</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        A plain Node project has only two — <code>format.formatter</code> and
+        <code>broad-tests.test</code>. Today the authoritative list is the provider file itself:
+        <code>skills/change-evaluation-gate/scripts/lib/providers/laravel.mjs</code> or
+        <code>providers/node-package.mjs</code>. Each entry's <code>id</code> is what you write.
+      </p>
+
+      <p>So a filled-in policy for a Laravel project looks like this:</p>
+      <pre><code>{
+  "checks": {
+    "required": ["format.formatter", "static-analysis.application", "broad-tests.test"],
+    "advisory": ["affected-tests.test", "build.artifact"]
+  },
+  "budget":    { "total_seconds": 900 },
+  "bypass":    { "enabled": false },
+  "execution": { },
+  "evidence":  { }
+}</code></pre>
+
+      <div class="note note-critical">
+        <span class="note-tag">Three naming systems that do not match</span>
+        <p>
+          The framework uses three separate vocabularies, and they differ in both wording and
+          punctuation. Copying a name from the wrong one produces a policy that validates and
+          then silently does nothing.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Vocabulary</th><th>Looks like</th><th>Used in</th></tr></thead>
+            <tbody>
+              <tr><td>Ladder stages</td><td><code>static-analysis</code>, <code>affected-tests</code></td><td>evidence ordering</td></tr>
+              <tr><td>Command categories</td><td><code>static_analysis</code>, <code>test</code>, <code>e2e</code></td><td><code>verification.commands</code></td></tr>
+              <tr><td><strong>Check identities</strong></td><td><code>static-analysis.application</code></td><td><strong>Gate policy — this file</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Note the underscore in the command category and the dash in the other two. Only the
+          third row belongs in <code>policy.json</code>.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">Only require what your project can run</span>
+        <p>
+          A check whose tool is not present does not get skipped — it resolves to
+          <span class="pill p-unver">unverified</span>, and an unverified <em>required</em> check
+          blocks. If you have no PHPStan, do not require
+          <code>static-analysis.application</code>. If you have no browser tooling, leave
+          <code>browser.user-visible</code> advisory.
+        </p>
+      </div>
+
+      <h4>Five things that will trip you up</h4>
 
       <div class="note note-caution">
         <span class="note-tag">1 — All five are mandatory; bypass is explicit</span>
@@ -1053,10 +1135,20 @@ JSON</code></pre>
       <div class="note note-caution">
         <span class="note-tag">4 — Check identities are not verified here</span>
         <p>
-          A policy naming a check that does not exist is accepted without complaint. A typo will not
-          surface until evaluation, when the check you meant quietly is not the one running. Add
-          identities only after you have confirmed the exact names your verification configuration
-          uses.
+          The entire rule is <em>"a non-empty string"</em>. There is no spelling check, no
+          separator rule, and no cross-check against your project — a policy naming a check that
+          does not exist is accepted without complaint. A typo will not surface until evaluation,
+          when the check you meant quietly is not the one running. Copy identities from the table
+          above rather than typing them.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">5 — Required work is never skipped for the budget</span>
+        <p>
+          <code>execution.budget_skippable</code> may not name anything you listed in
+          <code>required</code>; the validator rejects that combination outright. Skipping to fit
+          a time budget is a decision about advisory checks only.
         </p>
       </div>
 
