@@ -92,19 +92,20 @@ combination is recorded `unverified` with a stated reason — untested, not
 refused, per `Q-004`. The matrix is a function of what is claimed, and claiming
 one environment is what one machine can evidence.
 
-**`AC-ADAPT-002` is NOT met and stays unticked, here and in `TB-013`.** No
-surface reached `supported`. The shared baseline still runs on payloads this
-repository builds from the declaration under test, so `classifySupport` returns
-`experimental` / `client-invocation-not-observed` for all four surfaces,
-including authoritative Git. The manifest therefore records no exact client
-version for any surface, which is the clause `AC-ADAPT-002` most directly
-requires. Qualification does not merely permit this outcome — it enforces it:
+**`AC-ADAPT-002` was NOT met at this point, here and in `TB-013`** — met later
+by the client-driven baseline recorded in the closure section below. No
+surface had reached `supported` yet. The shared baseline still ran on payloads
+this repository builds from the declaration under test, so `classifySupport`
+returned `experimental` / `client-invocation-not-observed` for all four
+surfaces, including authoritative Git. The manifest therefore recorded no exact
+client version for any surface, which is the clause `AC-ADAPT-002` most directly
+requires. Qualification does not merely permit that outcome — it enforces it:
 the declared tier is re-derived from the same baseline and any disagreement,
 overstated or understated, fails the release.
 
-What remains, for whoever picks this up: a baseline run driven by a real client
-invocation for at least one surface, recording that client's exact version. The
-exact steps are `PROMOTION_REQUIREMENTS` in
+What remained at that point, and was then done: a baseline run driven by a real
+client invocation for at least one surface, recording that client's exact
+version. The exact steps are `PROMOTION_REQUIREMENTS` in
 `skills/change-evaluation-gate/scripts/lib/release-qualification.mjs` and
 section 5 of
 `skills/change-evaluation-gate/references/release-qualification-contract.md`.
