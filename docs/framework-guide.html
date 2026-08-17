@@ -25,6 +25,8 @@
     --warn-soft:   #F7EEDC;
     --unver:       #5A646B;
     --unver-soft:  #E8EAEB;
+    --agent:       #4A3A8F;
+    --agent-soft:  #E9E6F6;
 
     --step: 1.25;
     --f-xs:   0.75rem;
@@ -61,6 +63,8 @@
       --warn-soft:   #2A2115;
       --unver:       #97A3A9;
       --unver-soft:  #1E2528;
+    --agent:       #AFA2EC;
+    --agent-soft:  #1F1B33;
     }
   }
 
@@ -81,6 +85,8 @@
     --warn-soft:   #2A2115;
     --unver:       #97A3A9;
     --unver-soft:  #1E2528;
+    --agent:       #AFA2EC;
+    --agent-soft:  #1F1B33;
   }
 
   :root[data-theme="light"] {
@@ -100,6 +106,8 @@
     --warn-soft:   #F7EEDC;
     --unver:       #5A646B;
     --unver-soft:  #E8EAEB;
+    --agent:       #4A3A8F;
+    --agent-soft:  #E9E6F6;
   }
 
   * { box-sizing: border-box; }
@@ -345,6 +353,50 @@
   .p-deny  { color: var(--deny);   background: var(--deny-soft); }
   .p-warn  { color: var(--warn);   background: var(--warn-soft); }
   .p-unver { color: var(--unver);  background: var(--unver-soft); }
+
+  /* Who does the work — tool-derived, your decision, or agent-operated */
+  .who {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: var(--f-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.12rem 0.5rem;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+    vertical-align: 0.14em;
+  }
+  .w-auto  { color: var(--accent); background: var(--accent-soft); }
+  .w-you   { color: var(--warn);   background: var(--warn-soft); }
+  .w-agent { color: var(--agent);  background: var(--agent-soft); }
+
+  h3 .who, h4 .who { margin-left: 0.55rem; text-transform: uppercase; }
+
+  .legend { border: 1px solid var(--rule-strong); background: var(--surface); margin: 0 0 1.8rem; }
+  .legend-row { display: flex; gap: 0.8rem; align-items: baseline; padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--rule); }
+  .legend-row:last-child { border-bottom: 0; }
+  .legend-row p { margin: 0; font-size: var(--f-sm); color: var(--ink-muted); }
+  .legend-row .who { flex: none; min-width: 8.5rem; text-align: center; }
+
+  details.ref {
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid var(--ink-faint);
+    background: var(--surface);
+    padding: 0.75rem 1rem;
+    margin: 0 0 1.2rem;
+  }
+  details.ref > summary {
+    font-family: var(--mono);
+    font-size: var(--f-sm);
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--ink);
+  }
+  details.ref[open] > summary { margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule); }
+  details.ref > summary::marker { color: var(--ink-faint); }
+  details.ref p, details.ref li { font-size: var(--f-sm); }
+  details.ref > *:last-child { margin-bottom: 0; }
 
   .ladder { counter-reset: rung; list-style: none; padding: 0; margin: 0 0 1.2rem; display: flex; flex-direction: column; gap: 0; border: 1px solid var(--rule-strong); }
   .ladder li {
@@ -812,13 +864,47 @@
         <h2>Turning the Gate on</h2>
       </div>
 
-      <h3>Step 1 — Install the module</h3>
+      <p>
+        Four steps, in order. Every heading below carries a badge saying who does the work,
+        because that is the single most useful thing to know before you start:
+      </p>
+
+      <div class="legend">
+        <div class="legend-row">
+          <span class="who w-auto">tool-derived</span>
+          <p>
+            A command produces this from facts your project already proves. You run the command
+            and read the result; you do not author the content.
+          </p>
+        </div>
+        <div class="legend-row">
+          <span class="who w-you">your decision</span>
+          <p>
+            Nothing can derive this. You type it, or you choose it. Where a draft leaves a
+            <code>null</code>, that <code>null</code> marks exactly this.
+          </p>
+        </div>
+        <div class="legend-row">
+          <span class="who w-agent">agent-operated</span>
+          <p>
+            No CLI exists. You ask your agent to follow the
+            <code>change-evaluation-gate</code> skill, and it calls the library functions.
+          </p>
+        </div>
+      </div>
+
+      <p>
+        Steps 1 and 2 are mostly mechanical. Step 3 is where your real decisions live. Step 4 is
+        the only one you cannot type yourself.
+      </p>
+
+      <h3>Step 1 — Install the module <span class="who w-you">your decision</span></h3>
       <p>
         Select <strong>change-evaluation-gate</strong> during installation. It is independently
         selectable; if you install the whole plugin instead, its files ship dormant.
       </p>
 
-      <h3>Step 2 — Move to schema v4</h3>
+      <h3>Step 2 — Move to schema v4 <span class="who w-auto">tool-derived</span></h3>
       <p>
         Gate policy exists only in schema version 4. If your <code>.agent-framework.yaml</code> says
         <code>schema_version: 3</code>, migrate first:
@@ -847,7 +933,7 @@
         </p>
       </div>
 
-      <p class="cmd-label">1 — Ask with an empty mapping</p>
+      <p class="cmd-label">1 — Ask with an empty mapping <span class="who w-auto">tool-derived</span></p>
       <p>
         Here, and only here, an empty file is the right starting point: it is what makes the tool
         report back what it cannot work out on its own.
@@ -855,7 +941,7 @@
       <pre><code>echo '{}' &gt; mapping.json
 node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping mapping.json</code></pre>
 
-      <p class="cmd-label">2 — Read exactly what it cannot prove</p>
+      <p class="cmd-label">2 — Read exactly what it cannot prove <span class="who w-auto">tool-derived</span></p>
       <pre><code>{
   "status": "requires-mapping",
   "ambiguities": [
@@ -900,7 +986,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         </p>
       </div>
 
-      <p class="cmd-label">3 — Answer those exact paths</p>
+      <p class="cmd-label">3 — Answer those exact paths <span class="who w-you">your decision</span></p>
       <p>
         Each ambiguity's <code>path</code> becomes a key, and you supply the field it said was
         missing. A real Laravel project with a frontend usually looks like this:
@@ -947,7 +1033,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         written.
       </p>
 
-      <p class="cmd-label">4 — Confirm that exact preview</p>
+      <p class="cmd-label">4 — Confirm that exact preview <span class="who w-you">your decision</span></p>
       <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
   --migrate-v4 --mapping mapping.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
       <p>
@@ -960,24 +1046,43 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         Schema v3 stays readable throughout <code>0.x</code>.
       </p>
 
-      <h3>Step 3 — Configure the policy</h3>
-      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
-  --configure-gate --policy policy.json</code></pre>
+      <h3>Step 3 — Configure the policy <span class="who w-you">your decision</span></h3>
+
       <p>
-        Like migration, this previews first and returns a hash you confirm with
-        <code>--confirm</code>. Nothing is written until you do.
+        This is the step with real choices in it, so it is worth knowing up front which parts
+        the tooling can work out and which parts are genuinely yours. The policy has exactly
+        five subcontracts and nothing else:
       </p>
 
-      <p>The policy has exactly five parts, and nothing else:</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Part</th><th>What you decide</th></tr></thead>
+          <thead><tr><th>Subcontract</th><th>What it decides</th><th>Who writes it</th></tr></thead>
           <tbody>
-            <tr><td>Check identities</td><td>Which checks are <code>required</code> and which are <code>advisory</code>.</td></tr>
-            <tr><td>Total budget</td><td>How long a whole evaluation may take.</td></tr>
-            <tr><td>Bypass policy</td><td>Whether an escape hatch exists at all, and what it demands.</td></tr>
-            <tr><td>Execution policy</td><td>Per-check timeouts, and which advisory checks may be skipped when the budget runs short.</td></tr>
-            <tr><td>Evidence policy</td><td>Retention limits, never above the built-in ceilings.</td></tr>
+            <tr>
+              <td><code>checks</code></td>
+              <td>Which checks are <code>required</code> and which are <code>advisory</code>.</td>
+              <td><span class="who w-auto">tool-derived</span> — you review</td>
+            </tr>
+            <tr>
+              <td><code>budget</code></td>
+              <td>How long a whole evaluation may take.</td>
+              <td><span class="who w-auto">tool-derived</span> — when your timeouts are proved</td>
+            </tr>
+            <tr>
+              <td><code>bypass</code></td>
+              <td>Whether an escape hatch exists at all, and what it demands.</td>
+              <td><span class="who w-you">your decision</span></td>
+            </tr>
+            <tr>
+              <td><code>execution</code></td>
+              <td>Which advisory checks may be skipped when the budget runs short.</td>
+              <td><span class="who w-you">your decision</span></td>
+            </tr>
+            <tr>
+              <td><code>evidence</code></td>
+              <td>Retention limits, never above the built-in ceilings.</td>
+              <td><span class="who w-you">your decision</span></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -988,185 +1093,83 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         so the two can never disagree.
       </p>
 
-      <h4>A policy that works</h4>
-
-      <div class="note note-caution">
-        <span class="note-tag">Do not start this one empty</span>
-        <p>
-          <code>policy.json</code> is another file <strong>you create</strong>, but the habit
-          migration teaches does not carry over. An empty <code>{}</code> here does not produce a
-          helpful report — it stops at <code>Missing Gate policy subcontract: checks</code> and
-          tells you nothing about the other four. Write the whole file up front.
-        </p>
-      </div>
-
       <p>
-        Start from this. Configuration activates nothing, so an empty required list is harmless —
-        and it lets you add identities once you have confirmed what your checks are really called.
-      </p>
-      <pre><code>cat &gt; policy.json &lt;&lt;'JSON'
-{
-  "checks":    { "required": [], "advisory": [] },
-  "budget":    { "total_seconds": 900 },
-  "bypass":    { "enabled": false },
-  "execution": { },
-  "evidence":  { }
-}
-JSON</code></pre>
-
-      <p>
-        This starter is configuration-valid, but it does not make any check blocking. Before
-        activation, decide which confirmed Verification identities are <code>required</code> and
-        which are <code>advisory</code>, then preview the resulting policy again. An identity not
-        listed as required remains advisory.
+        The four sub-steps below follow the same rhythm as Step 2 — draft, decide, preview,
+        confirm — and nothing is written until the last one.
       </p>
 
-      <h4>Which identities can you actually list?</h4>
-
+      <p class="cmd-label">1 — Draft the policy <span class="who w-auto">tool-derived</span></p>
       <p>
-        This is the question the error messages will not answer for you. A check identity is
-        <strong>not</strong> a stage name and <strong>not</strong> a command category — it is a
-        third thing, written <code>stage.slug</code>, and the list depends on which provider
-        matches your project.
-      </p>
-
-      <p>For a Laravel project, these are the ten, with the binding each one defaults to:</p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Identity</th><th>Stage</th><th>Default binding</th></tr></thead>
-          <tbody>
-            <tr><td><code>focused.test</code></td><td>focused</td><td>advisory</td></tr>
-            <tr><td><code>format.formatter</code></td><td>format</td><td>required</td></tr>
-            <tr><td><code>static-analysis.rewrite-check</code></td><td>static-analysis</td><td>required</td></tr>
-            <tr><td><code>static-analysis.application</code></td><td>static-analysis</td><td>required</td></tr>
-            <tr><td><code>static-analysis.tests</code></td><td>static-analysis</td><td>required</td></tr>
-            <tr><td><code>affected-tests.test</code></td><td>affected-tests</td><td>advisory</td></tr>
-            <tr><td><code>smoke.runtime</code></td><td>smoke</td><td>advisory</td></tr>
-            <tr><td><code>build.artifact</code></td><td>build</td><td>advisory</td></tr>
-            <tr><td><code>browser.user-visible</code></td><td>browser</td><td>advisory</td></tr>
-            <tr><td><code>broad-tests.test</code></td><td>broad-tests</td><td>required</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p>
-        A plain Node project has only two — <code>format.formatter</code> and
-        <code>broad-tests.test</code>. The source of that list is the provider file itself:
-        <code>skills/change-evaluation-gate/scripts/lib/providers/laravel.mjs</code> or
-        <code>providers/node-package.mjs</code>. Read the callout below before you copy any of
-        it into a policy — these are the provider's names, and the activated hook binds
-        different ones.
-      </p>
-
-      <div class="note note-critical">
-        <span class="note-tag">The provider table above is not what the commit hook binds</span>
-        <p>
-          The table above is the <em>provider's</em> catalogue, useful for knowing what checks
-          exist and their sensible default binding. The activated Git hook does not read it. It
-          derives its checks from your own <code>verification.commands</code> instead, and names
-          them <code>configuration.&lt;stage&gt;.&lt;capability&gt;</code> — so the identity that
-          actually binds at commit time is <code>configuration.format.formatter</code>, not
-          <code>format.formatter</code>.
-        </p>
-        <p>
-          For static analysis the difference is larger: the bound identity is
-          <code>configuration.static-analysis.static-analysis</code>. There is no
-          <code>application</code>, <code>rewrite-check</code>, or <code>tests</code> variant on
-          this path — one configured stage yields one check.
-        </p>
-        <p>
-          And the name depends on <em>how many</em> commands that stage configures. One command
-          across all scopes gives the plain identity; two or more append an ordinal, so a
-          project formatting both backend and frontend binds
-          <code>configuration.format.formatter.1</code> and
-          <code>configuration.format.formatter.2</code> and nothing named
-          <code>configuration.format.formatter</code> at all.
-        </p>
-        <p>
-          Since a policy naming a non-existent identity is accepted silently, hand-typing
-          identities from the provider table configures cleanly and then enforces nothing. Never
-          copy directly from that table — either use the drafter below, which reads the bound
-          identities for you, or work them out yourself from the stage-and-capability mapping
-          further down.
-        </p>
-      </div>
-
-      <p>
-        You do not have to work any of this out. <code>--draft-policy</code> reads your
-        project's own schema v4 configuration, derives the identities the activated hook will
-        actually bind — the same <code>configuration.*</code> names, including the ordinal
-        suffix where a stage configures more than one command — and emits all five subcontracts
-        with each one bound required or advisory from the matching provider's declared default:
+        Do not hand-write this file. <code>--draft-policy</code> reads your project's own schema
+        v4 configuration and derives the check identities the activated hook will actually bind,
+        each one bound <code>required</code> or <code>advisory</code> from the matching
+        provider's declared default:
       </p>
       <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
   --draft-policy --out policy.json</code></pre>
-      <p>
-        It writes nothing else and refuses to overwrite an existing <code>policy.json</code>.
-        It also refuses outright — rather than guessing — when your project has not yet
-        migrated to schema v4 or has no commands configured, since there is nothing to derive an
-        identity from yet; migrate and configure your Verification commands first. The draft
-        proposes the provider's defaults, not a decision, so review both lists before
-        confirming. <code>budget.total_seconds</code> is the total of the timeouts your
-        configuration already proved, or <code>null</code> when it has none — and a
-        <code>null</code> budget is refused rather than replaced with a plausible number.
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Your <code>commands</code> key</th><th>Bound identity (single command)</th></tr></thead>
-          <tbody>
-            <tr><td><code>format</code></td><td><code>configuration.format.formatter</code></td></tr>
-            <tr><td><code>static_analysis</code></td><td><code>configuration.static-analysis.static-analysis</code></td></tr>
-            <tr><td><code>test</code></td><td><code>configuration.broad-tests.test</code></td></tr>
-            <tr><td><code>smoke</code></td><td><code>configuration.smoke.smoke</code></td></tr>
-            <tr><td><code>build</code></td><td><code>configuration.build.build</code></td></tr>
-            <tr><td><code>e2e</code></td><td><code>configuration.browser.browser</code></td></tr>
-          </tbody>
-        </table>
-      </div>
 
       <p>
-        So a filled-in policy that actually enforces looks like this — and is exactly what
-        <code>--draft-policy</code> now emits for a project configuring these three stages,
-        modulo which two you mark <code>required</code>:
+        For a project with <code>format</code>, <code>test</code>, and <code>build</code>
+        commands configured, that produces:
       </p>
       <pre><code>{
   "checks": {
     "required": ["configuration.format.formatter", "configuration.broad-tests.test"],
     "advisory": ["configuration.build.build"]
   },
-  "budget":    { "total_seconds": 900 },
-  "bypass":    { "enabled": false },
-  "execution": { },
+  "budget":    { "total_seconds": 930 },
+  "bypass":    { "enabled": false, "marker": null },
+  "execution": { "budget_skippable": [] },
   "evidence":  { }
 }</code></pre>
 
-      <div class="note note-critical">
-        <span class="note-tag">Three naming systems that do not match</span>
-        <p>
-          The framework uses three separate vocabularies, and they differ in both wording and
-          punctuation. Copying a name from the wrong one produces a policy that validates and
-          then silently does nothing.
-        </p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Vocabulary</th><th>Looks like</th><th>Used in</th></tr></thead>
-            <tbody>
-              <tr><td>Ladder stages</td><td><code>static-analysis</code>, <code>affected-tests</code></td><td>evidence ordering</td></tr>
-              <tr><td>Command categories</td><td><code>static_analysis</code>, <code>test</code>, <code>e2e</code></td><td><code>verification.commands</code></td></tr>
-              <tr><td>Provider check catalogue</td><td><code>static-analysis.application</code></td><td>the provider table above, not a file you write</td></tr>
-              <tr><td><strong>Bound check identities</strong></td><td><code>configuration.static-analysis.static-analysis</code></td><td><strong>Gate policy — this file</strong></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>
-          Note the underscore in the command category versus the dashes elsewhere, and that the
-          provider catalogue and the bound identity both use dashes but are still different
-          strings. Only the last row belongs in <code>policy.json</code> — and
-          <code>--draft-policy</code> writes exactly that row for you, so you never need to
-          transcribe from any of the other three.
-        </p>
+      <p>
+        The two <code>checks</code> lists and <code>budget.total_seconds</code> are derived —
+        the identities from your configured commands, the bindings from the provider, the budget
+        as the sum of the timeouts you already proved during migration. The last three
+        subcontracts are <strong>safe defaults, not derived answers</strong>: the draft always
+        writes bypass disabled, nothing skippable, and no retention override. Changing any of
+        them is entirely your call.
+      </p>
+
+      <p>
+        It writes nothing else, prints to stdout when you omit <code>--out</code>, and refuses
+        to overwrite an existing <code>policy.json</code>. It also refuses outright — rather
+        than guessing — if your project has not migrated to schema v4 or has no commands
+        configured, because there is nothing to derive an identity from yet.
+      </p>
+
+      <p class="cmd-label">2 — Decide what the draft could not <span class="who w-you">your decision</span></p>
+      <p>
+        The draft is a proposal, not a decision. Work down this list before you configure it:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Look at</th><th>And decide</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>checks.required</code></td>
+              <td>Whether each one is genuinely worth blocking a commit for. Anything you demote belongs in <code>advisory</code>; an identity in neither list simply does not participate.</td>
+            </tr>
+            <tr>
+              <td><code>budget.total_seconds</code></td>
+              <td>Whether that total is tolerable at every commit. If it reads <code>null</code>, your configuration proved no timeouts and you must supply a positive integer yourself.</td>
+            </tr>
+            <tr>
+              <td><code>bypass</code></td>
+              <td>Whether an escape hatch should exist. The draft says no. To enable it, set <code>"enabled": true</code> <em>and</em> give it a commit-visible <code>marker</code> string — an enabled bypass without one is refused.</td>
+            </tr>
+            <tr>
+              <td><code>execution.budget_skippable</code></td>
+              <td>Which advisory checks may be dropped when time runs short. It may never name anything in <code>required</code>.</td>
+            </tr>
+            <tr>
+              <td><code>evidence</code></td>
+              <td>Whether to lower any retention ceiling. Leaving it empty keeps the built-in bounds, which is usually right.</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="note note-caution">
@@ -1174,25 +1177,136 @@ JSON</code></pre>
         <p>
           A check whose tool is not present does not get skipped — it resolves to
           <span class="pill p-unver">unverified</span>, and an unverified <em>required</em> check
-          blocks. If you have not configured a <code>static_analysis</code> command, do not
-          require <code>configuration.static-analysis.static-analysis</code>. If you have no
-          <code>e2e</code> command configured, leave <code>configuration.browser.browser</code>
-          advisory. <code>--draft-policy</code> only ever proposes identities your configuration
-          actually proves, so this trap applies to hand-written policies, not drafted ones.
+          blocks. The drafter only ever proposes identities your configuration actually proves,
+          so this trap belongs to hand-written policies. It still pays to sanity-check that every
+          required command really runs on a clean clone.
         </p>
       </div>
 
-      <h4>Five things that will trip you up</h4>
+      <p class="cmd-label">3 — Preview the change <span class="who w-auto">tool-derived</span></p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --configure-gate --policy policy.json</code></pre>
+      <p>
+        Exactly like migration: this returns the complete proposed configuration and a
+        <code>previewHash</code>, and writes nothing.
+      </p>
+
+      <p class="cmd-label">4 — Confirm that exact preview <span class="who w-you">your decision</span></p>
+      <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs \
+  --configure-gate --policy policy.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
+      <p>
+        Configuration is one-shot. Running it again fails with <code>The Gate is already
+        configured</code> — to change policy afterwards, edit the <code>evaluation_gate</code>
+        block in <code>.agent-framework.yaml</code> directly, or remove it and configure again.
+        The block lands as inline JSON, one line per subcontract, which is valid YAML if not
+        especially pretty.
+      </p>
+
+      <details class="ref">
+        <summary>Reference — where check identities come from, and why there are four naming systems</summary>
+
+        <p>
+          You do not need any of this if you used <code>--draft-policy</code>. It matters only
+          when you write or edit <code>policy.json</code> by hand, and it explains why hand-writing
+          is discouraged.
+        </p>
+
+        <p>
+          <strong>The identity the commit hook binds is not the one the provider declares.</strong>
+          The activated hook derives its checks from your own <code>verification.commands</code>
+          and names them <code>configuration.&lt;stage&gt;.&lt;capability&gt;</code>:
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Your <code>commands</code> key</th><th>Bound identity (single command)</th></tr></thead>
+            <tbody>
+              <tr><td><code>format</code></td><td><code>configuration.format.formatter</code></td></tr>
+              <tr><td><code>static_analysis</code></td><td><code>configuration.static-analysis.static-analysis</code></td></tr>
+              <tr><td><code>test</code></td><td><code>configuration.broad-tests.test</code></td></tr>
+              <tr><td><code>smoke</code></td><td><code>configuration.smoke.smoke</code></td></tr>
+              <tr><td><code>build</code></td><td><code>configuration.build.build</code></td></tr>
+              <tr><td><code>e2e</code></td><td><code>configuration.browser.browser</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Where a stage configures more than one command across scopes, each gets an ordinal:
+          a project formatting both backend and frontend binds
+          <code>configuration.format.formatter.1</code> and
+          <code>configuration.format.formatter.2</code>, and nothing named
+          <code>configuration.format.formatter</code> at all.
+        </p>
+
+        <p>
+          The <em>provider</em> catalogue is a different list, used to decide the default
+          required/advisory binding rather than to name a check in your policy. For Laravel it is:
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Provider identity</th><th>Stage</th><th>Default binding</th></tr></thead>
+            <tbody>
+              <tr><td><code>focused.test</code></td><td>focused</td><td>advisory</td></tr>
+              <tr><td><code>format.formatter</code></td><td>format</td><td>required</td></tr>
+              <tr><td><code>static-analysis.rewrite-check</code></td><td>static-analysis</td><td>required</td></tr>
+              <tr><td><code>static-analysis.application</code></td><td>static-analysis</td><td>required</td></tr>
+              <tr><td><code>static-analysis.tests</code></td><td>static-analysis</td><td>required</td></tr>
+              <tr><td><code>affected-tests.test</code></td><td>affected-tests</td><td>advisory</td></tr>
+              <tr><td><code>smoke.runtime</code></td><td>smoke</td><td>advisory</td></tr>
+              <tr><td><code>build.artifact</code></td><td>build</td><td>advisory</td></tr>
+              <tr><td><code>browser.user-visible</code></td><td>browser</td><td>advisory</td></tr>
+              <tr><td><code>broad-tests.test</code></td><td>broad-tests</td><td>required</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          A plain Node project has only two, <code>format.formatter</code> and
+          <code>broad-tests.test</code>. The source of each list is the provider file itself:
+          <code>providers/laravel.mjs</code> or <code>providers/node-package.mjs</code>.
+          <strong>Never copy an identity out of this table into a policy</strong> — these names
+          do not bind.
+        </p>
+
+        <p>So four vocabularies are in play, and only the last belongs in <code>policy.json</code>:</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Vocabulary</th><th>Looks like</th><th>Used in</th></tr></thead>
+            <tbody>
+              <tr><td>Ladder stages</td><td><code>static-analysis</code>, <code>affected-tests</code></td><td>evidence ordering</td></tr>
+              <tr><td>Command categories</td><td><code>static_analysis</code>, <code>test</code>, <code>e2e</code></td><td><code>verification.commands</code></td></tr>
+              <tr><td>Provider catalogue</td><td><code>static-analysis.application</code></td><td>default bindings only</td></tr>
+              <tr><td><strong>Bound identities</strong></td><td><code>configuration.static-analysis.static-analysis</code></td><td><strong>Gate policy</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Note the underscore in the command category against dashes everywhere else, and that
+          the provider catalogue and the bound identity both use dashes yet are still different
+          strings. Since a policy naming a non-existent identity is accepted in silence, one
+          wrong transcription gives you a Gate that configures, activates, and enforces nothing.
+        </p>
+      </details>
+
+      <h4>If you edit <code>policy.json</code> by hand</h4>
+
+      <p>
+        These five refusals are what you will hit. The drafter avoids all of them, so this is
+        troubleshooting rather than instruction.
+      </p>
 
       <div class="note note-caution">
         <span class="note-tag">1 — All five are mandatory; bypass is explicit</span>
         <p>
           You cannot omit <code>bypass</code> because you do not want bypass. Leaving it out fails
           with <code>Missing Gate policy subcontract: bypass</code>. Write
-          <code>{"enabled": false}</code> when bypass is disabled. The same policy validator used
-          by the Gate runtime checks setup previews, so an enabled bypass also needs its
-          commit-visible marker. Empty <code>execution</code> and <code>evidence</code> objects are
-          valid when no additional policy is needed.
+          <code>{"enabled": false}</code> when bypass is disabled. An empty <code>{}</code> policy
+          is no help either — it stops at <code>Missing Gate policy subcontract: checks</code> and
+          tells you nothing about the other four.
         </p>
       </div>
 
@@ -1202,7 +1316,7 @@ JSON</code></pre>
           Adding anything beside <code>total_seconds</code> fails with <em>"Gate budget policy must
           contain a positive total_seconds integer"</em> — which is misleading, because your
           integer was fine. The extra key was the problem. Per-check timeouts belong in
-          <code>execution</code>, not here.
+          <code>verification.commands</code>, not here.
         </p>
       </div>
 
@@ -1227,14 +1341,13 @@ JSON</code></pre>
         </p>
       </div>
 
-      <div class="note note-caution">
-        <span class="note-tag">4 — Check identities are not verified here</span>
+      <div class="note note-critical">
+        <span class="note-tag">4 — Check identities are never validated</span>
         <p>
-          The entire rule is <em>"a non-empty string"</em>. There is no spelling check, no
-          separator rule, and no cross-check against your project — a policy naming a check that
-          does not exist is accepted without complaint. A typo will not surface until evaluation,
-          when the check you meant quietly is not the one running. Copy identities from the table
-          above rather than typing them.
+          The entire rule is <em>"a non-empty string"</em>. No spelling check, no separator rule,
+          no cross-check against your project. A policy naming a check that does not exist is
+          accepted without complaint, and the mistake does not surface until evaluation — as a
+          required check that quietly is not running. This single fact is why the drafter exists.
         </p>
       </div>
 
@@ -1247,15 +1360,7 @@ JSON</code></pre>
         </p>
       </div>
 
-      <p>
-        Configuration is one-shot. Running it again fails with <code>The Gate is already
-        configured</code> — to change policy afterwards, edit the <code>evaluation_gate</code>
-        block in <code>.agent-framework.yaml</code> directly, or remove it and configure again.
-        The block lands as inline JSON, one line per subcontract, which is valid YAML if not
-        especially pretty.
-      </p>
-
-      <h3>Step 4 — Activate on your machine</h3>
+      <h3>Step 4 — Activate on your machine <span class="who w-agent">agent-operated</span></h3>
 
       <div class="note note-critical">
         <span class="note-tag">There is no gate activate command yet</span>

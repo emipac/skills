@@ -25,9 +25,12 @@ test('the documented starter policy is accepted by setup and the Gate runtime', 
   const root = await temporaryRoot();
   context.after(() => rm(root, { recursive: true, force: true }));
   const guide = await readFile(path.join(process.cwd(), 'docs', 'framework-guide.html'), 'utf8');
-  const sample = guide.match(/cat &gt; policy\.json &lt;&lt;'JSON'\n(?<policy>\{[\s\S]*?\n\})\nJSON<\/code>/);
+  // The guide stopped telling maintainers to hand-write this file: the policy
+  // it documents is now the one `--draft-policy` produces, so the sample under
+  // test is that block. A policy the guide shows must still configure.
+  const sample = guide.match(/<pre><code>(?<policy>\{\s*\n\s*"checks":[\s\S]*?\n\})<\/code><\/pre>/);
 
-  assert.notEqual(sample?.groups?.policy, undefined, 'The guide must contain its starter policy.');
+  assert.notEqual(sample?.groups?.policy, undefined, 'The guide must contain its documented policy.');
 
   const policy = JSON.parse(sample.groups.policy);
 

@@ -5,10 +5,12 @@
  * repository, reads the clone's configuration and Activation receipt, builds
  * the versioned evaluation request for the `commit-attempt` trigger, invokes
  * the existing `evaluate` seam, and reports the decision. It adds no policy of
- * its own and reimplements no part of evaluation.
+ * its own and reimplements no part of evaluation. It resolves no runner either:
+ * it runs the executables the receipt pinned, so the programs activation proved
+ * are the programs a commit is graded by.
  *
  * It exits `0` only on an `allow` authorization. Every other path — an
- * unreadable configuration, an absent receipt, an unresolved runner, a crash —
+ * unreadable configuration, an absent receipt, a drifted runner pin, a crash —
  * exits non-zero with a stated reason, because a runner that cannot prove a
  * decision has not produced one (`NFR-REL-003`).
  *
@@ -210,61 +212,57 @@ const resolveReceipt = async (repositoryRoot) => {
   return { ok: true, receipt, receiptPath, gitCommonDirectory: common };
 };
 
-/**
- * Find one executable on `PATH` without asking a shell to do it.
- *
- * An unresolved runner never falls back to shell lookup, so resolution walks
- * the search path itself and reports nothing when it finds nothing.
- */
-const locateOnPath = async (name, environment) => {
-  if (name.includes('/')) {
-    return access(name, X_OK).then(() => name, () => null);
-  }
-
-  for (const directory of (environment.PATH ?? '').split(path.delimiter)) {
-    if (directory === '') {
-      continue;
-    }
-
-    const candidate = path.join(directory, name);
-    const found = await access(candidate, X_OK).then(() => candidate, () => null);
-
-    if (found !== null) {
-      return found;
-    }
-  }
-
-  return null;
-};
-
-/** Which platform executable each logical runner runs on this machine. */
-const PLATFORM_EXECUTABLES = Object.freeze({
-  'package-script': 'npm',
-  'php-script': 'php',
-  'composer-bin': 'composer',
-});
+/** What a maintainer does about a receipt that no longer describes this machine. */
+const REPAIR = 'run `gate repair` to re-resolve and re-pin the commands this clone was activated with';
 
 /**
- * Resolve every logical runner to one platform executable.
+ * Take every executable from the pin the Activation receipt recorded.
  *
- * `composeArguments` is the single place a descriptor's argument vector is
- * derived, and `commandPreview` and bounded execution both derive from it. This
- * runner uses it too rather than re-deriving how any runner composes, because
- * a second copy of that rule is how a preview came to describe a command that
- * would not run.
+ * Activation is where resolution belongs: it is the step that obtains consent
+ * for exact commands and then pins what it resolved. Re-resolving here would
+ * let the hook run a program activation never proved — which is precisely the
+ * defect this closes, so a pin is honoured or the commit is denied. A pinned
+ * executable that is gone, no longer executable, or no longer the runner it was
+ * pinned for is drift, and substituting a different program for it is never a
+ * recovery (`NFR-REL-003`).
+ *
+ * `composeArguments` stays the single place a descriptor's argument vector is
+ * derived, so the invocation activation previewed and the one this runs cannot
+ * diverge.
  */
-const resolveRunners = async (checks, { environment, resolveExecutable, compose }) => {
+const pinnedRunners = async (checks, { receipt, compose }) => {
+  const pins = new Map((receipt?.runtime?.runners ?? [])
+    .filter((entry) => entry?.role === 'evaluate' && typeof entry?.check_id === 'string')
+    .map((entry) => [entry.check_id, entry]));
   const resolved = new Map();
 
   for (const check of checks) {
     const command = check.evaluate;
-    const resolution = await resolveExecutable(command, { environment });
+    const pin = pins.get(check.id) ?? null;
 
-    if (!resolution?.executable) {
+    if (typeof pin?.executable !== 'string' || pin.executable === '') {
       return {
         ok: false,
-        reasonCode: 'runner-unresolved',
-        detail: `${check.id} names the ${command.runner} runner, which resolves to no executable on this machine; an unresolved runner never falls back to a shell.`,
+        reasonCode: 'runner-unpinned',
+        detail: `the Activation receipt pins no executable for ${check.id}; this clone was activated with different commands, so nothing is authorized. ${REPAIR}.`,
+      };
+    }
+
+    if (pin.runner !== command.runner) {
+      return {
+        ok: false,
+        reasonCode: 'runner-pin-drift',
+        detail: `${check.id} now names the ${command.runner} runner, but the Activation receipt pinned ${pin.runner}; the pinned program is never replaced by a different one. ${REPAIR}.`,
+      };
+    }
+
+    const usable = await access(pin.executable, X_OK).then(() => true, () => false);
+
+    if (!usable) {
+      return {
+        ok: false,
+        reasonCode: 'runner-pin-drift',
+        detail: `${check.id} was activated against ${pin.executable}, which is no longer an executable on this machine; it is never re-resolved to a different program. ${REPAIR}.`,
       };
     }
 
@@ -278,31 +276,14 @@ const resolveRunners = async (checks, { environment, resolveExecutable, compose 
       };
     }
 
-    resolved.set(check.id, { ...resolution, preview: commandPreview(command, resolution.executable) });
+    resolved.set(check.id, {
+      executable: pin.executable,
+      version: pin.version ?? null,
+      preview: commandPreview(command, pin.executable),
+    });
   }
 
   return { ok: true, resolved };
-};
-
-/** The default resolution: a logical runner to a real executable, or nothing. */
-const defaultResolveExecutable = async (command, { environment }) => {
-  if (command.runner === 'repository-script') {
-    // A repository script is a Grader surface this Node runtime can run when it
-    // is a Node module. Anything else is left unresolved rather than guessed.
-    return /\.[cm]?js$/.test(command.args?.[0] ?? '')
-      ? { executable: process.execPath, version: process.versions.node }
-      : null;
-  }
-
-  const name = PLATFORM_EXECUTABLES[command.runner] ?? null;
-
-  if (name === null) {
-    return null;
-  }
-
-  const executable = await locateOnPath(name, environment);
-
-  return executable === null ? null : { executable, version: null };
 };
 
 /** Which check a bounded-execution callback is resolving an executable for. */
@@ -364,7 +345,6 @@ const report = (decision) => {
 export const runHook = async ({
   cwd = process.cwd(),
   environment = process.env,
-  resolveExecutable = defaultResolveExecutable,
   composeArguments: compose = composeArguments,
   evaluate: evaluateSeam = evaluate,
 } = {}) => {
@@ -403,7 +383,7 @@ export const runHook = async ({
     );
   }
 
-  const runners = await resolveRunners(checks, { environment, resolveExecutable, compose });
+  const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose });
 
   if (!runners.ok) {
     return denied(runners.reasonCode, runners.detail);
