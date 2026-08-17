@@ -1638,19 +1638,35 @@ export const activate = async (request, dependencies = {}) => {
   });
 
   const adapters = [];
-  // The one command a desktop surface would run: the same pinned runtime the
-  // authoritative hook execs. A program the gate cannot safely quote yields no
-  // command, and a registration without one refuses rather than inventing one.
-  let adapterCommand = null;
+  /**
+   * The command one desktop surface would run.
+   *
+   * Desktop registration points at the packaged preflight program when the
+   * pinned hook program is `gate-precommit.mjs`, and at the fixture program
+   * otherwise. Every command names the adapter it is answering so an
+   * unreadable payload can still be returned through that adapter's declared
+   * feedback channel. A program the gate cannot safely quote yields no
+   * command, and a registration without one refuses rather than inventing one.
+   */
+  const quotedDesktopCommand = (adapterId) => {
+    const hookProgram = request.runtime?.hookProgram ?? null;
+    const preflightProgram = request.runtime?.preflightProgram ?? (
+      hookProgram !== null && path.basename(hookProgram.script ?? '') === 'gate-precommit.mjs'
+        ? {
+          ...hookProgram,
+          script: path.join(path.dirname(hookProgram.script), 'gate-preflight.mjs'),
+        }
+        : hookProgram
+    );
 
-  try {
-    adapterCommand = quotedProgram({
-      program: request.runtime?.hookProgram ?? null,
+    return quotedProgram({
+      program: {
+        ...preflightProgram,
+        args: [...(preflightProgram?.args ?? []), '--adapter', adapterId],
+      },
       repositoryRoot: request.repository.root,
     });
-  } catch {
-    adapterCommand = null;
-  }
+  };
 
   // An adapter becomes active only after it has proved itself, and the set is
   // all-or-nothing: the first failure unwinds every adapter already registered,
@@ -1671,9 +1687,17 @@ export const activate = async (request, dependencies = {}) => {
       continue;
     }
 
+    let command = null;
+
+    try {
+      command = quotedDesktopCommand(adapter.id);
+    } catch {
+      command = null;
+    }
+
     const registration = await registerAdapter(adapter, {
       repository: described.repository,
-      command: adapterCommand,
+      command,
     });
     const pinned = pinnedRegistration(registration);
 

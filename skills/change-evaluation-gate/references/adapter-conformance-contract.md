@@ -1,3 +1,5 @@
+[mode overridden: auto -> full, reason=instruction file requires complete content]
+
 # Adapter conformance contract
 
 How the authoritative Git integration and the three declared v1 desktop
@@ -48,7 +50,7 @@ authorizes a change.**
 
 ## 3. Declared capabilities
 
-Every adapter declares all eight capability categories for itself. Nothing is
+Every adapter declares all nine capability categories for itself. Nothing is
 defaulted and nothing is inherited from another client: a declaration that
 omits a category, or invents one, is rejected rather than filled in.
 
@@ -62,6 +64,13 @@ omits a category, or invents one, is rejected rather than filled in.
 | `filesystem` | `sameFilesAsClient` |
 | `git` | `metadata`, `index` |
 | `invocation` | `nonInteractive`, `mechanism`, `structuredResult`, `timeoutMs` |
+| `feedback` | `channel`, `field`, `none` |
+
+The feedback declaration names the channel by which a running adapter returns a
+preflight result to its client, the field that carries it, and the form that
+returns no result. An adapter that declares no feedback channel returns none.
+The packaged preflight program (`gate-preflight.mjs`) answers only through that
+declaration: it never learns a client field name of its own.
 
 ## 4. Trigger normalization
 
@@ -344,3 +353,4 @@ clone-local Activation transaction, which pins the receipt that proves it
 (`SG-DIST-001`). Losing a registered preflight adapter afterwards — or losing,
 drifting, or being unable to confirm its declared registration surface — makes
 the clone `degraded`; losing authoritative Git makes it `broken`.
+[… truncated at ~4108 of 4108 tokens — use ctx_read with lines= parameter to see specific sections]

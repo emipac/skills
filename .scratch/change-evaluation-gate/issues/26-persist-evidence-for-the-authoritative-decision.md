@@ -1,14 +1,14 @@
 # TB-026 — Persist the Evidence the authoritative decision is made from
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 26-persist-evidence-for-the-authoritative-decision
 Draft key: TB-026
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -148,23 +148,29 @@ build the `gate` lifecycle command surface, and do not add a reporting or
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVID-001`, `AC-EVAL-001`: a denied commit in an activated clone
+- [x] `AC-EVID-001`, `AC-EVAL-001`: a denied commit in an activated clone
   appends exactly one Evidence envelope whose attempts name the failing required
   check and carry its bounded output, and one log entry referencing it; an
   allowed commit does the same for its passing checks.
-- [ ] `AC-EVID-002`, `FR-EVID-005`, `NFR-AUD-001`: each commit-time evaluation
+- [x] `AC-EVID-002`, `FR-EVID-005`, `NFR-AUD-001`: each commit-time evaluation
   appends exactly one immutable Lifecycle event recording time, actor, client,
   gate and repository identity, outcome, and reason — one governed action, one
   event.
-- [ ] `SG-SECRET-001`: a check whose output contains a secret-shaped value
+- [x] `SG-SECRET-001`: a check whose output contains a secret-shaped value
   stores the redacted form, and a capture that cannot be made safe is refused
-  rather than written.
-- [ ] `FR-EVID-003`: the ceilings applied are the clone's own
+  rather than written. The declared-secret redaction path is proved fresh at
+  this integration point (a runtime input the receipt names, printed by a real
+  check, denied from reaching the envelope); the unsafe-capture refusal itself
+  is the generic mechanism `evaluate.mjs` and `evidence-store.mjs` already own
+  and `tests/gate-evidence-secrets.test.mjs` and `gate-evidence-prune-smoke`
+  already prove, and wiring a real `evidenceStore` through means the
+  authoritative path now inherits it rather than needing a second proof of it.
+- [x] `FR-EVID-003`: the ceilings applied are the clone's own
   `evaluation_gate.evidence` limits where it sets them, and the v1 defaults
   where it does not.
-- [ ] `NFR-REL-003`: a store that cannot be opened or appended to denies the
+- [x] `NFR-REL-003`: a store that cannot be opened or appended to denies the
   commit with a distinct stated reason, and never allows an unrecorded commit.
-- [ ] The activation self-test writes no evidence and leaves no store entry, so
+- [x] The activation self-test writes no evidence and leaves no store entry, so
   proving the program still touches nothing in the clone.
 
 ## Verification Matrix

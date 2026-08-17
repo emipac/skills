@@ -105,11 +105,16 @@ The Gate ships one authoritative integration and three declared v1 preflight
 surfaces: local Git `pre-commit`, Claude Code Desktop's local Code tab, Codex
 Desktop with a local project, and Cursor IDE's local Agent. Which native events
 each surface normalizes, what each declares about its own event, blocking,
-trust, repository, session, filesystem, Git, and invocation capabilities, how
-every trust, invocation, timeout, capability, and malformed-output failure
-becomes `unverified`, and what a surface must prove before it may be called
-supported are defined by the
+trust, repository, session, filesystem, Git, invocation, and feedback
+capabilities, how every trust, invocation, timeout, capability, and
+malformed-output failure becomes `unverified`, and what a surface must prove
+before it may be called supported are defined by the
 [adapter conformance contract](references/adapter-conformance-contract.md).
+
+Activation registers each desktop surface against the packaged
+`gate-preflight.mjs` program. That program evaluates the working tree as
+preflight, presents `not-authoritative`, and answers through the adapter's
+declared feedback channel — never through its exit status.
 
 Only authoritative Git authorizes a change. A desktop surface presents the same
 decision as structured `not-authoritative` preflight feedback and blocks

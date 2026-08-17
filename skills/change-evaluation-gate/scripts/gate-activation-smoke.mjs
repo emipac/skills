@@ -16,6 +16,9 @@
  * 2. `authoritative-commit` — the activated clone really blocks a commit whose
  *    required check fails and really allows one whose checks pass. This is the
  *    only scenario that proves the gate is authoritative rather than advisory.
+ *    Both decisions also leave an Evidence envelope and a Lifecycle event in
+ *    the clone-local store the receipt identifies (TB-026, FR-EVID-001,
+ *    FR-EVID-005, AC-EVID-001).
  * 3. `rollback-leaves-no-trace` — a genuine failure injected immediately before
  *    Git enablement leaves no receipt, no registration, and a clone that still
  *    commits exactly as it did while merely configured (FR-LIFE-005,
@@ -585,6 +588,28 @@ const authoritativeCommit = async (activated) => {
     'A blocked commit still moved HEAD.',
   );
 
+  // TB-026: the denial the maintainer just read on stderr also left a record.
+  // `activated.store` reads the same physical store the packaged runner opened
+  // internally, so this proves the runner is wired to persistence, not merely
+  // that persistence itself works.
+  const deniedLog = await activated.store.readLog();
+
+  check(
+    findings,
+    deniedLog.length === 1,
+    `The blocked commit did not leave exactly one Evidence envelope (found ${deniedLog.length}).`,
+  );
+
+  const deniedEnvelope = deniedLog.length === 1
+    ? await activated.store.readEnvelope(deniedLog[0].evidenceId)
+    : null;
+
+  check(
+    findings,
+    deniedEnvelope?.decision?.checks?.find((entry) => entry.id === REQUIRED_CHECK)?.outcome === 'failed',
+    "The blocked commit's Evidence envelope does not name the failing required check.",
+  );
+
   // The same clone must still let good work through.
   await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
   await git(root, ['add', '--all']);
@@ -599,6 +624,35 @@ const authoritativeCommit = async (activated) => {
     findings,
     Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
     'An allowed commit did not move HEAD.',
+  );
+
+  // TB-026: the store is append-only, so the allowed commit's envelope is the
+  // second entry — proving persistence survives across commits, not only once.
+  const allowedLog = await activated.store.readLog();
+
+  check(
+    findings,
+    allowedLog.length === 2,
+    `The allowed commit did not append a second Evidence envelope (found ${allowedLog.length}).`,
+  );
+
+  const allowedEnvelope = allowedLog.length === 2
+    ? await activated.store.readEnvelope(allowedLog[1].evidenceId)
+    : null;
+
+  check(
+    findings,
+    allowedEnvelope?.decision?.authorization === 'allow',
+    "The allowed commit's Evidence envelope does not record an allow.",
+  );
+
+  const evaluationEvents = (await activated.store.readEvents())
+    .filter((event) => event.type === 'evaluation');
+
+  check(
+    findings,
+    evaluationEvents.length === 2,
+    `Expected one Lifecycle event per commit-time evaluation, got ${evaluationEvents.length}.`,
   );
 
   return { name: 'authoritative-commit', ok: findings.length === 0, findings };

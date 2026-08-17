@@ -4,13 +4,15 @@
  * This is the program a registered `pre-commit` shim points at. It resolves the
  * repository, reads the clone's configuration and Activation receipt, builds
  * the versioned evaluation request for the `commit-attempt` trigger, invokes
- * the existing `evaluate` seam, and reports the decision. It adds no policy of
- * its own and reimplements no part of evaluation. It resolves no runner either:
- * it runs the executables the receipt pinned, so the programs activation proved
- * are the programs a commit is graded by.
+ * the existing `evaluate` seam against the clone-local Evidence store the
+ * receipt identifies, and reports the decision. It adds no policy of its own
+ * and reimplements no part of evaluation or persistence. It resolves no runner
+ * either: it runs the executables the receipt pinned, so the programs
+ * activation proved are the programs a commit is graded by.
  *
- * It exits `0` only on an `allow` authorization. Every other path — an
- * unreadable configuration, an absent receipt, a drifted runner pin, a crash —
+ * It exits `0` only on an `allow` authorization whose Evidence was actually
+ * recorded. Every other path — an unreadable configuration, an absent receipt,
+ * a drifted runner pin, a store that cannot be opened or written to, a crash —
  * exits non-zero with a stated reason, because a runner that cannot prove a
  * decision has not produced one (`NFR-REL-003`).
  *
@@ -25,7 +27,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION } from './activation.mjs';
+import { HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION, repositoryIdentity } from './activation.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
 import { commandPreview, composeArguments } from './command-descriptor.mjs';
 import {
@@ -34,8 +36,9 @@ import {
   readRepositoryConfiguration,
 } from './configuration.mjs';
 import { PROTOCOL_VERSION, evaluate } from './evaluate.mjs';
-import { STORE_DIRECTORY, resolveGitCommonDirectory } from './evidence-store.mjs';
+import { openEvidenceStore, resolveGitCommonDirectory, STORE_DIRECTORY } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
+import { createRedactor } from './redaction.mjs';
 
 const runFile = promisify(execFile);
 
@@ -52,6 +55,9 @@ export const SELF_TEST_SUBJECT_VERSION = HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION;
 
 /** The exit status of a runner that did not authorize the change in front of it. */
 const DENIED = 1;
+
+/** The one client identity this runner ever acts as. */
+const GIT_ADAPTER = Object.freeze({ id: 'git', surface: 'git-pre-commit' });
 
 const say = (message) => `change-evaluation-gate: ${message}`;
 
@@ -140,7 +146,7 @@ const resolveRepositoryRoot = async (cwd) => {
  * policy the contract rejects, denies: the runner never invents the policy it
  * is supposed to be bound by.
  */
-const resolveConfiguration = async (repositoryRoot) => {
+export const resolveConfiguration = async (repositoryRoot) => {
   const read = await readRepositoryConfiguration({ repositoryRoot });
 
   if (!read.ok) {
@@ -178,7 +184,7 @@ const resolveConfiguration = async (repositoryRoot) => {
  * it is acting for, so it denies rather than acting as an unpinned gate of its
  * own invention.
  */
-const resolveReceipt = async (repositoryRoot) => {
+export const resolveReceipt = async (repositoryRoot) => {
   let common;
 
   try {
@@ -230,7 +236,7 @@ const REPAIR = 'run `gate repair` to re-resolve and re-pin the commands this clo
  * derived, so the invocation activation previewed and the one this runs cannot
  * diverge.
  */
-const pinnedRunners = async (checks, { receipt, compose }) => {
+export const pinnedRunners = async (checks, { receipt, compose }) => {
   const pins = new Map((receipt?.runtime?.runners ?? [])
     .filter((entry) => entry?.role === 'evaluate' && typeof entry?.check_id === 'string')
     .map((entry) => [entry.check_id, entry]));
@@ -287,9 +293,82 @@ const pinnedRunners = async (checks, { receipt, compose }) => {
 };
 
 /** Which check a bounded-execution callback is resolving an executable for. */
-const commandOwner = (checks, command) => checks.find(
+export const commandOwner = (checks, command) => checks.find(
   (check) => check.evaluate === command,
 )?.id ?? null;
+
+/**
+ * A best-effort, explicitly unauthenticated actor for the Lifecycle record.
+ *
+ * Local attribution is a convenience, never an authentication claim: a machine
+ * owner controls every input to it (NFR-AUD-001, SG-TRUST-001).
+ */
+const resolveActor = async (repositoryRoot) => {
+  try {
+    const { stdout } = await runFile('git', ['config', 'user.name'], { cwd: repositoryRoot });
+    const name = stdout.trim();
+
+    return { name: name.length > 0 ? name : null, source: 'git-config' };
+  } catch {
+    return { name: null, source: 'git-config' };
+  }
+};
+
+/**
+ * The runtime input values this activation named, read from this process's own
+ * environment so the redactor can catch one if a check happens to print it.
+ *
+ * The receipt itself never carries a value — only the name a maintainer
+ * approved (`activation.mjs`) — so the value is read fresh from the
+ * environment this invocation actually runs in.
+ */
+const declaredSecrets = (receipt, environment) => (receipt?.runtimeInputs ?? [])
+  .filter((name) => typeof name === 'string' && typeof environment[name] === 'string' && environment[name] !== '')
+  .map((name) => ({ name, source: 'approved-environment-file', value: environment[name] }));
+
+/**
+ * Open the clone-local Evidence store the Activation receipt already
+ * identifies.
+ *
+ * The store lives under the Git common directory `resolveReceipt` already
+ * resolved, and its ceilings are the clone's own `evaluation_gate.evidence`
+ * policy. A store that cannot be opened is a diagnosable local fault the
+ * runner denies against, never a reason to grade a commit unrecorded
+ * (`FR-EVID-001`, `FR-EVID-002`, `NFR-REL-003`).
+ *
+ * `openStoreSeam` is `openEvidenceStore` by default; it is a parameter only so
+ * a test can prove the open-failure and append-failure paths deterministically,
+ * the same way `evaluate` is already injectable to prove the crash path below.
+ */
+export const openStore = async ({
+  repository, activation, configuration, environment, openStoreSeam, client = GIT_ADAPTER,
+}) => {
+  const identity = {
+    actor: await resolveActor(repository.root),
+    client: { ...client, version: activation.receipt?.receiptVersion ?? '1.0.0' },
+    gate: activation.receipt?.runtime?.gate
+      ?? { id: 'change-evaluation-gate', version: null, protocolVersion: PROTOCOL_VERSION },
+    repository: { identity: repositoryIdentity(activation.gitCommonDirectory) },
+  };
+
+  try {
+    const store = await openStoreSeam({
+      repositoryRoot: repository.root,
+      gitCommonDirectory: activation.gitCommonDirectory,
+      evidencePolicy: configuration.policy?.evidence ?? null,
+      identity,
+      redactor: createRedactor({ secrets: declaredSecrets(activation.receipt, environment) }),
+    });
+
+    return { ok: true, store };
+  } catch (error) {
+    return {
+      ok: false,
+      reasonCode: 'evidence-store-unavailable',
+      detail: `the clone-local Evidence store could not be opened (${error.message}); nothing is authorized.`,
+    };
+  }
+};
 
 /**
  * Say what the decision was, in a form a maintainer reading `git commit` output
@@ -325,6 +404,23 @@ const report = (decision) => {
   }
 
   if (authorization === 'allow') {
+    // Evidence is bound on every authoritative evaluation now, so a decision
+    // that reached `allow` with nothing recorded means the store itself failed
+    // — the unsafe-capture refusal already turns into `deny` before reaching
+    // here. Absence of a record is not a reason to withhold a passing decision
+    // in general (`NFR-OPER-001`), but the authoritative path's own contract is
+    // stricter: nothing here authorizes a commit it cannot also prove
+    // (`NFR-REL-003`, `RISK-001`).
+    const evidenceReasonCode = decision.evidence?.persisted === false
+      ? decision.evidence?.reference?.reasonCode ?? 'evidence-not-persisted'
+      : null;
+
+    if (evidenceReasonCode !== null) {
+      lines.push(say(`evidence-persistence-failed: ${evidenceReasonCode}: this commit's evidence could not be recorded, so it is not authorized.`));
+
+      return { exitCode: DENIED, reasonCode: 'evidence-persistence-failed', lines };
+    }
+
     return { exitCode: 0, reasonCode: null, lines };
   }
 
@@ -347,6 +443,7 @@ export const runHook = async ({
   environment = process.env,
   composeArguments: compose = composeArguments,
   evaluate: evaluateSeam = evaluate,
+  openEvidenceStore: openStoreSeam = openEvidenceStore,
 } = {}) => {
   const selfTestSubject = environment[SELF_TEST_ENV] ?? null;
 
@@ -389,11 +486,23 @@ export const runHook = async ({
     return denied(runners.reasonCode, runners.detail);
   }
 
+  const store = await openStore({
+    repository, activation, configuration, environment, openStoreSeam,
+  });
+
+  if (!store.ok) {
+    return denied(store.reasonCode, store.detail);
+  }
+
   const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-hook-runner-exec-'));
   const executor = createBoundedExecutor({
     totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
     resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
     environment,
+    // The Evidence envelope's whole purpose is a bounded, redacted excerpt of
+    // what a check printed; capturing nothing would leave that purpose unmet
+    // on the one path a maintainer actually reaches (FR-EVID-003).
+    captureOutput: true,
   });
   let decision;
 
@@ -410,8 +519,7 @@ export const runHook = async ({
         role: 'authoritative',
         trigger: 'commit-attempt',
         adapter: {
-          id: 'git',
-          surface: 'git-pre-commit',
+          ...GIT_ADAPTER,
           version: activation.receipt?.receiptVersion ?? '1.0.0',
           capabilities: { nativeBlocking: true },
         },
@@ -425,6 +533,7 @@ export const runHook = async ({
       checks,
       policy: configuration.policy,
       execute: executor.execute,
+      evidenceStore: store.store,
     });
   } catch (error) {
     // A runner that crashed produced no decision. It denies, and it says so,

@@ -1,15 +1,14 @@
 # TB-025 — Package the desktop preflight runner a client hook can register
 
-Status: blocked
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: blocked, defect
-Blocked by: TB-026
+Labels: done, defect
+Blocked by:
 Tracker ID: 25-package-the-desktop-preflight-runner
 Draft key: TB-025
 
-**Status:** blocked — by `TB-026` alone; the SRS amendment this needed is
-approved as revision `0.2.5`
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -165,19 +164,19 @@ not extend activation's adapter registration beyond pointing at this program.
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-001`, `FR-ADAPT-002`: a native `stop` payload on stdin, in a
+- [x] `AC-ADAPT-001`, `FR-ADAPT-002`: a native `stop` payload on stdin, in a
   clone whose required check fails, produces the declared stdout feedback
   naming the failing check; the same clone passing produces no follow-up.
-- [ ] `AC-ADAPT-001`, `SG-SUPPORT-001`: whatever the outcome, the presented
+- [x] `AC-ADAPT-001`, `SG-SUPPORT-001`: whatever the outcome, the presented
   result is `not-authoritative` and non-blocking, and the program exits `0`.
-- [ ] `AC-ADAPT-002`, `NFR-REL-003`: an unreadable payload, an unknown adapter,
+- [x] `AC-ADAPT-002`, `NFR-REL-003`: an unreadable payload, an unknown adapter,
   an unresolvable repository root, and an internal failure each present as
   `unverified` through the declared channel rather than as silence or a clean
   preflight.
-- [ ] `SG-OWNER-001`: a source scan of the kind `TB-024` uses shows no client
+- [x] `SG-OWNER-001`: a source scan of the kind `TB-024` uses shows no client
   name and no native field name outside `adapters.mjs` — the feedback field
   included.
-- [ ] `FR-ADAPT-002`: the program evaluates the working tree with the
+- [x] `FR-ADAPT-002`: the program evaluates the working tree with the
   `work-complete` trigger and the `preflight` role, and its output never
   describes itself as the decision a commit would receive.
 
@@ -228,13 +227,14 @@ failure.
 
 ## Blocked By
 
-`TB-026`, for the Evidence path only. `FR-EVID-001` requires every evaluation to
-produce an envelope, so this runner persists like any other caller; `TB-026`
-establishes that wiring from a packaged runner to the clone-local store, and
-building it twice is the divergence `TB-024` just finished removing elsewhere.
-Nothing else blocks: `TB-013` and `TB-016` delivered the desktop declarations
-and registration surfaces, and `TB-018` established the packaged-program shape
-this follows.
+None. `TB-026` is done: `openStore` in `hook-runner.mjs` is now the wiring from
+a packaged runner to the clone-local store, and this runner reuses it — `TB-026`
+opens the store from `{ repository, activation, configuration, environment }`
+and passes `evidenceStore` and `captureOutput: true` into `evaluate`; this
+runner supplies the same shape for its own `role: 'preflight'` evaluation rather
+than restating how a store is opened. `TB-013` and `TB-016` delivered the
+desktop declarations and registration surfaces, and `TB-018` established the
+packaged-program shape this follows.
 
 ## Unresolved Assumptions
 
