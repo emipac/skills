@@ -27,13 +27,13 @@ import { createHash } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { touchesControlSurface } from './grader-surface.mjs';
 import {
   authorizationFor,
   bindPolicy,
   decisionOutcome,
   validateGatePolicy,
 } from './policy.mjs';
-import { touchesControlSurface } from './grader-surface.mjs';
 
 const canonical = (value) => {
   if (Array.isArray(value)) {
