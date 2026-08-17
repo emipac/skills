@@ -24,8 +24,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
-import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
+import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
