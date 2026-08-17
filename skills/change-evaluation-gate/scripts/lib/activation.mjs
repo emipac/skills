@@ -25,7 +25,7 @@ import path from 'node:path';
 
 import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
-import { resolveExecutables } from './command-descriptor.mjs';
+import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { validateGatePolicy } from './policy.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
@@ -1122,7 +1122,18 @@ const resolveHookStrategy = async ({ request, repositoryRoot, gitCommonDirectory
 
 /** Resolve the identities, locations, and commands one activation would use. */
 const describeActivation = async (request, dependencies) => {
-  const { runGit, resolveExecutable, detectHookManager: detect = detectHookManager } = dependencies;
+  const {
+    runGit,
+    environment = process.env,
+    detectHookManager: detect = detectHookManager,
+    // Activation is where resolution happens, and the shared rule is the only
+    // rule: an integrator that supplied its own resolver is how activation came
+    // to pin one program while the hook ran another (`SG-OWNER-001`).
+    resolveExecutable = createRunnerResolver({
+      repositoryRoot: request.repository.root,
+      environment,
+    }),
+  } = dependencies;
   const gitCommonDirectory = await resolveGitCommonDirectory({
     repositoryRoot: request.repository.root,
     runGit,

@@ -12,6 +12,11 @@
  * declared `repository-script` Grader surface.
  */
 
+import { accessSync, constants } from 'node:fs';
+import path from 'node:path';
+
+const { X_OK } = constants;
+
 export const COMMAND_RUNNERS = Object.freeze([
   'composer-bin',
   'php-script',
@@ -291,6 +296,130 @@ export const commandPreview = (command, executable) => {
 
   return error ? null : [executable, ...args].join(' ');
 };
+
+/** Which platform executable each logical runner runs on this machine. */
+const PLATFORM_EXECUTABLES = Object.freeze({
+  'package-script': 'npm',
+  'php-script': 'php',
+});
+
+/** Where a `composer-bin` runner finds the binary its descriptor names. */
+const VENDOR_BINARY_DIRECTORY = path.join('vendor', 'bin');
+
+/**
+ * Find one executable on `PATH` without asking a shell to do it.
+ *
+ * An unresolved runner never falls back to shell lookup, so resolution walks
+ * the search path itself and reports nothing when it finds nothing.
+ */
+const locateOnPath = (name, environment) => {
+  if (name.includes('/')) {
+    return isExecutable(name) ? name : null;
+  }
+
+  for (const directory of (environment.PATH ?? '').split(path.delimiter)) {
+    if (directory === '') {
+      continue;
+    }
+
+    const candidate = path.join(directory, name);
+
+    if (isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const isExecutable = (candidate) => {
+  try {
+    accessSync(candidate, X_OK);
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Resolve the vendor binary a `composer-bin` descriptor names.
+ *
+ * The leading argument names the binary and composition already consumes it, so
+ * resolution is the half that must find it. It is looked up under the vendor
+ * directory of the descriptor's own working directory — a repository whose PHP
+ * application lives in a subdirectory keeps `vendor/` there — and the result is
+ * absolute, because a check runs inside a materialised snapshot where `vendor/`
+ * is absent. The tool is not the thing under test; the snapshot content is
+ * (`SG-EVAL-001`).
+ *
+ * A name carrying a path separator is refused rather than joined, so no
+ * descriptor can reach outside the vendor directory (`SG-CMD-001`).
+ */
+const resolveVendorBinary = (command, repositoryRoot) => {
+  const name = command.args?.[0] ?? null;
+
+  if (typeof name !== 'string' || name === '' || typeof repositoryRoot !== 'string') {
+    return null;
+  }
+
+  if (name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
+    return null;
+  }
+
+  const candidate = path.resolve(
+    repositoryRoot,
+    command.working_directory ?? '.',
+    VENDOR_BINARY_DIRECTORY,
+    name,
+  );
+
+  return isExecutable(candidate) ? candidate : null;
+};
+
+/**
+ * The one rule that turns a logical runner into the executable it runs.
+ *
+ * Activation resolves through this rule and pins what it resolved; the hook
+ * honours that pin rather than resolving again. A second copy of this mapping
+ * is how activation came to prove one program while the hook ran another, so
+ * the rule is exported once and never restated (`SG-OWNER-001`).
+ *
+ * It reads a descriptor through the command contract alone and learns nothing
+ * about which stack produced it. A runner it cannot resolve is reported as
+ * unresolved; it is never looked up through a shell (`SG-CMD-001`).
+ *
+ * @param {object} context the repository root and environment resolution reads
+ * @returns {(runner: string, command: object) => ({ executable: string, version: string|null }|null)}
+ */
+export const createRunnerResolver = ({ repositoryRoot = null, environment = process.env } = {}) => (
+  (runner, command) => {
+    if (runner === GRADER_SURFACE_RUNNER) {
+      // A repository script is a Grader surface this Node runtime can run when
+      // it is a Node module. Anything else is left unresolved rather than
+      // guessed.
+      return /\.[cm]?js$/.test(command?.args?.[0] ?? '')
+        ? { executable: process.execPath, version: process.versions.node }
+        : null;
+    }
+
+    if (runner === 'composer-bin') {
+      const executable = resolveVendorBinary(command ?? {}, repositoryRoot);
+
+      return executable === null ? null : { executable, version: null };
+    }
+
+    const name = PLATFORM_EXECUTABLES[runner] ?? null;
+
+    if (name === null) {
+      return null;
+    }
+
+    const executable = locateOnPath(name, environment);
+
+    return executable === null ? null : { executable, version: null };
+  }
+);
 
 /**
  * Activation-time executable resolution.

@@ -88,6 +88,13 @@ evidence category, and source scope.
 - Activation resolves each logical runner to a platform executable, records and
   pins its identity and version, and previews the human-readable command. An
   unresolved runner is reported, never looked up through a shell.
+- Resolution happens once, at activation. A `composer-bin` runner resolves to
+  the absolute path of the named binary under the vendor directory of the
+  descriptor's own working directory; a name containing a path separator is
+  refused rather than joined. The authoritative hook runs the executables the
+  receipt pinned and never re-resolves them: a pin that is absent, or that no
+  longer matches its runner, denies and names `gate repair`. Substituting a
+  different program is never a recovery.
 
 ### Argument composition
 

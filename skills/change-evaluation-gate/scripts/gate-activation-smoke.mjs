@@ -25,6 +25,11 @@
  *    configured with no receipt and no hook, the throwaway subject the proof
  *    ran against is gone, and the clone still commits (AC-LIFE-002,
  *    NFR-REL-003, SG-LIFE-001).
+ * 5. `vendor-binary-commit` — a clone whose required check is a `composer-bin`
+ *    descriptor runs the binary under its own vendor directory: activation pins
+ *    it, commits are allowed and denied by it, the evidence names it, and a pin
+ *    whose executable was removed denies as drift rather than re-resolving to
+ *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -64,6 +69,7 @@ import {
   registerOwnedHook,
 } from './lib/activation.mjs';
 import { createBoundedExecutor } from './lib/bounded-execution.mjs';
+import { createRunnerResolver } from './lib/command-descriptor.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -220,7 +226,7 @@ const GATE_POLICY = {
 const fixtureConfigurations = new Map();
 
 /** A throwaway clone with one baseline commit, a check, and a configuration. */
-const fixtureRepository = async () => {
+const fixtureRepository = async ({ mappings = MIGRATION_MAPPINGS, files = {} } = {}) => {
   const root = await temporaryDirectory('gate-activation-smoke-repo-');
 
   await assertThrowawayRepository(root);
@@ -229,14 +235,21 @@ const fixtureRepository = async () => {
   await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
   await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_MIGRATION_INPUT, 'utf8');
 
+  for (const [relative, file] of Object.entries(files)) {
+    const target = path.join(root, relative);
+
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, file.contents, { encoding: 'utf8', mode: file.mode ?? 0o644 });
+  }
+
   const migration = await previewConfigurationMigration({
     projectRoot: root,
-    mappings: MIGRATION_MAPPINGS,
+    mappings,
   });
 
   await migrateConfiguration({
     projectRoot: root,
-    mappings: MIGRATION_MAPPINGS,
+    mappings,
     confirmation: migration.previewHash,
   });
 
@@ -329,10 +342,11 @@ const activationRequest = (root) => ({
  */
 const selfTestEvaluation = async ({ repository }) => {
   const collected = { checks: configured(repository.root).checks };
+  // The shipped resolution rule, not a fixture of one: a self-test that
+  // resolved differently from activation would prove the wrong program.
+  const resolve = createRunnerResolver({ repositoryRoot: repository.root });
   const executor = createBoundedExecutor({
-    resolveExecutable: (command) => (
-      command.runner === 'repository-script' ? { executable: process.execPath } : null
-    ),
+    resolveExecutable: (command) => resolve(command.runner, command),
   });
   const decision = await evaluate({
     protocolVersion: '1.0',
@@ -361,13 +375,11 @@ const selfTestEvaluation = async ({ repository }) => {
   };
 };
 
+// No `resolveExecutable` is injected. Activation resolves through the shipped
+// rule, so this capability observes the executables a real clone would run
+// rather than the ones a fixture asserted (TB-024).
 const dependencies = (overrides = {}) => ({
   runGit,
-  resolveExecutable: (runner) => (
-    runner === 'repository-script'
-      ? { executable: process.execPath, version: process.versions.node }
-      : null
-  ),
   establishTrust: async () => ({
     established: true,
     grantedBy: 'gate-activation-smoke',
@@ -656,6 +668,152 @@ const rollbackLeavesNoTrace = async () => {
   check(findings, committed === true, 'A failed activation still blocked a commit.');
 
   return { name: 'rollback-leaves-no-trace', ok: findings.length === 0, findings };
+};
+
+/** The binary name a `composer-bin` descriptor stores as its leading argument. */
+const VENDOR_BINARY = 'gradecheck';
+
+/** Where that binary really lives in a clone that installed its dependencies. */
+const VENDOR_BINARY_PATH = path.join('vendor', 'bin', VENDOR_BINARY);
+
+/** Where the vendor binary records, from inside itself, that it really ran. */
+const VENDOR_BINARY_LEDGER = path.join('vendor', 'bin', 'ran.log');
+
+/**
+ * A real vendor binary. It records its own path each time it runs, so the
+ * program that graded a commit is stated by the program itself — the whole
+ * point of the defect TB-024 closes, where `composer` ran while the policy,
+ * the preview, and the evidence all named a vendor binary.
+ */
+const VENDOR_BINARY_SCRIPT = [
+  '#!/bin/sh',
+  'printf "%s\\n" "$0" >> "$(dirname "$0")/ran.log"',
+  `grep -q ${BREAKAGE} "$1" && exit 1`,
+  'exit 0',
+  '',
+].join('\n');
+
+const VENDOR_MIGRATION_MAPPINGS = {
+  profiles: { backend: 'express-typescript' },
+  commands: {
+    'verification.commands.test.both[0]': {
+      // The leading argument names the binary under the vendor directory;
+      // resolution consumes it and composition passes on the rest.
+      runner: 'composer-bin',
+      args: [VENDOR_BINARY, SOURCE],
+      timeout_seconds: 60,
+      allowed_environment: ['PATH'],
+    },
+  },
+};
+
+const attemptCommit = (root, message) => commit(root, message).then(
+  () => ({ failed: false, output: '' }),
+  (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+/**
+ * An activated clone runs the vendor binary its policy names.
+ *
+ * Every other scenario here uses `repository-script`, which resolves to this
+ * Node runtime and so could never have observed the defect: a `composer-bin`
+ * check resolved to the `composer` front end on `PATH`, ran it with the
+ * descriptor's arguments discarded, and either denied every commit or reported
+ * a passed check for a program the policy never named (FR-EVAL-001,
+ * AC-EVAL-001, FR-PROF-010, NFR-REL-003).
+ */
+const vendorBinaryCommit = async () => {
+  const findings = [];
+  const root = await fixtureRepository({
+    mappings: VENDOR_MIGRATION_MAPPINGS,
+    files: {
+      // `vendor/` is git-ignored in a real clone, so the binary is never in the
+      // graded snapshot. The tool is not the thing under test; the code is.
+      '.gitignore': { contents: 'vendor/\n' },
+      [VENDOR_BINARY_PATH]: { contents: VENDOR_BINARY_SCRIPT, mode: 0o755 },
+    },
+  });
+  const vendorBinary = path.join(root, VENDOR_BINARY_PATH);
+  const store = await storeFor(root);
+  const { preview, result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+
+  const pin = result.receipt?.runtime?.runners?.[0] ?? null;
+
+  check(
+    findings,
+    pin?.executable === vendorBinary,
+    `The receipt pinned ${pin?.executable} rather than the vendor binary at ${vendorBinary}.`,
+  );
+  check(
+    findings,
+    preview.commands?.[0]?.preview === `${vendorBinary} ${SOURCE}`,
+    `The previewed command is ${preview.commands?.[0]?.preview}, not the vendor binary the descriptor names.`,
+  );
+  check(
+    findings,
+    preview.commands?.[0]?.executable === vendorBinary,
+    `The preview would run ${preview.commands?.[0]?.executable}, not the vendor binary the descriptor names.`,
+  );
+
+  if (result.activated !== true) {
+    return { name: 'vendor-binary-commit', ok: false, findings };
+  }
+
+  // A change the vendor binary must fail really does not become a commit.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'a change the vendor binary must refuse');
+
+  check(findings, blocked.failed === true, 'The activated clone allowed a change its vendor binary fails.');
+  check(
+    findings,
+    blocked.output.includes(REQUIRED_CHECK),
+    `The denial does not name the failing check: ${blocked.output}.`,
+  );
+
+  // And the same clone still lets good work through.
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await attemptCommit(root, 'a change the vendor binary must allow');
+
+  check(findings, allowed.failed === false, `The vendor binary blocked a passing change: ${allowed.output}.`);
+
+  // Both decisions were reached by the vendor binary itself, which recorded
+  // every run from inside its own process. A `composer` front end running with
+  // the descriptor's arguments discarded could not have written this.
+  const ran = (await readFile(path.join(root, VENDOR_BINARY_LEDGER), 'utf8').catch(() => ''))
+    .split('\n')
+    .filter((line) => line.trim().length > 0);
+
+  check(
+    findings,
+    ran.length >= 2 && ran.every((line) => line === vendorBinary),
+    `The vendor binary recorded ${JSON.stringify(ran)} rather than grading both commits itself.`,
+  );
+
+  // A pinned executable that is gone denies as drift and is never re-resolved.
+  await rm(vendorBinary, { force: true });
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired twice\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const drifted = await attemptCommit(root, 'a commit whose pinned runner is gone');
+
+  check(
+    findings,
+    drifted.failed === true,
+    'A clone whose pinned executable is gone still committed; the runner re-resolved to another program.',
+  );
+  check(
+    findings,
+    drifted.output.includes(VENDOR_BINARY_PATH) && drifted.output.includes('gate repair'),
+    `The drift denial does not name the missing pin and the repair path: ${drifted.output}.`,
+  );
+
+  return { name: 'vendor-binary-commit', ok: findings.length === 0, findings };
 };
 
 /** Entries the self-test subject would leave behind if it left anything. */
@@ -990,6 +1148,7 @@ const main = async () => {
         },
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
+      await vendorBinaryCommit(),
       await derivedConfigurationRoundTrip(),
     ];
   } finally {

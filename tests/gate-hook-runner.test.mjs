@@ -292,8 +292,21 @@ test('a configured clone with no Activation receipt is refused; enforcement it n
   assert.match(result.lines.join('\n'), /receipt/i);
 });
 
+/**
+ * The pin a real activation records for the configured check: the exact
+ * executable it resolved and proved before it registered anything. The hook
+ * runs what this names and never re-resolves it.
+ */
+const PINNED_RUNNER = Object.freeze({
+  check_id: 'configuration.broad-tests.test',
+  role: 'evaluate',
+  runner: 'repository-script',
+  executable: process.execPath,
+  version: process.versions.node,
+});
+
 /** The Activation receipt a real activation publishes; the runner's input here. */
-const publishReceipt = async (root, overrides = {}) => {
+const publishReceipt = async (root, { runners = [PINNED_RUNNER], ...overrides } = {}) => {
   const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
     cwd: root,
     env: isolatedGitEnvironment(),
@@ -313,7 +326,11 @@ const publishReceipt = async (root, overrides = {}) => {
       previewId: 'sha256:preview',
       repository: { root },
       configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: { gate: 'change-evaluation-gate', runnerVersion: 'fixture/1.0.0', runners: [] },
+      runtime: {
+        gate: 'change-evaluation-gate',
+        runnerVersion: 'fixture/1.0.0',
+        runners,
+      },
       ...overrides,
     }, null, 2)}\n`,
     'utf8',
@@ -322,22 +339,55 @@ const publishReceipt = async (root, overrides = {}) => {
   return directory;
 };
 
-test('a logical runner that resolves to no platform executable denies rather than reaching for a shell', async (t) => {
+test('TB-024 AC-EVAL-001: a check the receipt pins no executable for denies rather than resolving one', async (t) => {
   const root = await throwawayRepository(t);
 
-  await configureClone(root, { runner: 'php-script', firstArgument: 'tools/check.php' });
-  await publishReceipt(root);
+  await configureClone(root);
+  // A receipt that pins nothing describes an activation of different commands.
+  // Resolving one here would run a program activation never proved.
+  await publishReceipt(root, { runners: [] });
 
-  const result = await runHook({
-    cwd: root,
-    environment: {},
-    // Nothing resolves. An unresolved runner never falls back to a shell.
-    resolveExecutable: () => null,
-  });
+  const result = await runHook({ cwd: root, environment: process.env });
 
   assert.notEqual(result.exitCode, 0);
-  assert.equal(result.reasonCode, 'runner-unresolved');
+  assert.equal(result.reasonCode, 'runner-unpinned');
   assert.match(result.lines.join('\n'), /configuration\.broad-tests\.test/);
+  assert.match(result.lines.join('\n'), /gate repair/);
+});
+
+test('TB-024 NFR-REL-003: a pinned executable that is gone denies as drift, never re-resolved to another program', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root, {
+    runners: [{ ...PINNED_RUNNER, executable: path.join(root, 'vendor/bin/removed') }],
+  });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: process.env });
+  const output = result.lines.join('\n');
+
+  assert.notEqual(
+    result.exitCode,
+    0,
+    'a commit graded by a program the receipt never pinned is the defect TB-024 closes.',
+  );
+  assert.equal(result.reasonCode, 'runner-pin-drift');
+  assert.match(output, /vendor\/bin\/removed/, 'the drift names the executable that is gone.');
+  assert.match(output, /gate repair/, 'the maintainer is told what to do, and nothing is substituted.');
+});
+
+test('TB-024 NFR-REL-003: a pin recorded for a different runner is drift, not a near-enough match', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root, { runners: [{ ...PINNED_RUNNER, runner: 'php-script' }] });
+
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.notEqual(result.exitCode, 0);
+  assert.equal(result.reasonCode, 'runner-pin-drift');
+  assert.match(result.lines.join('\n'), /gate repair/);
 });
 
 test('a descriptor its own runner cannot compose is surfaced by that reason', async (t) => {
@@ -349,7 +399,6 @@ test('a descriptor its own runner cannot compose is surfaced by that reason', as
   const result = await runHook({
     cwd: root,
     environment: {},
-    resolveExecutable: () => ({ executable: process.execPath, version: process.versions.node }),
     // The shared composition rule is the single place composition is decided;
     // a refusal from it is reported, never worked around here.
     composeArguments: () => ({
