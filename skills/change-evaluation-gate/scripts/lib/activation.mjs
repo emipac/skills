@@ -26,6 +26,7 @@ import path from 'node:path';
 import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { resolveExecutables } from './command-descriptor.mjs';
+import { validateGatePolicy } from './policy.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
 export const ACTIVATION_STEPS = Object.freeze([
@@ -1202,6 +1203,14 @@ const describeActivation = async (request, dependencies) => {
  * would pin. Consent is granted against this exact preview (FR-LIFE-004).
  */
 export const previewActivation = async (request, dependencies = {}) => {
+  const policyIssues = validateGatePolicy(request.configuration?.policy);
+
+  if (policyIssues.length > 0) {
+    throw new Error(policyIssues
+      .map((issue) => `${issue.path}: ${issue.message}`)
+      .join(' '));
+  }
+
   const described = await describeActivation(request, dependencies);
   const body = {
     repository: described.repository,

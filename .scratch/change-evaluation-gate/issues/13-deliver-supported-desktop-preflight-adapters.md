@@ -68,13 +68,20 @@ Frontend build and browser evidence are inapplicable; these are local process ad
 
 `TB-011` — adapters consume the activated runtime, identity, trust, and hook authority contract.
 
+> **Historical note — superseded.** The three sections below record this
+> ticket's reopen and the two intermediate checks that followed, each true when
+> written. All three are superseded by "Closed 2026-08-11 — one surface promoted
+> on a real client invocation" further down, which is the current state:
+> `AC-ADAPT-002` is met and both criteria are ticked. Read the sections below as
+> history, not as status.
+
 ## Reopened 2026-08-11 — declared mappings refuted by real-client evidence
 
 The first pass satisfied both acceptance criteria against INJECTED payloads
 whose shape the implementation itself invented. Driving all three real clients
 refuted **13 of 14 declared mappings, with 1 unverified and 0 surviving**.
 Passing fixtures built on a fictional payload shape is not baseline evidence,
-so `SG-SUPPORT-001` is not met and both criteria are unticked.
+so `SG-SUPPORT-001` was not met and both criteria were unticked at that point.
 
 Evidence: `.scratch/change-evaluation-gate/adapter-qualification-findings.md`.
 
@@ -119,9 +126,10 @@ the values their real clients send, and the `gate-adapter-conformance`
 capability drives a real blocked commit and presents that same decision on all
 three surfaces.
 
-**`AC-ADAPT-002` is NOT met and stays unticked.** Three of its four clauses
-hold: defined failures are `unverified`, unsupported contexts cannot claim
-support, and per-check outcomes are recorded. The first and last do not. The
+**`AC-ADAPT-002` was NOT met at this point and stayed unticked** — later met,
+see the promotion section below. Three of its four clauses held: defined
+failures are `unverified`, unsupported contexts cannot claim support, and
+per-check outcomes are recorded. The first and last did not. The
 shared baseline still runs on payloads this repository builds from the
 declaration under test, so it cannot establish that the declaration matches the
 client — the fixture and the thing under test come from the same source, which
@@ -159,20 +167,27 @@ not new work.
 
 Also out of scope and untouched: the hook-registration divergence (Finding 8).
 
-## Checked again 2026-08-11 by TB-015 — AC-ADAPT-002 still not met
+## Checked by TB-015 before the promotion — superseded
+
+> **Historical.** This check ran *before* Cursor's client-driven baseline and is
+> superseded by the promotion section above. It is kept because it records why
+> the promotion procedure had to exist. It is placed after that section only by
+> the order it was written, not by recency.
 
 Release qualification re-derived every surface's tier from its own baseline
 rather than reading the declared one. All four surfaces — the three desktop
 adapters and authoritative Git — came back `experimental` /
-`client-invocation-not-observed`, and the compatibility manifest records
-`client: null` for each, because no client was launched, probed, or driven.
+`client-invocation-not-observed` at that point, and the compatibility manifest
+recorded `client: null` for each, because no client had been launched, probed,
+or driven yet.
 
-`AC-ADAPT-002` therefore stays unticked in this ticket and in `TB-015`, and this
-ticket stays REOPEN. The remaining work is unchanged and is now written down as
-an executable checklist: `PROMOTION_REQUIREMENTS` in
+`AC-ADAPT-002` was therefore unticked at that moment, and the remaining work was
+written down as an executable checklist: `PROMOTION_REQUIREMENTS` in
 `skills/change-evaluation-gate/scripts/lib/release-qualification.mjs`, and
 section 5 of
 `skills/change-evaluation-gate/references/release-qualification-contract.md`.
+Cursor was then promoted by following exactly that checklist, which is what the
+promotion section above records.
 
 Nothing in `adapters.mjs` was modified by `TB-015`.
 

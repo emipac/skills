@@ -188,6 +188,21 @@ const activateFixture = async (root, request, deps) => {
   return activate(request, deps);
 };
 
+test('activation preview refuses invalid Gate policy before consent is possible', async (t) => {
+  const root = await throwawayRepository(t);
+  const request = activationRequest(root, {
+    configuration: {
+      schemaVersion: 4,
+      policy: { ...gatePolicy(), bypass: {} },
+    },
+  });
+
+  await assert.rejects(
+    previewActivation(request, dependencies()),
+    /The bypass subcontract must state explicitly whether bypass is enabled/,
+  );
+});
+
 test('failure immediately before Git enablement leaves the clone configured with no receipt and no registration', async (t) => {
   const root = await throwawayRepository(t);
   const store = await storeFor(root);

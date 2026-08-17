@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -17,8 +17,50 @@ import {
   gateChecksFromConfiguration,
 } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
 import { validateCheckDescriptor } from '../skills/change-evaluation-gate/scripts/lib/check-descriptor.mjs';
+import { validateGatePolicy } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 
 const temporaryRoot = async () => mkdtemp(path.join(tmpdir(), 'gate-configuration-'));
+
+test('the documented starter policy is accepted by setup and the Gate runtime', async (context) => {
+  const root = await temporaryRoot();
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const guide = await readFile(path.join(process.cwd(), 'docs', 'framework-guide.html'), 'utf8');
+  const sample = guide.match(/cat &gt; policy\.json &lt;&lt;'JSON'\n(?<policy>\{[\s\S]*?\n\})\nJSON<\/code>/);
+
+  assert.notEqual(sample?.groups?.policy, undefined, 'The guide must contain its starter policy.');
+
+  const policy = JSON.parse(sample.groups.policy);
+
+  await writeFile(path.join(root, CONFIGURATION_FILE), 'schema_version: 4\nhistory: {}\n');
+
+  const preview = await previewGateConfiguration({ projectRoot: root, policy });
+
+  assert.equal(preview.status, 'ready');
+  assert.deepEqual(validateGatePolicy(policy), []);
+});
+
+test('framework setup refuses a policy the Gate runtime cannot evaluate', async (context) => {
+  const root = await temporaryRoot();
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const policy = {
+    checks: { required: [], advisory: [] },
+    budget: { total_seconds: 900 },
+    bypass: {},
+    execution: {},
+    evidence: {},
+  };
+
+  await writeFile(path.join(root, CONFIGURATION_FILE), 'schema_version: 4\nhistory: {}\n');
+
+  assert.deepEqual(
+    validateGatePolicy(policy).map((issue) => issue.code),
+    ['gate-policy-bypass-invalid'],
+  );
+  await assert.rejects(
+    previewGateConfiguration({ projectRoot: root, policy }),
+    /The bypass subcontract must state explicitly whether bypass is enabled/,
+  );
+});
 
 test('the configuration reader reads the block structure the framework is configured in', () => {
   const document = [
@@ -116,7 +158,7 @@ test('a migrated and Gate-configured repository reads like equivalent block YAML
   const policy = {
     checks: { required: ['configuration.broad-tests.test'], advisory: [] },
     budget: { total_seconds: 300 },
-    bypass: {},
+    bypass: { enabled: false },
     execution: {},
     evidence: {},
   };
@@ -184,7 +226,8 @@ test('a migrated and Gate-configured repository reads like equivalent block YAML
     '    advisory: []',
     '  budget:',
     '    total_seconds: 300',
-    '  bypass: {}',
+    '  bypass:',
+    '    enabled: false',
     '  execution: {}',
     '  evidence: {}',
     'history:',

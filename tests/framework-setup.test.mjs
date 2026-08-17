@@ -824,7 +824,7 @@ protected_files: []
       advisory: ['review'],
     },
     budget: { total_seconds: 600 },
-    bypass: {},
+    bypass: { enabled: false },
     execution: {},
     evidence: {},
   };
@@ -865,7 +865,7 @@ protected_files: []
   const policy = {
     checks: { required: ['unit'], advisory: [] },
     budget: { total_seconds: 300 },
-    bypass: {},
+    bypass: { enabled: false },
     execution: {},
     evidence: {},
   };
@@ -904,7 +904,7 @@ test('rejects Gate configuration outside the strict schema v4 policy boundary', 
   const policy = {
     checks: { required: ['unit'], advisory: [] },
     budget: { total_seconds: 300 },
-    bypass: {},
+    bypass: { enabled: false },
     execution: {},
     evidence: {},
   };
@@ -983,7 +983,7 @@ test('exposes dormant Gate configuration through an explicit previewed command',
   const policy = {
     checks: { required: ['unit'], advisory: [] },
     budget: { total_seconds: 300 },
-    bypass: {},
+    bypass: { enabled: false },
     execution: {},
     evidence: {},
   };

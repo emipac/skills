@@ -50,6 +50,8 @@ import { promisify } from 'node:util';
 
 import {
   configureGate,
+  draftGatePolicy,
+  draftMigrationMapping,
   migrateConfiguration,
   previewConfigurationMigration,
   previewGateConfiguration,
@@ -69,6 +71,7 @@ import {
 } from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
+import { validateGatePolicy } from './lib/policy.mjs';
 
 const CAPABILITY = 'gate-activation-smoke';
 
@@ -742,6 +745,233 @@ const hookProgramSelfTest = async () => {
   return { name: 'hook-program-self-test', ok: findings.length === 0, findings };
 };
 
+/**
+ * The proved facts that fill the mapping draft's `null` leaves.
+ *
+ * This is the maintainer's half of the exchange and nothing more: the document
+ * being migrated is the draft's own, keyed and shaped by the tooling, and only
+ * the values the framework refused to guess are supplied here.
+ */
+const PROVED_FILL = {
+  profile: 'express-typescript',
+  runner: 'repository-script',
+  args: ['tools/check.mjs', SOURCE],
+  timeout_seconds: 60,
+};
+
+const fillMappingDraft = (draft) => ({
+  profiles: Object.fromEntries(
+    Object.keys(draft.profiles).map((profile) => [profile, PROVED_FILL.profile]),
+  ),
+  commands: Object.fromEntries(Object.entries(draft.commands).map(([commandPath, fields]) => [
+    commandPath,
+    Object.fromEntries(Object.keys(fields).map((field) => [field, PROVED_FILL[field]])),
+  ])),
+});
+
+/**
+ * Activate a clone configured entirely through the drafted policy, then prove
+ * a required drafted check binds for real: it denies a commit it must deny
+ * and allows one it must allow.
+ *
+ * `derivedConfigurationRoundTrip` used to stop once the clone reported
+ * `configured: true`, which never asked whether a drafted identity binds at
+ * evaluation. This is the TB-023 extension that asks that question against a
+ * real activated hook and real `git commit` invocations, the same proof
+ * `authoritativeCommit` runs for the hand-written policy.
+ */
+const activateAndProveDerivedPolicyEnforces = async (root, configuration) => {
+  const findings = [];
+
+  fixtureConfigurations.set(root, configuration);
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const store = await storeFor(root);
+  const { result } = await activateFixture(root, store);
+
+  check(
+    findings,
+    result.activated === true,
+    `Activation of the drafted, configured clone did not succeed: ${result.reasonCode}.`,
+  );
+
+  if (result.activated !== true) {
+    return { name: 'derived-policy-enforces', ok: false, findings };
+  }
+
+  // A change whose required drafted check fails must not become a commit.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await commit(root, 'a change the drafted policy must refuse').then(
+    () => ({ failed: false, stdout: '', stderr: '' }),
+    (error) => ({ failed: true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+
+  check(
+    findings,
+    blocked.failed === true,
+    'A required identity drafted by --draft-policy did not deny a commit it should deny.',
+  );
+  check(
+    findings,
+    `${blocked.stdout}${blocked.stderr}`.includes('change-evaluation-gate'),
+    'The blocked commit did not report the gate decision.',
+  );
+
+  // The same clone must still let good work through.
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await commit(root, 'a change the drafted policy must allow').then(
+    () => ({ failed: false }),
+    (error) => ({ failed: true, stderr: error.stderr ?? '' }),
+  );
+
+  check(
+    findings,
+    allowed.failed === false,
+    `The drafted, activated policy blocked a passing change: ${allowed.stderr}.`,
+  );
+
+  return { name: 'derived-policy-enforces', ok: findings.length === 0, findings };
+};
+
+/**
+ * The round trip a maintainer actually walks, with no hand-written JSON.
+ *
+ * Draft the mapping, fill only its `null` leaves, migrate, draft the policy,
+ * configure the Gate. Every document in the path is emitted by the tooling from
+ * proved project facts, and the drafts are proved to be refused while they still
+ * carry a `null` (AC-CFG-002, FR-PROF-010, SG-CMD-001, SG-OWNER-001). It then
+ * activates the clone on the drafted policy alone and proves a required
+ * drafted check actually binds and denies a commit it should deny
+ * (FR-EVAL-001, NFR-REL-003).
+ */
+const derivedConfigurationRoundTrip = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-activation-smoke-draft-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, 'package.json'), '{"name":"gate-activation-smoke"}\n', 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_MIGRATION_INPUT, 'utf8');
+
+  const before = await readFile(path.join(root, CONFIGURATION_FILE), 'utf8');
+  const report = await previewConfigurationMigration({ projectRoot: root, mappings: {} });
+  const mappingDraft = await draftMigrationMapping({ projectRoot: root });
+
+  check(
+    findings,
+    JSON.stringify(Object.keys(mappingDraft.commands))
+      === JSON.stringify(report.ambiguities
+        .filter((ambiguity) => ambiguity.path.startsWith('verification.'))
+        .map((ambiguity) => ambiguity.path)),
+    `The mapping draft is not keyed by the reported ambiguities: ${JSON.stringify(Object.keys(mappingDraft.commands))}.`,
+  );
+  check(
+    findings,
+    ['status', 'fromVersion', 'previewHash', 'ambiguities']
+      .every((envelopeKey) => !(envelopeKey in mappingDraft)),
+    'The mapping draft carries the migration report envelope it must not.',
+  );
+  check(
+    findings,
+    (await readFile(path.join(root, CONFIGURATION_FILE), 'utf8')) === before,
+    'Drafting the mapping changed the configuration.',
+  );
+
+  // A draft that still carries a `null` is refused, never filled with a guess.
+  check(
+    findings,
+    await previewConfigurationMigration({ projectRoot: root, mappings: mappingDraft })
+      .then(() => false, () => true),
+    'A null-bearing mapping draft was accepted rather than refused.',
+  );
+
+  const mappings = fillMappingDraft(mappingDraft);
+  const migration = await previewConfigurationMigration({ projectRoot: root, mappings });
+
+  check(
+    findings,
+    migration.status === 'ready',
+    `The filled mapping draft did not reach ready: ${migration.status}.`,
+  );
+
+  const migrated = await migrateConfiguration({
+    projectRoot: root,
+    mappings,
+    confirmation: migration.previewHash,
+  });
+
+  check(findings, migrated.status === 'migrated', `The migration did not apply: ${migrated.status}.`);
+
+  const migratedContents = await readFile(path.join(root, CONFIGURATION_FILE), 'utf8');
+  const policyDraft = await draftGatePolicy({ projectRoot: root });
+  const issues = validateGatePolicy(policyDraft);
+
+  check(
+    findings,
+    issues.length === 0,
+    `The drafted policy does not validate: ${JSON.stringify(issues)}.`,
+  );
+  check(
+    findings,
+    policyDraft.checks.required.length > 0
+      && !policyDraft.checks.required.some(
+        (identity) => policyDraft.checks.advisory.includes(identity),
+      ),
+    'The drafted policy does not partition required and advisory bindings.',
+  );
+  check(
+    findings,
+    !('previewHash' in policyDraft),
+    'The policy draft is self-confirming: it carries a previewHash.',
+  );
+  check(
+    findings,
+    (await readFile(path.join(root, CONFIGURATION_FILE), 'utf8')) === migratedContents,
+    'Drafting the policy changed the configuration.',
+  );
+
+  const preview = await previewGateConfiguration({ projectRoot: root, policy: policyDraft });
+
+  check(findings, preview.configured === false, 'A Gate preview reported the clone as configured.');
+
+  const gate = await configureGate({
+    projectRoot: root,
+    policy: policyDraft,
+    confirmation: preview.previewHash,
+  });
+
+  check(findings, gate.status === 'configured', `The drafted policy did not configure: ${gate.status}.`);
+  check(findings, gate.activated === false, 'Configuring the Gate activated the clone.');
+
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const configured = read.ok && Boolean(read.configuration?.evaluation_gate);
+
+  check(findings, configured, `The configured clone is unreadable: ${read.detail}.`);
+
+  const enforcement = configured
+    ? await activateAndProveDerivedPolicyEnforces(root, read.configuration)
+    : { name: 'derived-policy-enforces', ok: false, findings: ['Skipped: the drafted policy did not configure.'] };
+
+  findings.push(...enforcement.findings);
+
+  return {
+    name: 'derived-configuration-round-trip',
+    ok: findings.length === 0 && enforcement.ok,
+    configured,
+    activated: enforcement.ok,
+    findings,
+  };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -760,6 +990,7 @@ const main = async () => {
         },
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
+      await derivedConfigurationRoundTrip(),
     ];
   } finally {
     for (const root of temporaryRoots) {

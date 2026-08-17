@@ -117,12 +117,24 @@ nothing, and lacking native blocking never disqualifies it. CLI, SSH, remote,
 cloud, and background-agent variants are experimental; chat-only or hosted
 surfaces without repository, process, and Git access are unsupported.
 
-All three desktop surfaces are currently `experimental`. Their declared fields
-and event values come from real captured client payloads and each passes the
-offline baseline, but no adapter has yet been driven end to end by a real
-client invocation, and a baseline whose fixtures came from the declaration
-under test cannot establish support. Report them as declared, never as
-supported.
+**Cursor `3.15.6` is `supported`.** Its baseline was driven by a real Cursor
+invocation: all eleven checks passed, including `captured-payload-readable`,
+which proves the adapter's declared field names read what the client actually
+sends rather than what the declaration assumed. The exact version came from
+`payload.cursor_version` in the same invocation as the capture, and the record
+is `.scratch/change-evaluation-gate/client-baselines/cursor.json`.
+
+`claude-code-desktop`, `codex-desktop`, and authoritative `git` remain
+`experimental` / `client-invocation-not-observed`. Their declared fields and
+event values come from real captured client payloads and each passes the
+offline baseline, but none has been driven end to end by a real client
+invocation, and a baseline whose fixtures came from the declaration under test
+cannot establish support. Report those three as declared, never as supported.
+Git's tier reflects baseline provenance only; it is authoritative regardless.
+
+A tier is always derived from the evidence beside it, never declared. Read the
+current tiers from `npm run gate-runtime-portability` rather than from prose —
+including this paragraph.
 
 Installing an adapter never registers it. Adapters are dormant assets until the
 Activation transaction self-tests and registers them.
