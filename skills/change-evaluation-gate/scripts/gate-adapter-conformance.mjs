@@ -29,6 +29,11 @@
  *    inside one, reports `unverified` when no repository contains it, and
  *    reports `unverified` for a multi-root workspace rather than selecting one
  *    of its roots (FR-ADAPT-003, FR-ADAPT-005).
+ * 5. `packaged-preflight-answers-client` — the packaged preflight program is
+ *    launched as a child process with a real client-shaped payload on stdin
+ *    against a throwaway clone; a failing required check produces the
+ *    declared stdout feedback naming that check, and a passing turn produces
+ *    no follow-up (AC-ADAPT-001, FR-ADAPT-002).
  *
  * NO DESKTOP CLIENT IS REQUIRED. Nothing here launches, probes, or detects
  * Claude Code Desktop, Codex Desktop, or Cursor. Each surface is driven by an
@@ -53,7 +58,7 @@
  * Exit status is 0 only when every scenario holds.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -830,6 +835,176 @@ const repositoryRootIsResolved = async () => {
   return { name: 'repository-root-is-resolved', ok: findings.length === 0, findings };
 };
 
+const PACKAGED_PREFLIGHT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'gate-preflight.mjs',
+);
+
+const runPackagedPreflight = ({ cwd, payload, args }) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [PACKAGED_PREFLIGHT, ...args], {
+    cwd,
+    env: gitEnvironment(),
+  });
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  child.on('error', reject);
+  child.on('close', (exitCode) => resolve({ exitCode, stdout, stderr }));
+  child.stdin.end(`${JSON.stringify(payload)}\n`);
+});
+
+/**
+ * The packaged program, launched as a process, answers a client-shaped payload.
+ *
+ * Until this program existed, every adapter-conformance scenario called
+ * library functions. Registration wrote a command; nothing here ever launched
+ * it. This scenario is that launch (AC-ADAPT-001, FR-ADAPT-002).
+ */
+const packagedPreflightAnswersClient = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-adapter-preflight-');
+
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\n', 'utf8');
+  await writeFile(
+    path.join(root, 'tools/check.mjs'),
+    [
+      "import { readFile } from 'node:fs/promises';",
+      '',
+      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      '',
+      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    [
+      'schema_version: 4',
+      'backend: unknown',
+      'frontend: none',
+      'verification:',
+      '  profile: gate-adapter-conformance',
+      '  capabilities: []',
+      '  commands:',
+      '    test:',
+      '      backend: []',
+      '      frontend: []',
+      '      both:',
+      '        - runner: repository-script',
+      '          args:',
+      '            - tools/check.mjs',
+      '            - app/Order.php',
+      '          working_directory: "."',
+      '          timeout_seconds: 60',
+      '          allowed_environment:',
+      '            - PATH',
+      '          evidence_category: test',
+      '          source_scope: both',
+      'evaluation_gate:',
+      '  checks:',
+      '    required:',
+      '      - configuration.broad-tests.test',
+      '    advisory: []',
+      '  budget:',
+      '    total_seconds: 600',
+      '  bypass:',
+      '    enabled: false',
+      '  execution: {}',
+      '  evidence: {}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const common = (await git(root, ['rev-parse', '--git-common-dir'])).stdout.trim();
+  const receiptDirectory = path.resolve(root, common, 'change-evaluation-gate/evidence/activation');
+
+  await mkdir(receiptDirectory, { recursive: true });
+  await writeFile(
+    path.join(receiptDirectory, 'receipt.json'),
+    `${JSON.stringify({
+      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+      receiptId: 'sha256:receipt',
+      previewId: 'sha256:preview',
+      repository: { root },
+      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
+      runtime: {
+        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+        runnerVersion: 'fixture/1.0.0',
+        runners: [{
+          check_id: 'configuration.broad-tests.test',
+          role: 'evaluate',
+          runner: 'repository-script',
+          executable: process.execPath,
+          version: process.versions.node,
+        }],
+      },
+    }, null, 2)}\n`,
+    'utf8',
+  );
+
+  const adapter = describeAdapter('cursor');
+  const field = adapter.capabilities.feedback.field;
+  const payload = buildNativePayload(adapter, {
+    nativeEvent: adapter.nativeEvents['work-complete'],
+    repositoryRoot: root,
+    sessionId: 'conformance-preflight',
+  });
+
+  const passing = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+
+  check(findings, passing.exitCode === 0, `a passing preflight exited ${passing.exitCode}: ${passing.stderr}`);
+  check(findings, passing.stdout === '', `a passing preflight wrote follow-up: ${passing.stdout}`);
+
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const failing = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+  let body = null;
+
+  try {
+    body = JSON.parse(failing.stdout);
+  } catch (error) {
+    check(findings, false, `a failing preflight did not write JSON (${error.message}): ${failing.stdout}`);
+  }
+
+  check(findings, failing.exitCode === 0, `a failing preflight exited ${failing.exitCode}: ${failing.stderr}`);
+  check(
+    findings,
+    typeof body?.[field] === 'string' && body[field].includes('configuration.broad-tests.test'),
+    `a failing preflight did not name the required check in ${field}: ${failing.stdout}`,
+  );
+  check(
+    findings,
+    typeof body?.[field] !== 'string' || !/this commit was not authorized/i.test(body[field]),
+    'a worktree preflight described itself as the decision a commit would receive.',
+  );
+
+  return { name: 'packaged-preflight-answers-client', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -840,6 +1015,7 @@ const main = async () => {
       await supportedDesktopBaseline(),
       await failuresAreUnverified(),
       await repositoryRootIsResolved(),
+      await packagedPreflightAnswersClient(),
     ];
   } finally {
     for (const root of temporaryRoots) {

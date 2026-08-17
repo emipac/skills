@@ -401,6 +401,7 @@ test('TB-013 / FR-ADAPT-003: no desktop surface declares a commit-attempt event,
 const CAPABILITY_CATEGORIES = [
   'blocking',
   'event',
+  'feedback',
   'filesystem',
   'git',
   'invocation',
@@ -409,7 +410,7 @@ const CAPABILITY_CATEGORIES = [
   'trust',
 ];
 
-test('FR-ADAPT-004: every v1 adapter declares its own event, blocking, trust, repository, session, filesystem, Git, and invocation capabilities instead of inheriting another client contract', () => {
+test('FR-ADAPT-004: every v1 adapter declares its own event, blocking, trust, repository, session, filesystem, Git, invocation, and feedback capabilities instead of inheriting another client contract', () => {
   assert.deepEqual(
     [...ADAPTER_CAPABILITY_CATEGORIES].sort(),
     CAPABILITY_CATEGORIES,

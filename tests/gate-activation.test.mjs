@@ -922,13 +922,17 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
 
   assert.equal(result.activated, true, `Activation refused: ${result.reasonCode}.`);
 
-  const command = `"${process.execPath}" "${path.join(root, 'tools/gate-runner.mjs')}"`;
+  const commandFor = (adapterId) => `"${process.execPath}" "${path.join(root, 'tools/gate-runner.mjs')}" "--adapter" "${adapterId}"`;
   const general = JSON.parse(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'));
   const dedicated = JSON.parse(await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'));
 
-  // Each surface received the Gate entry in its own declared block schema.
-  assert.deepEqual(general.hooks.Stop.at(-1), { matcher: '', hooks: [{ type: 'command', command }] });
-  assert.deepEqual(dedicated.hooks.stop.at(-1), { command });
+  // Each surface received the Gate entry in its own declared block schema,
+  // pointing at the preflight program named with that adapter's id.
+  assert.deepEqual(general.hooks.Stop.at(-1), {
+    matcher: '',
+    hooks: [{ type: 'command', command: commandFor('claude-code-desktop') }],
+  });
+  assert.deepEqual(dedicated.hooks.stop.at(-1), { command: commandFor('cursor') });
 
   // Every unrelated key and every unrelated entry survived activation.
   assert.deepEqual(general.permissions, { allow: ['Bash(ls:*)'], deny: [] });

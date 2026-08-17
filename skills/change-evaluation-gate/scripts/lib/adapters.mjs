@@ -29,9 +29,10 @@ import { authorizationFor } from './policy.mjs';
  * These are the axes of the shared client compatibility baseline: deterministic
  * event delivery, non-interactive invocation with a visible structured result,
  * repository and session identity, filesystem and Git access, trust failure
- * handling, parallel isolation, and declared native blocking. An adapter states
- * all eight; nothing is inherited from another client (FR-ADAPT-004,
- * NFR-COMP-001).
+ * handling, parallel isolation, declared native blocking, and the feedback
+ * channel by which a running adapter returns a preflight result to its client.
+ * An adapter states all nine; nothing is inherited from another client
+ * (FR-ADAPT-004, NFR-COMP-001).
  */
 export const ADAPTER_CAPABILITY_CATEGORIES = Object.freeze([
   'event',
@@ -42,6 +43,7 @@ export const ADAPTER_CAPABILITY_CATEGORIES = Object.freeze([
   'filesystem',
   'git',
   'invocation',
+  'feedback',
 ]);
 
 /** The fields each category must state. An empty category declares nothing. */
@@ -54,6 +56,7 @@ const CAPABILITY_FIELDS = Object.freeze({
   filesystem: Object.freeze(['sameFilesAsClient']),
   git: Object.freeze(['metadata', 'index']),
   invocation: Object.freeze(['nonInteractive', 'mechanism', 'structuredResult', 'timeoutMs']),
+  feedback: Object.freeze(['channel', 'field', 'none']),
 });
 
 /** The sentinel a raced invocation resolves with when its timeout wins. */
@@ -167,6 +170,11 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 600_000,
       }),
+      feedback: Object.freeze({
+        channel: null,
+        field: null,
+        none: '',
+      }),
     }),
   }),
   'claude-code-desktop': Object.freeze({
@@ -233,6 +241,11 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 300_000,
       }),
+      feedback: Object.freeze({
+        channel: null,
+        field: null,
+        none: '',
+      }),
     }),
   }),
   'codex-desktop': Object.freeze({
@@ -291,6 +304,11 @@ const ADAPTER_REGISTRY = Object.freeze({
         mechanism: 'child-process',
         structuredResult: true,
         timeoutMs: 300_000,
+      }),
+      feedback: Object.freeze({
+        channel: null,
+        field: null,
+        none: '',
       }),
     }),
   }),
@@ -361,6 +379,11 @@ const ADAPTER_REGISTRY = Object.freeze({
         mechanism: 'child-process',
         structuredResult: true,
         timeoutMs: 300_000,
+      }),
+      feedback: Object.freeze({
+        channel: 'stdout-json',
+        field: 'followup_message',
+        none: '',
       }),
     }),
   }),
@@ -582,6 +605,50 @@ export const presentDecision = ({ adapterId, decision }) => {
       checks: (decision.checks ?? []).map(presentCheck),
     },
   };
+};
+
+/**
+ * Render one presented decision through the adapter's declared feedback channel.
+ *
+ * The runner never learns a client field name: it asks this function, and this
+ * function reads the field from the declaration (FR-ADAPT-004, SG-OWNER-001).
+ * A passing preflight returns the declared silence form so a clean turn is not
+ * interrupted. Every other outcome — a failed required check, unverified
+ * coverage, or a harness fault — occupies the declared field. An adapter that
+ * declares no channel returns none.
+ */
+export const formatFeedback = ({ adapterId, view } = {}) => {
+  const adapter = describeAdapter(adapterId);
+  const feedback = adapter?.capabilities?.feedback ?? null;
+
+  if (feedback === null || feedback.channel === null) {
+    return typeof feedback?.none === 'string' ? feedback.none : '';
+  }
+
+  const silent = view?.outcome === 'passed' && view?.failure == null;
+
+  if (silent) {
+    return typeof feedback.none === 'string' ? feedback.none : '';
+  }
+
+  if (feedback.channel !== 'stdout-json' || typeof feedback.field !== 'string') {
+    return typeof feedback.none === 'string' ? feedback.none : '';
+  }
+
+  const failing = (view?.presentation?.checks ?? []).filter(
+    (check) => check?.outcome !== 'passed' && check?.outcome !== 'not-applicable',
+  );
+  let message;
+
+  if (view?.failure) {
+    message = `Preflight (not a commit decision): unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`;
+  } else if (failing.length > 0) {
+    message = `Preflight (not a commit decision): ${failing.map((check) => `${check.id} ${check.outcome}`).join('; ')}.`;
+  } else {
+    message = `Preflight (not a commit decision): ${view?.outcome ?? 'unverified'}.`;
+  }
+
+  return `${JSON.stringify({ [feedback.field]: message })}\n`;
 };
 
 /**

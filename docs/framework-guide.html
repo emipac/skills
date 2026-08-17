@@ -1412,6 +1412,11 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
 
       <p>
         A denial tells you which check failed and why, without you having to dig through logs.
+        That explanation is also written to the clone-local evidence record, so it is still
+        there after the terminal has scrolled. If the record cannot be written, the commit is
+        refused — a decision with nothing to point at afterwards is not an authorisation.
+      </p>
+      <p>
         Your working directory is never modified by an evaluation — checks that would rewrite
         your code are rejected at commit time and belong to a separate explicit fix operation.
       </p>
@@ -1502,6 +1507,14 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           </tbody>
         </table>
       </div>
+      <p>
+        After you activate, Cursor may send a follow-up when a required check fails on the work
+        in front of the agent. A clean turn is left alone. That message is not the decision a
+        commit would receive: preflight grades the working tree, including unstaged edits;
+        <code>git commit</code> still grades the isolated snapshot. Claude Code Desktop and Codex
+        Desktop do not currently send a follow-up — they have no declared channel to answer
+        through — so silence from those clients is not a pass.
+      </p>
 
       <h3>One environment is claimed</h3>
       <p>
@@ -1538,7 +1551,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         <div><dt>Snapshot</dt><dd>An isolated copy of exactly the content being committed, so results cannot be confused with unstaged edits.</dd></div>
         <div><dt>unverified</dt><dd>The check could not be trusted to have run correctly. Treated as blocking, never as a pass.</dd></div>
         <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned.</dd></div>
-        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit.</dd></div>
+        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure may return as a follow-up; a clean turn stays quiet.</dd></div>
       </dl>
     </section>
 

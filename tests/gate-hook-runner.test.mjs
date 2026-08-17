@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import {
   HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION,
 } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
+import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import {
   SELF_TEST_ENV,
   runHook,
@@ -273,7 +274,9 @@ const configureClone = async (root, overrides = {}) => {
       '  bypass:',
       '    enabled: false',
       '  execution: {}',
-      '  evidence: {}',
+      ...(overrides.inlineBytes === undefined
+        ? ['  evidence: {}']
+        : ['  evidence:', `    inline_bytes: ${overrides.inlineBytes}`]),
       '',
     ].join('\n'),
     'utf8',
@@ -327,7 +330,7 @@ const publishReceipt = async (root, { runners = [PINNED_RUNNER], ...overrides } 
       repository: { root },
       configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
       runtime: {
-        gate: 'change-evaluation-gate',
+        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
         runnerVersion: 'fixture/1.0.0',
         runners,
       },
@@ -500,6 +503,275 @@ test('a decision that is not an allow authorization never exits 0', async (t) =>
 
   assert.notEqual(result.exitCode, 0);
   assert.equal(result.reasonCode, 'decision-malformed');
+});
+
+/**
+ * TB-026 — Persist the Evidence the authoritative decision is made from.
+ *
+ * `runHook` never bound an `evidenceStore`, so a commit-time evaluation
+ * appended nothing: no envelope, no log entry, no Lifecycle event, and the
+ * failing command's own output was discarded because output capture was off.
+ * These fixtures drive the store the runner now opens against the receipt it
+ * already reads, using real files under the throwaway clone's own
+ * `.git/change-evaluation-gate/evidence`.
+ */
+
+/** Read-only access to whatever the packaged runner already wrote for `root`. */
+const readStore = async (root) => openEvidenceStore({
+  repositoryRoot: root,
+  identity: {
+    actor: { name: null, source: 'test-reader' },
+    client: { id: 'git', surface: 'git-pre-commit', version: '1.0.0' },
+    gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+    repository: { identity: 'sha256:read' },
+  },
+});
+
+test('TB-026 AC-EVID-001, AC-EVAL-001: a denied commit persists exactly one Evidence envelope naming the failing check with its bounded output', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.notEqual(result.exitCode, 0);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 1, 'a denied commit must leave exactly one Evidence envelope.');
+
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.notEqual(envelope, null);
+  assert.equal(
+    envelope.decision.checks.find((check) => check.id === 'configuration.broad-tests.test')?.outcome,
+    'failed',
+  );
+
+  const attempt = envelope.retention.attempts
+    .find((entry) => entry.checkId === 'configuration.broad-tests.test');
+
+  assert.notEqual(attempt, undefined, 'the failing check must leave a retained attempt.');
+  assert.match(
+    attempt.inline,
+    /graded \d+ bytes/,
+    "the retained excerpt must carry what the check's own process actually printed.",
+  );
+
+  const evaluationEvent = (await store.readEvents()).find((event) => event.type === 'evaluation');
+
+  assert.notEqual(evaluationEvent, undefined, 'AC-EVID-002, FR-EVID-005: the evaluation must leave a Lifecycle event.');
+  assert.equal(evaluationEvent.outcome, 'succeeded');
+  assert.equal(evaluationEvent.client.id, 'git');
+  assert.equal(evaluationEvent.gate.id, 'change-evaluation-gate');
+  assert.equal(typeof evaluationEvent.repository.identity, 'string');
+  assert.equal(evaluationEvent.actor.authenticated, false, 'NFR-AUD-001: the actor is explicitly unauthenticated.');
+});
+
+test('TB-026 AC-EVID-001, AC-EVAL-001: an allowed commit also persists its Evidence envelope and Lifecycle event', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(result.exitCode, 0, `expected an allow, got: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 1, 'an allowed commit must also leave exactly one Evidence envelope.');
+
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.equal(envelope.decision.authorization, 'allow');
+  assert.notEqual(
+    envelope.retention.attempts.find((entry) => entry.checkId === 'configuration.broad-tests.test'),
+    undefined,
+  );
+  assert.equal(
+    (await store.readEvents()).filter((event) => event.type === 'evaluation').length,
+    1,
+    'one governed action, one Lifecycle event.',
+  );
+});
+
+test('TB-026 SG-SECRET-001: a declared runtime input a check prints is redacted before it is persisted', async (t) => {
+  const root = await throwawayRepository(t);
+  const SECRET = 'sk-live-canary-4f2b81d0e6a7';
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(
+    path.join(root, 'tools/echo-secret.mjs'),
+    "process.stdout.write(`token=${process.env.APP_TOKEN ?? ''}\\n`);\n",
+    'utf8',
+  );
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    [
+      'schema_version: 4',
+      'backend: unknown',
+      'frontend: none',
+      'verification:',
+      '  profile: gate-hook-runner',
+      '  capabilities: []',
+      '  commands:',
+      '    test:',
+      '      backend: []',
+      '      frontend: []',
+      '      both:',
+      '        - runner: repository-script',
+      '          args:',
+      '            - tools/echo-secret.mjs',
+      '          working_directory: "."',
+      '          timeout_seconds: 60',
+      '          allowed_environment:',
+      '            - PATH',
+      '            - APP_TOKEN',
+      '          evidence_category: test',
+      '          source_scope: both',
+      'evaluation_gate:',
+      '  checks:',
+      '    required:',
+      '      - configuration.broad-tests.test',
+      '    advisory: []',
+      '  budget:',
+      '    total_seconds: 600',
+      '  bypass:',
+      '    enabled: false',
+      '  execution: {}',
+      '  evidence: {}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  await publishReceipt(root, { runtimeInputs: ['APP_TOKEN'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: { ...process.env, APP_TOKEN: SECRET },
+  });
+
+  assert.equal(result.exitCode, 0, `expected an allow, got: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+  const serialized = JSON.stringify(envelope);
+
+  assert.doesNotMatch(serialized, new RegExp(SECRET), 'the raw runtime input value must never reach the envelope.');
+  assert.match(serialized, /\[redacted]/, 'the redaction placeholder must stand in for it.');
+
+  const declared = envelope.redaction.secrets.find((secret) => secret.name === 'APP_TOKEN');
+
+  assert.notEqual(declared, undefined);
+  assert.equal(declared.source, 'approved-environment-file');
+  assert.equal('value' in declared, false, 'only the name and source of a Sensitive input may be recorded, never its value.');
+});
+
+test("TB-026 FR-EVID-003: the ceilings applied are the clone's own evaluation_gate.evidence limits", async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { inlineBytes: 24 });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(result.exitCode, 0, `expected an allow, got: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.equal(
+    envelope.retention.limits.inlineBytes,
+    24,
+    "the clone's own lower configured ceiling must be the one applied, not the v1 default.",
+  );
+});
+
+test('TB-026 NFR-REL-003: a store that cannot be opened denies the commit with a distinct stated reason', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: process.env,
+    openEvidenceStore: async () => { throw new Error('injected: store cannot be opened'); },
+  });
+
+  assert.notEqual(result.exitCode, 0, 'a store that cannot be opened must never allow an unrecorded commit.');
+  assert.equal(result.reasonCode, 'evidence-store-unavailable');
+  assert.match(result.lines.join('\n'), /injected: store cannot be opened/);
+});
+
+test('TB-026 NFR-REL-003: an otherwise-passing commit whose evidence append fails is never allowed unrecorded', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: process.env,
+    // The store opens fine; only persistence fails. `evaluate.mjs`'s own
+    // `persistEvidence` treats this as a diagnosable local fault and leaves the
+    // decision an `allow` (NFR-OPER-001) — the authoritative path's own,
+    // stricter contract is what must turn that into a denial here.
+    openEvidenceStore: async (options) => {
+      const store = await openEvidenceStore(options);
+
+      return { ...store, appendEvidence: async () => { throw new Error('injected: append failed'); } };
+    },
+  });
+
+  assert.notEqual(
+    result.exitCode,
+    0,
+    'the checks passed, but their evidence could not be recorded; that must never be treated as an allow.',
+  );
+  assert.equal(result.reasonCode, 'evidence-persistence-failed');
+  assert.match(result.lines.join('\n'), /evidence-store-unavailable/);
+});
+
+test('TB-026: the activation self-test writes no Evidence and leaves no store entry', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  const subjectRoot = await temporaryRoot('gate-hook-runner-subject-');
+
+  t.after(() => rm(subjectRoot, { recursive: true, force: true }));
+
+  const subjectPath = path.join(subjectRoot, 'subject.json');
+
+  await writeFile(subjectPath, `${JSON.stringify(deniableSubject(subjectRoot), null, 2)}\n`, 'utf8');
+
+  const result = await runHook({ cwd: root, environment: { [SELF_TEST_ENV]: subjectPath } });
+
+  assert.notEqual(result.exitCode, 0);
+  assert.equal(result.reasonCode, 'self-test-denied');
+
+  const store = await readStore(root);
+
+  assert.deepEqual(await store.readLog(), [], 'the self-test must persist no Evidence envelope.');
+  assert.equal(
+    (await store.readEvents()).some((event) => event.type === 'evaluation'),
+    false,
+    'the self-test must leave no evaluation Lifecycle event: it proves the program, never the clone.',
+  );
 });
 
 const PACKAGED_RUNNER = path.join(
