@@ -48,8 +48,8 @@ import { EVIDENCE_CEILINGS } from './lib/evidence-bounds.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
 import { collectChecks } from './lib/gate-core.mjs';
 import { validateLifecycleEvent } from './lib/lifecycle-event.mjs';
-import { createRedactor } from './lib/redaction.mjs';
 import laravelProvider from './lib/providers/laravel.mjs';
+import { createRedactor } from './lib/redaction.mjs';
 
 const CAPABILITY = 'gate-evidence-prune-smoke';
 

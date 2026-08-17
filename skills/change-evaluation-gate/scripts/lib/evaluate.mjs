@@ -17,6 +17,11 @@
 
 import { createHash } from 'node:crypto';
 
+import { coordinationFailureDiagnostic } from './coordination.mjs';
+import {
+  resolveDeliveryContract,
+  resolveScope,
+} from './delivery-contract.mjs';
 import {
   EVIDENCE_FORMAT,
   PROTOCOL_VERSION,
@@ -26,24 +31,19 @@ import {
   reconcileAttempts,
   validateEvaluationRequest,
 } from './evaluation-contract.mjs';
-import {
-  resolveDeliveryContract,
-  resolveScope,
-} from './delivery-contract.mjs';
-import { coordinationFailureDiagnostic } from './coordination.mjs';
 import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
-import {
-  proveServedSource,
-  requiresServedSourceBinding,
-  unboundRuntime,
-} from './runtime-binding.mjs';
 import {
   authorizationFor,
   createBudgetLedger,
   decisionOutcome,
   resolveBypass,
 } from './policy.mjs';
+import {
+  proveServedSource,
+  requiresServedSourceBinding,
+  unboundRuntime,
+} from './runtime-binding.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
 import { ISOLATION, captureSnapshot, verifySnapshot } from './snapshot.mjs';
 import { delegateResolution } from './verification-seam.mjs';

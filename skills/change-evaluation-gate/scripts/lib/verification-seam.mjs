@@ -11,9 +11,9 @@
  * this seam (FR-EVAL-005).
  */
 
+import { evidenceLadderStages } from '../../../verify-change/scripts/verification-plan.mjs';
 import { orderChecks } from './check-descriptor.mjs';
 import { bindPolicy } from './policy.mjs';
-import { evidenceLadderStages } from '../../../verify-change/scripts/verification-plan.mjs';
 
 export const VERIFICATION_SEAM = 'verify-change';
 

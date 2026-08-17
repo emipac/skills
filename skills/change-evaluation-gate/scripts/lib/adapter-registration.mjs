@@ -25,8 +25,8 @@
  *    and it says so rather than assuming a mechanism it cannot confirm.
  */
 
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { describeAdapter } from './adapters.mjs';

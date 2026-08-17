@@ -71,8 +71,8 @@ import {
   runAdapterEvaluation,
   runCompatibilityBaseline,
 } from './lib/adapters.mjs';
-import { openEvidenceStore } from './lib/evidence-store.mjs';
 import { evaluate } from './lib/evaluate.mjs';
+import { openEvidenceStore } from './lib/evidence-store.mjs';
 
 const CAPABILITY = 'gate-adapter-conformance';
 

@@ -60,8 +60,8 @@ import {
   resolveExecutables,
   validateCommandDescriptor,
 } from './lib/command-descriptor.mjs';
-import { PROTOCOL_VERSION } from './lib/evaluation-contract.mjs';
 import { evaluate } from './lib/evaluate.mjs';
+import { PROTOCOL_VERSION } from './lib/evaluation-contract.mjs';
 import { openEvidenceStore, resolveGitCommonDirectory } from './lib/evidence-store.mjs';
 import {
   buildCompatibilityManifest,
