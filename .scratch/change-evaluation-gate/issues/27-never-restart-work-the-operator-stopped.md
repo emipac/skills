@@ -1,14 +1,14 @@
 # TB-027 — Never restart work the operator stopped
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 27-never-restart-work-the-operator-stopped
 Draft key: TB-027
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -151,24 +151,24 @@ field the adapter does not declare.
 
 ## Acceptance Criteria
 
-- [ ] `SG-TRUST-001`, `FR-ADAPT-003`: a payload whose declared status means
+- [x] `SG-TRUST-001`, `FR-ADAPT-003`: a payload whose declared status means
   *aborted* produces no feedback on any channel, in a clone whose required
   checks fail. The same payload meaning *completed* produces the declared
   feedback.
-- [ ] `NFR-REL-003`: a payload carrying an undeclared status value presents as
+- [x] `NFR-REL-003`: a payload carrying an undeclared status value presents as
   `unverified` through the declared channel rather than being treated as
   completed.
-- [ ] `FR-ADAPT-004`, `SG-OWNER-001`: the status field, its declared values,
+- [x] `FR-ADAPT-004`, `SG-OWNER-001`: the status field, its declared values,
   and the iteration field are read from the adapter declaration; a source scan
   of the kind `TB-024` uses finds no native field name outside `adapters.mjs`.
-- [ ] `FR-ADAPT-002`: past the declared iteration maximum the runner stays
+- [x] `FR-ADAPT-002`: past the declared iteration maximum the runner stays
   silent on the agent's channel, and a surface whose payload never advances its
   iteration field is bounded by that same maximum rather than looping
   unbounded.
-- [ ] Every deliberate silence writes one stderr diagnostic naming why, so a
+- [x] Every deliberate silence writes one stderr diagnostic naming why, so a
   quiet hook and a clean turn are distinguishable by a human reading the hook
   panel.
-- [ ] A surface that declares no status field keeps its current behaviour
+- [x] A surface that declares no status field keeps its current behaviour
   exactly, so this slice changes nothing for the two desktop adapters that
   never sent one.
 
@@ -186,6 +186,17 @@ process entry point.
 
 None. `TB-025` delivered the runner, the feedback declaration, and the
 conformance scenario this extends.
+
+## SRS amendment this contract required
+
+Drafted as revision `0.2.6`, awaiting Product Owner approval. The turn-status
+half needed none: a client event that fires for both a finished turn and an
+aborted one is only `work-complete` when it says so, and `FR-ADAPT-003` already
+requires normalizing a deterministic native event to the trigger it actually
+means. The iteration bound is new — `FR-ADAPT-004`'s feedback enumeration,
+approved at `0.2.5`, names the channel, the field, and the silent form, and now
+also names the maximum. `AC-ADAPT-002` carries the matching assertion. Both rows
+are marked `Draft` and the document header still states the approved `0.2.5`.
 
 ## Unresolved Assumptions
 

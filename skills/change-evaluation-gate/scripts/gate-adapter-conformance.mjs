@@ -32,8 +32,11 @@
  * 5. `packaged-preflight-answers-client` — the packaged preflight program is
  *    launched as a child process with a real client-shaped payload on stdin
  *    against a throwaway clone; a failing required check produces the
- *    declared stdout feedback naming that check, and a passing turn produces
- *    no follow-up (AC-ADAPT-001, FR-ADAPT-002).
+ *    declared stdout feedback naming that check, a passing turn produces
+ *    no follow-up, a turn the operator aborted produces nothing on the agent's
+ *    channel and a reason on stderr, and a hook registered without an adapter
+ *    reports itself rather than looking like a clean turn (AC-ADAPT-001,
+ *    FR-ADAPT-002, SG-TRUST-001).
  *
  * NO DESKTOP CLIENT IS REQUIRED. Nothing here launches, probes, or detects
  * Claude Code Desktop, Codex Desktop, or Cursor. Each surface is driven by an
@@ -1000,6 +1003,38 @@ const packagedPreflightAnswersClient = async () => {
     findings,
     typeof body?.[field] !== 'string' || !/this commit was not authorized/i.test(body[field]),
     'a worktree preflight described itself as the decision a commit would receive.',
+  );
+
+  // TB-027: the same failing content, on a turn the operator stopped. The
+  // answer this program returns is submitted as the next user message, so
+  // answering here would restart work somebody had just interrupted.
+  const turn = adapter.nativeIdentity.turn;
+  const aborted = await runPackagedPreflight({
+    cwd: root,
+    payload: { ...payload, [turn.status]: turn.interrupted[0] },
+    args: ['--adapter', adapter.id],
+  });
+
+  check(findings, aborted.exitCode === 0, `an aborted turn exited ${aborted.exitCode}: ${aborted.stderr}`);
+  check(
+    findings,
+    aborted.stdout === '',
+    `an aborted turn was answered on the agent's channel: ${aborted.stdout}`,
+  );
+  check(
+    findings,
+    aborted.stderr.includes('change-evaluation-gate'),
+    'an aborted turn left no reason a maintainer reading the hook panel could find.',
+  );
+
+  // And a hook registered without the adapter argument — the misconfiguration
+  // that reads exactly like a clean turn — says so rather than staying silent.
+  const unnamed = await runPackagedPreflight({ cwd: root, payload, args: [] });
+
+  check(
+    findings,
+    unnamed.stdout === '' && unnamed.stderr.includes('change-evaluation-gate'),
+    `a preflight with no declared adapter did not report itself: ${unnamed.stdout}${unnamed.stderr}`,
   );
 
   return { name: 'packaged-preflight-answers-client', ok: findings.length === 0, findings };

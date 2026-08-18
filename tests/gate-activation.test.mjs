@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -188,6 +188,64 @@ const activateFixture = async (root, request, deps) => {
   return activate(request, deps);
 };
 
+test('TB-028 FR-LIFE-004: activation refuses a real executable that could not start, through the shipped resolver', async (t) => {
+  const root = await throwawayRepository(t);
+
+  // A tool binary exactly like `vendor/bin/pint`: a script whose interpreter
+  // the kernel must find before a byte of it runs. This one names an
+  // interpreter that does not exist on this machine.
+  await mkdir(path.join(root, 'vendor/bin'), { recursive: true });
+  await writeFile(
+    path.join(root, 'vendor/bin/grade'),
+    '#!/usr/bin/env interpreter-that-does-not-exist\nexit 0\n',
+    'utf8',
+  );
+  await chmod(path.join(root, 'vendor/bin/grade'), 0o755);
+
+  const request = activationRequest(root, {
+    checks: [{
+      id: 'broad_test',
+      evaluate: {
+        ...testCommand(),
+        runner: 'composer-bin',
+        args: ['grade'],
+        allowed_environment: [],
+      },
+    }],
+  });
+  const store = await storeFor(root);
+  // No injected resolver: this drives the rule an activated clone really uses,
+  // which is the participant that has to notice the executable cannot launch.
+  const deps = dependencies({
+    evidenceStore: store,
+    resolveExecutable: undefined,
+    environment: { PATH: '' },
+  });
+  const preview = await previewActivation(request, deps);
+
+  assert.deepEqual(
+    preview.unresolved.map((entry) => entry.reason),
+    ['runner-unresolved'],
+    'a preview must show the maintainer that this command cannot run before consent is asked for.',
+  );
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, deps);
+
+  assert.equal(result.activated, false);
+  assert.equal(result.step, 'runner-resolution');
+  assert.equal(result.reasonCode, 'runner-unresolved');
+  assert.equal(
+    await store.activationReceipt().read(),
+    null,
+    'a clone that cannot run its checks is left configured, with nothing pinned.',
+  );
+  assert.deepEqual(
+    await registeredHooks(path.join(root, '.git/hooks')),
+    [],
+    'and with no registered hook: enforcement it could never carry out is not enforcement.',
+  );
+});
+
 test('activation preview refuses invalid Gate policy before consent is possible', async (t) => {
   const root = await throwawayRepository(t);
   const request = activationRequest(root, {
@@ -365,6 +423,9 @@ test('successful activation records the previewed identities and enables Git las
     role: 'evaluate',
     runner: 'package-script',
     executable: '/usr/bin/package-script',
+    // What the executable needs in order to start is part of what was proved,
+    // so the receipt pins it. This fixture's resolver names none (TB-028).
+    interpreter: null,
     version: '1.0.0',
   }]);
   assert.deepEqual(receipt.adapters, [{

@@ -12,10 +12,13 @@
  * declared `repository-script` Grader surface.
  */
 
-import { accessSync, constants } from 'node:fs';
+import { accessSync, closeSync, constants, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 
 const { X_OK } = constants;
+
+/** Enough of a file to hold a shebang line; nothing beyond it is ever read. */
+const SHEBANG_BYTES = 512;
 
 export const COMMAND_RUNNERS = Object.freeze([
   'composer-bin',
@@ -378,6 +381,118 @@ const resolveVendorBinary = (command, repositoryRoot) => {
 };
 
 /**
+ * The interpreter one executable names in its own first line, or `null`.
+ *
+ * Most real tool binaries in both ecosystems are scripts: `vendor/bin/pint` and
+ * `vendor/bin/phpstan` begin `#!/usr/bin/env php`, `npm` begins
+ * `#!/usr/bin/env node`. The kernel resolves that interpreter through `PATH`
+ * before the tool runs a single byte, so an executable naming one has not been
+ * fully resolved until the interpreter has been too.
+ *
+ * Only the `env` form needs resolving. An absolute interpreter — `#!/bin/sh` —
+ * is found by the kernel without a search path, and a file with no shebang is
+ * a real binary the kernel executes directly. Neither needs anything pinned.
+ *
+ * This reads a file; it never executes one, and it never learns the name of any
+ * particular interpreter (`SG-OWNER-001`).
+ */
+const shebangInterpreter = (executable) => {
+  let handle = null;
+
+  try {
+    handle = openSync(executable, 'r');
+
+    const buffer = Buffer.alloc(SHEBANG_BYTES);
+    const read = readSync(handle, buffer, 0, SHEBANG_BYTES, 0);
+    const head = buffer.subarray(0, read).toString('utf8');
+
+    if (!head.startsWith('#!')) {
+      return null;
+    }
+
+    const [line] = head.slice(2).split('\n');
+    const words = line.trim().split(/\s+/).filter((word) => word.length > 0);
+
+    if (words.length === 0) {
+      return null;
+    }
+
+    // `#!/usr/bin/env name` defers the lookup to a search path; anything else
+    // names a path the kernel resolves on its own.
+    return path.basename(words[0]) === 'env' && typeof words[1] === 'string'
+      ? words[1]
+      : null;
+  } catch {
+    return null;
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        // The descriptor is already gone; there is nothing left to close.
+      }
+    }
+  }
+};
+
+/**
+ * The operating system's own utility directories.
+ *
+ * A real tool is not a closed program: a formatter shells out, a test runner
+ * spawns a shell, a build script calls `sh` and `cp`. A search path containing
+ * only the gate's pins cannot run any of them, so the platform's standard
+ * directories are part of the runtime a check is entitled to — the same
+ * existing developer runtime the decision record already reuses rather than
+ * virtualizing.
+ *
+ * These are the platform's directories, not the maintainer's shell: no
+ * user-specific entry, version manager, or package-manager prefix appears here,
+ * so nothing on this path can change *which* program a pinned command runs
+ * (`NFR-REL-001`). Windows has no equivalent fixed set and no shebang mechanism
+ * for an interpreter to be found through, so there it contributes nothing and a
+ * project that needs more declares `PATH` like any other environment name.
+ */
+const PLATFORM_BASE_PATH = Object.freeze(
+  process.platform === 'win32' ? [] : ['/usr/bin', '/bin', '/usr/sbin', '/sbin'],
+);
+
+/**
+ * The search path a set of resolved runners needs in order to start.
+ *
+ * Its first entries are derived from the pins themselves — the directory of
+ * every resolved executable and of every interpreter one of them names — and
+ * they come first so a pinned program always finds its own interpreter before
+ * anything the platform offers. Nothing is inherited from whatever shell
+ * happened to invoke the gate: an evaluation whose result depends on an ambient
+ * search path is not reproducible (`NFR-REL-001`).
+ *
+ * @param {Array<{executable: string, interpreter: string|null}>} resolutions
+ * @returns {string} a platform-delimited search path
+ */
+export const runtimeSearchPath = (resolutions = []) => {
+  const directories = [];
+  const add = (directory) => {
+    if (typeof directory === 'string' && directory !== '' && !directories.includes(directory)) {
+      directories.push(directory);
+    }
+  };
+
+  for (const resolution of resolutions) {
+    for (const location of [resolution?.executable, resolution?.interpreter]) {
+      if (typeof location === 'string' && location !== '') {
+        add(path.dirname(location));
+      }
+    }
+  }
+
+  for (const directory of PLATFORM_BASE_PATH) {
+    add(directory);
+  }
+
+  return directories.join(path.delimiter);
+};
+
+/**
  * The one rule that turns a logical runner into the executable it runs.
  *
  * Activation resolves through this rule and pins what it resolved; the hook
@@ -389,24 +504,50 @@ const resolveVendorBinary = (command, repositoryRoot) => {
  * about which stack produced it. A runner it cannot resolve is reported as
  * unresolved; it is never looked up through a shell (`SG-CMD-001`).
  *
+ * Resolving an executable means resolving what it needs in order to start. An
+ * executable that is a script names its interpreter in its own first line, and
+ * an interpreter that cannot be found on this machine leaves the runner
+ * unresolved — reported while a maintainer is watching, rather than as an
+ * `exit 127` at commit time that reads like their code failing (`TB-028`).
+ *
  * @param {object} context the repository root and environment resolution reads
- * @returns {(runner: string, command: object) => ({ executable: string, version: string|null }|null)}
+ * @returns {(runner: string, command: object) => ({ executable: string, interpreter: string|null, version: string|null }|null)}
  */
-export const createRunnerResolver = ({ repositoryRoot = null, environment = process.env } = {}) => (
-  (runner, command) => {
+export const createRunnerResolver = ({ repositoryRoot = null, environment = process.env } = {}) => {
+  /**
+   * Pair one resolved executable with the interpreter it needs, or report that
+   * it has none to be found.
+   */
+  const launchable = (executable, version) => {
+    if (executable === null) {
+      return null;
+    }
+
+    const named = shebangInterpreter(executable);
+
+    if (named === null) {
+      return { executable, interpreter: null, version };
+    }
+
+    const interpreter = locateOnPath(named, environment);
+
+    return interpreter === null
+      ? null
+      : { executable, interpreter, version };
+  };
+
+  return (runner, command) => {
     if (runner === GRADER_SURFACE_RUNNER) {
       // A repository script is a Grader surface this Node runtime can run when
       // it is a Node module. Anything else is left unresolved rather than
-      // guessed.
+      // guessed. This runtime is already running, so it needs nothing found.
       return /\.[cm]?js$/.test(command?.args?.[0] ?? '')
-        ? { executable: process.execPath, version: process.versions.node }
+        ? { executable: process.execPath, interpreter: null, version: process.versions.node }
         : null;
     }
 
     if (runner === 'composer-bin') {
-      const executable = resolveVendorBinary(command ?? {}, repositoryRoot);
-
-      return executable === null ? null : { executable, version: null };
+      return launchable(resolveVendorBinary(command ?? {}, repositoryRoot), null);
     }
 
     const name = PLATFORM_EXECUTABLES[runner] ?? null;
@@ -415,11 +556,9 @@ export const createRunnerResolver = ({ repositoryRoot = null, environment = proc
       return null;
     }
 
-    const executable = locateOnPath(name, environment);
-
-    return executable === null ? null : { executable, version: null };
-  }
-);
+    return launchable(locateOnPath(name, environment), null);
+  };
+};
 
 /**
  * Activation-time executable resolution.
@@ -467,14 +606,18 @@ export const resolveExecutables = (checks, resolve) => {
       }
 
       const version = resolution.version ?? null;
+      // An executable that is a script cannot start without its interpreter, so
+      // the interpreter is part of what was resolved and part of what is pinned.
+      const interpreter = resolution.interpreter ?? null;
 
       resolved.push({
         check_id: check.id,
         role,
         runner: command.runner,
         executable: resolution.executable,
+        interpreter,
         version,
-        pinned: { executable: resolution.executable, version },
+        pinned: { executable: resolution.executable, interpreter, version },
         preview: commandPreview(command, resolution.executable),
         working_directory: command.working_directory,
       });

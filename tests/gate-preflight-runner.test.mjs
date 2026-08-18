@@ -7,6 +7,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import {
+  describeAdapter,
+  normalizeTurn,
+} from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
 import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
 import { runPreflight } from '../skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs';
 
@@ -164,11 +168,19 @@ const publishReceipt = async (root) => {
   );
 };
 
-const cursorStopPayload = (root) => ({
+/**
+ * The payload shape a real client sends, taken from the capture preserved in
+ * `real-project-evidence/`: a `stop` event carries the status of the turn that
+ * ended and the client's own auto-follow-up counter.
+ */
+const cursorStopPayload = (root, overrides = {}) => ({
   hook_event_name: 'stop',
   session_id: 'preflight-session',
   workspace_roots: [root],
   cursor_version: '3.15.6',
+  status: 'completed',
+  loop_count: 0,
+  ...overrides,
 });
 
 const runPackaged = ({ cwd, payload, args = ['--adapter', 'cursor'] }) => new Promise((resolve, reject) => {
@@ -311,11 +323,193 @@ test('FR-ADAPT-002 / SG-SUPPORT-001: preflight evaluates the working tree as wor
   assert.doesNotMatch(result.stdout, /this commit was not authorized/i);
 });
 
+/**
+ * TB-027 — Never restart work the operator stopped.
+ *
+ * The runner read neither the turn status nor the iteration counter, so a turn
+ * the operator aborted was graded and answered exactly like one that completed
+ * — and the client submitted that answer as the next user message, restarting
+ * the work that had just been stopped. Five identical evaluations in
+ * `real-project-evidence/` are what that produced.
+ */
+
+test('TB-027 SG-TRUST-001: a turn the operator aborted produces no feedback at all, in a clone whose required check fails', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const aborted = await runPackaged({
+    cwd: root,
+    payload: cursorStopPayload(root, { status: 'aborted' }),
+  });
+
+  assert.equal(aborted.exitCode, 0);
+  assert.equal(
+    aborted.stdout,
+    '',
+    `a stopped turn must never be answered on the agent's channel, got: ${aborted.stdout}`,
+  );
+  assert.match(
+    aborted.stderr,
+    /change-evaluation-gate/,
+    'deliberate silence must still be legible to a human reading the hook panel.',
+  );
+
+  // The same clone, same failing check, a completed turn: the feedback returns.
+  const completed = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  assert.match(
+    JSON.parse(completed.stdout).followup_message,
+    /configuration\.broad-tests\.test/,
+    'narrowing when preflight speaks must not change what it says when it does.',
+  );
+});
+
+test('TB-027 SG-TRUST-001: a turn that ended in error is likewise not an invitation to re-prompt', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const result = await runPackaged({
+    cwd: root,
+    payload: cursorStopPayload(root, { status: 'error' }),
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '');
+});
+
+test('TB-027 NFR-REL-003: an undeclared status value is unverified, never assumed to mean completed', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  for (const status of ['finished', '', null]) {
+    const result = await runPackaged({
+      cwd: root,
+      payload: cursorStopPayload(root, { status }),
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.match(
+      JSON.parse(result.stdout).followup_message,
+      /unverified/i,
+      `a status of ${JSON.stringify(status)} is neither completed nor interrupted and must not be guessed.`,
+    );
+  }
+});
+
+test('TB-027 NFR-REL-003: a payload missing the declared status field is unverified rather than assumed complete', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  const { status, ...withoutStatus } = cursorStopPayload(root);
+  const result = await runPackaged({ cwd: root, payload: withoutStatus });
+
+  assert.equal(result.exitCode, 0);
+  assert.match(JSON.parse(result.stdout).followup_message, /unverified/i);
+});
+
+test('TB-027 FR-ADAPT-002: a client that advances its own iteration counter past the declared maximum is answered no further', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const { maxIterations } = describeAdapter('cursor').capabilities.feedback;
+
+  assert.equal(Number.isInteger(maxIterations), true, 'the surface must declare its own bound.');
+
+  const exhausted = await runPackaged({
+    cwd: root,
+    payload: cursorStopPayload(root, { loop_count: maxIterations }),
+  });
+
+  assert.equal(exhausted.exitCode, 0);
+  assert.equal(exhausted.stdout, '');
+  assert.match(exhausted.stderr, /change-evaluation-gate/);
+});
+
+test('TB-027 FR-ADAPT-002: a client whose counter never advances is still bounded, by the gate’s own record', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const { maxIterations } = describeAdapter('cursor').capabilities.feedback;
+  const answered = [];
+
+  // Every payload reports `loop_count: 0`, exactly as the real client did. The
+  // content never changes, so every evaluation is the same evaluation, and the
+  // gate counts its own appended evidence rather than trusting the counter.
+  for (let attempt = 0; attempt < maxIterations + 2; attempt += 1) {
+    const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+    answered.push(result.stdout !== '');
+  }
+
+  assert.equal(
+    answered.slice(0, maxIterations).every((spoke) => spoke === true),
+    true,
+    `the first ${maxIterations} unchanged verdicts are worth saying: ${JSON.stringify(answered)}.`,
+  );
+  assert.equal(
+    answered.slice(maxIterations).some((spoke) => spoke === true),
+    false,
+    `an unchanged verdict repeated past the declared bound must go quiet: ${JSON.stringify(answered)}.`,
+  );
+});
+
+test('TB-027 FR-ADAPT-004: a surface that declares no turn keeps its behaviour exactly', async () => {
+  for (const adapterId of ['git', 'claude-code-desktop', 'codex-desktop']) {
+    const adapter = describeAdapter(adapterId);
+
+    assert.equal(
+      adapter.nativeIdentity.turn,
+      null,
+      `${adapterId} has never sent a turn status and must not start declaring one.`,
+    );
+    assert.equal(
+      normalizeTurn({ adapterId, native: { anything: true } }).state,
+      'completed',
+      `${adapterId} declares no status, so every event it sends is a completed turn.`,
+    );
+  }
+});
+
+test('TB-027 SG-OWNER-001: an unresolvable adapter is reported, never silently indistinguishable from a clean turn', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  // A hook wired without `--adapter` is exactly how this was found: the runner
+  // returned in 73ms having read nothing, and looked identical to success.
+  const unnamed = await runPackaged({ cwd: root, payload: cursorStopPayload(root), args: [] });
+
+  assert.equal(unnamed.exitCode, 0);
+  assert.equal(unnamed.stdout, '');
+  assert.match(
+    unnamed.stderr,
+    /change-evaluation-gate/,
+    'a misconfigured hook must say so where a maintainer can read it.',
+  );
+});
+
 test('SG-OWNER-001: no client name and no native feedback field lives outside the adapter declarations', async () => {
   const libraryRoot = path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib');
   const scriptsRoot = path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts');
   const clientNames = /\b(cursor|codex|claude|copilot|vscode|jetbrains|intellij|windsurf|zed)\b/i;
-  const nativeFields = /\bfollowup_message\b/;
+  const nativeFields = /\bfollowup_message\b|\bloop_count\b|\bhook_event_name\b/;
   const scanned = [
     path.join(libraryRoot, 'preflight-runner.mjs'),
     path.join(scriptsRoot, 'gate-preflight.mjs'),

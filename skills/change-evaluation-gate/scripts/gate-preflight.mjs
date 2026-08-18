@@ -50,7 +50,8 @@ const main = async () => {
     // Nothing reaches the client as a bare crash: an internal failure is an
     // unverified preflight, and this entry point has no declared adapter to
     // speak through once the runner itself threw. Empty stdout is not a clean
-    // pass — it is the form a surface with no remaining channel returns.
+    // pass, and the reason is written where a maintainer can read it.
+    process.stderr.write(`change-evaluation-gate: the preflight runner failed before it could answer (${error.message}); nothing was evaluated.\n`);
     process.exitCode = 0;
 
     return;
@@ -58,6 +59,13 @@ const main = async () => {
 
   if (result.stdout) {
     process.stdout.write(result.stdout);
+  }
+
+  // A preflight that deliberately says nothing to the agent still says why to
+  // the person: the client shows hook stderr in its own panel, so a silent
+  // turn and a clean one are never the same thing to a maintainer.
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
   }
 
   process.exitCode = 0;

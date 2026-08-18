@@ -1,14 +1,14 @@
 # TB-028 — Run every check in an environment it can actually start in
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 28-run-checks-in-an-environment-they-can-start-in
 Draft key: TB-028
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -175,26 +175,63 @@ stored `allowed_environment`.
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVAL-001`, `FR-PROF-010`: in an activated clone whose required check
+- [x] `AC-EVAL-001`, `FR-PROF-010`: in an activated clone whose required check
   is a `composer-bin` descriptor pinned to a `#!/usr/bin/env` script, the check
   executes and reports the tool's own outcome; a commit is denied on genuinely
   bad content and allowed on good content, and no attempt exits `127`.
-- [ ] `FR-LIFE-004`, `NFR-REL-003`: a descriptor whose pinned executable cannot
+- [x] `FR-LIFE-004`, `NFR-REL-003`: a descriptor whose pinned executable cannot
   launch in the environment execution constructs is refused at activation as
   `runner-unresolved` with a stated reason, leaving the clone configured with
   no receipt and no registered hook.
-- [ ] `SG-CMD-001`: the environment a check receives contains the descriptor's
+- [x] `SG-CMD-001`: the environment a check receives contains the descriptor's
   declared names plus the runtime-owned search path and nothing else; a
   variable present in the parent process but neither declared nor required for
   launch is absent from the child.
-- [ ] `AC-CFG-002`: an existing schema v4 configuration produced by a real
+- [x] `AC-CFG-002`: an existing schema v4 configuration produced by a real
   migration executes correctly without being migrated again.
-- [ ] `AC-PROF-005`: migration no longer produces a descriptor that is
+- [x] `AC-PROF-005`: migration no longer produces a descriptor that is
   structurally unable to launch — either the draft surfaces
   `allowed_environment` as a field it refuses to guess, or the written default
   states the minimum, and the choice is recorded in the ticket on completion.
-- [ ] `SG-OWNER-001`: a source scan finds no interpreter name special-cased
-  outside the command contract.
+- [x] `SG-OWNER-001`: a source scan finds no interpreter name special-cased
+  outside the command contract. No interpreter is named anywhere: the one an
+  executable needs is read from its own first line.
+
+## Decisions this slice recorded
+
+**`AC-PROF-005`: migration is unchanged, and `[]` stays the default.** The
+acceptance criterion offered two remedies — surface `allowed_environment` in
+the draft, or default it to a minimum. Neither was taken, because the cause was
+removed one layer down: execution now supplies the runtime-owned search path, so
+a descriptor declaring `[]` is launchable and migration no longer produces
+anything structurally unable to start. Fixing it in migration would have left
+every already-migrated clone broken until it was migrated again, and would have
+asked maintainers to know that their tool binary is a script. `[]` remains
+correct for most projects, and `allowed_environment` remains what it was: the
+project's declaration of what its *command* needs, not what the runtime needs.
+Proved by `gate-activation-smoke`'s `vendor-binary-commit`, which now runs a
+`#!/usr/bin/env` vendor binary from a descriptor declaring `[]` through real
+`git commit` invocations.
+
+**The search path includes the platform's own utility directories, not only the
+pins.** The approach section proposed deriving the path from the pins alone.
+Implementation disproved that: a search path of only pinned directories cannot
+run `grep`, `sh`, or `env`, so no real tool that shells out could work — the
+first fixture written against the pins-only rule failed for exactly that reason,
+and a formatter, test runner, or build script would have failed the same way.
+The path is therefore the pinned directories first, then the platform's standard
+directories. It is still not the maintainer's shell: no version manager, no
+package-manager prefix, no user-specific entry, so nothing on it can change
+*which* program a pinned command runs, which is the property `NFR-REL-001`
+needs. Windows contributes no base entries and has no shebang mechanism; a
+project needing more there declares `PATH` like any other environment name.
+
+**Activation needed no new probe.** The criterion expected activation to launch
+each program in the execution environment shape. Making resolution itself
+launch-aware turned out to be enough and is stronger: an executable whose
+interpreter cannot be found is simply unresolved, which the existing
+`runner-resolution` step already refuses. Nothing is executed to discover it,
+so activation gained no new way to run somebody's code.
 
 ## Verification Matrix
 

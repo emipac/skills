@@ -53,13 +53,34 @@ const terminateTree = async (child) => {
   signalTree(child, 'SIGKILL');
 };
 
-const environmentFor = (allowedEnvironment, source) => {
+/**
+ * The environment one check runs in: exactly what its descriptor declared, plus
+ * the runtime-owned search path its own pinned program needs in order to start.
+ *
+ * The search path is not inherited from the invoking shell. It is derived from
+ * the executables and interpreters the receipt pinned, so it is as narrow as
+ * the commands themselves and reproducible on any machine those pins resolve on
+ * (`NFR-REL-001`). Without it, an executable that is a script — which most real
+ * tool binaries are — cannot resolve its own interpreter and exits `127` before
+ * it has read a line of the code it was asked to grade (`TB-028`).
+ *
+ * A descriptor that also declares `PATH` gets the ambient value appended, so a
+ * project can widen what its own command reaches without ever being able to
+ * hide the runtime's own entries behind it.
+ */
+const environmentFor = (allowedEnvironment, source, runtimePath = '') => {
   const environment = {};
 
   for (const name of allowedEnvironment ?? []) {
     if (source[name] !== undefined) {
       environment[name] = source[name];
     }
+  }
+
+  if (runtimePath !== '') {
+    environment.PATH = [runtimePath, environment.PATH]
+      .filter((entry) => typeof entry === 'string' && entry !== '')
+      .join(path.delimiter);
   }
 
   return environment;
@@ -76,6 +97,7 @@ export const createBoundedExecutor = ({
   environment = process.env,
   captureOutput = false,
   captureLimitBytes = DEFAULT_CAPTURE_LIMIT_BYTES,
+  runtimePath = '',
 } = {}) => {
   const totalMs = Number.isInteger(totalSeconds) ? totalSeconds * 1000 : null;
   let consumedMs = 0;
@@ -126,7 +148,7 @@ export const createBoundedExecutor = ({
 
     const child = spawn(resolution.executable, composition.args, {
       cwd: path.join(executionRoot, command.working_directory ?? '.'),
-      env: environmentFor(command.allowed_environment, environment),
+      env: environmentFor(command.allowed_environment, environment, runtimePath),
       stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       // The check leads its own process group so the whole tree can be
       // terminated on timeout or budget exhaustion.

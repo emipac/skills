@@ -29,7 +29,7 @@ import { promisify } from 'node:util';
 
 import { HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION, repositoryIdentity } from './activation.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
-import { commandPreview, composeArguments } from './command-descriptor.mjs';
+import { commandPreview, composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -284,6 +284,10 @@ export const pinnedRunners = async (checks, { receipt, compose }) => {
 
     resolved.set(check.id, {
       executable: pin.executable,
+      // An executable that is a script cannot start without the interpreter
+      // activation resolved for it, so the pin carries that too and the
+      // runtime search path is built from both (TB-028).
+      interpreter: pin.interpreter ?? null,
       version: pin.version ?? null,
       preview: commandPreview(command, pin.executable),
     });
@@ -503,6 +507,8 @@ export const runHook = async ({
     // what a check printed; capturing nothing would leave that purpose unmet
     // on the one path a maintainer actually reaches (FR-EVID-003).
     captureOutput: true,
+    // What the pinned programs need in order to start at all (TB-028).
+    runtimePath: runtimeSearchPath([...runners.resolved.values()]),
   });
   let decision;
 

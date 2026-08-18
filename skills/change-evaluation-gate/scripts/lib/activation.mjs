@@ -1755,6 +1755,10 @@ export const activate = async (request, dependencies = {}) => {
         role: entry.role,
         runner: entry.runner,
         executable: entry.executable,
+        // An executable that is a script needs its interpreter found before it
+        // can start, so what activation proved includes where that interpreter
+        // was, and the hook runs against the same one (TB-028).
+        interpreter: entry.interpreter ?? null,
         version: entry.version,
       })),
     },
