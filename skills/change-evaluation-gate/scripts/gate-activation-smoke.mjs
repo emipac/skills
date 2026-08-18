@@ -740,7 +740,12 @@ const VENDOR_BINARY_LEDGER = path.join('vendor', 'bin', 'ran.log');
  * the preview, and the evidence all named a vendor binary.
  */
 const VENDOR_BINARY_SCRIPT = [
-  '#!/bin/sh',
+  // The shebang a real vendor binary carries. `vendor/bin/pint` and
+  // `vendor/bin/phpstan` both begin `#!/usr/bin/env php`, so the kernel must
+  // find the interpreter on a search path before the tool runs at all. An
+  // absolute `#!/bin/sh` needs no search path, which is exactly why this
+  // fixture missed TB-028 the first time.
+  '#!/usr/bin/env sh',
   'printf "%s\\n" "$0" >> "$(dirname "$0")/ran.log"',
   `grep -q ${BREAKAGE} "$1" && exit 1`,
   'exit 0',
@@ -756,7 +761,10 @@ const VENDOR_MIGRATION_MAPPINGS = {
       runner: 'composer-bin',
       args: [VENDOR_BINARY, SOURCE],
       timeout_seconds: 60,
-      allowed_environment: ['PATH'],
+      // What a real migration writes when the maintainer declares nothing. A
+      // check must be able to start without the project having had to know
+      // that its own tool binary is a script (TB-028).
+      allowed_environment: [],
     },
   },
 };
@@ -799,6 +807,14 @@ const vendorBinaryCommit = async () => {
     findings,
     pin?.executable === vendorBinary,
     `The receipt pinned ${pin?.executable} rather than the vendor binary at ${vendorBinary}.`,
+  );
+  // The binary is a script, so what activation proved includes where its
+  // interpreter was found; without that pin the commit-time search path cannot
+  // be rebuilt and the tool exits 127 before reading a line (TB-028).
+  check(
+    findings,
+    typeof pin?.interpreter === 'string' && path.basename(pin.interpreter) === 'sh',
+    `The receipt pinned no interpreter for a shebang vendor binary: ${JSON.stringify(pin?.interpreter)}.`,
   );
   check(
     findings,

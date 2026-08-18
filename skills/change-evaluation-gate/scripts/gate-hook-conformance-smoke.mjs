@@ -810,18 +810,31 @@ const desktopRegistration = async () => {
 
   check(findings, result.activated === true, `Desktop registration did not activate: ${result.reasonCode}.`);
 
-  const command = `"${process.execPath}" "${path.join(root, 'tools/gate-runner.mjs')}"`;
+  // Every desktop registration names the adapter it answers, so an unreadable
+  // payload can still be returned through that adapter's own declared feedback
+  // channel (TB-025). The command is otherwise the fixture program this
+  // activation pinned.
+  const commandFor = (adapterId) => [
+    process.execPath,
+    path.join(root, 'tools/gate-runner.mjs'),
+    '--adapter',
+    adapterId,
+  ].map((value) => `"${value}"`).join(' ');
   const registered = { general: await readJson(general), dedicated: await readJson(dedicated) };
 
   check(
     findings,
     JSON.stringify(registered.general.hooks.Stop.at(-1))
-      === JSON.stringify({ matcher: '', hooks: [{ type: 'command', command }] }),
+      === JSON.stringify({
+        matcher: '',
+        hooks: [{ type: 'command', command: commandFor('claude-code-desktop') }],
+      }),
     'The general settings surface was not registered in its own declared block schema.',
   );
   check(
     findings,
-    JSON.stringify(registered.dedicated.hooks.stop.at(-1)) === JSON.stringify({ command }),
+    JSON.stringify(registered.dedicated.hooks.stop.at(-1))
+      === JSON.stringify({ command: commandFor('cursor') }),
     'The dedicated versioned surface was not registered in its own declared block schema.',
   );
 

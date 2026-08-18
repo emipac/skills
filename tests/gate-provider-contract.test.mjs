@@ -502,14 +502,18 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
       : null
   ));
 
+  // The interpreter a resolver reports is pinned beside the executable: a tool
+  // binary that is a script cannot start until the kernel finds it. This
+  // fixture's resolver names none (TB-028).
   assert.deepEqual(activation.resolved, [
     {
       check_id: 'laravel.format.formatter',
       role: 'evaluate',
       runner: 'composer-bin',
       executable: 'vendor/bin/pint',
+      interpreter: null,
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      pinned: { executable: 'vendor/bin/pint', interpreter: null, version: '1.18.1' },
       preview: 'vendor/bin/pint --test',
       working_directory: '.',
     },
@@ -518,8 +522,9 @@ test('AC-CFG-002: activation resolves, versions, pins, and previews each approve
       role: 'fix',
       runner: 'composer-bin',
       executable: 'vendor/bin/pint',
+      interpreter: null,
       version: '1.18.1',
-      pinned: { executable: 'vendor/bin/pint', version: '1.18.1' },
+      pinned: { executable: 'vendor/bin/pint', interpreter: null, version: '1.18.1' },
       preview: 'vendor/bin/pint',
       working_directory: '.',
     },

@@ -19,10 +19,11 @@ import path from 'node:path';
 import {
   describeAdapter,
   formatFeedback,
+  normalizeTurn,
   runAdapterEvaluation,
 } from './adapters.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
-import { composeArguments } from './command-descriptor.mjs';
+import { composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
 import { gateChecksFromConfiguration } from './configuration.mjs';
 import { evaluate } from './evaluate.mjs';
 import { openEvidenceStore } from './evidence-store.mjs';
@@ -61,7 +62,24 @@ const parseNative = (stdin) => {
 const answer = ({ adapterId, view }) => ({
   exitCode: 0,
   stdout: formatFeedback({ adapterId, view }),
+  stderr: '',
   view,
+});
+
+/**
+ * Say nothing to the agent, and say why to the human.
+ *
+ * Silence is a decision here — the operator stopped, or an unchanged verdict
+ * has been repeated enough — and silence a maintainer cannot distinguish from a
+ * clean turn is the defect this runner exists to have stopped making. The
+ * client surfaces hook stderr in its own panel, so the reason lands where a
+ * person will see it while the agent's channel stays empty.
+ */
+const silence = ({ detail }) => ({
+  exitCode: 0,
+  stdout: '',
+  stderr: `change-evaluation-gate: ${detail}\n`,
+  view: null,
 });
 
 const unverified = ({ adapter, detail, family = 'output' }) => ({
@@ -84,6 +102,27 @@ const unverified = ({ adapter, detail, family = 'output' }) => ({
 });
 
 /**
+ * How many times this exact evaluation has already been appended to this
+ * clone's Evidence store, including the append this run just made.
+ *
+ * A store that cannot be read bounds nothing rather than silencing everything:
+ * an unreadable log is not evidence that a verdict was already delivered.
+ */
+const timesAlreadyRecorded = async (store, evaluationId) => {
+  if (store === null || typeof store.readLog !== 'function' || evaluationId === null) {
+    return 0;
+  }
+
+  try {
+    return (await store.readLog())
+      .filter((entry) => entry?.evaluationId === evaluationId)
+      .length;
+  } catch {
+    return 0;
+  }
+};
+
+/**
  * Evaluate one native payload as a worktree preflight for the named adapter,
  * persisting evidence through the same store wiring the authoritative runner
  * uses (FR-EVID-001).
@@ -100,8 +139,13 @@ export const runPreflight = async ({
   const adapterId = adapterIdFromArgv(argv);
   const adapter = describeAdapter(adapterId);
 
+  // No adapter, no declaration, and therefore no channel to answer through.
+  // This is a misconfigured registration — a hook wired without `--adapter` —
+  // and it is reported rather than left looking exactly like a clean turn.
   if (adapter === null) {
-    return { exitCode: 0, stdout: '', view: null };
+    return silence({
+      detail: `no declared adapter was named on the command line${adapterId === null ? '' : ` (${adapterId})`}; this hook cannot answer any client. Register it with --adapter <id>.`,
+    });
   }
 
   const parsed = parseNative(stdin);
@@ -112,6 +156,43 @@ export const runPreflight = async ({
       view: unverified({ adapter, detail: parsed.detail }),
     });
   }
+
+  const turn = normalizeTurn({ adapterId: adapter.id, native: parsed.native });
+
+  // The operator's decision is an input to this runner, never something it
+  // overrides: a turn that was stopped is answered with nothing at all.
+  if (turn.state === 'interrupted') {
+    return silence({
+      detail: `the turn ended as ${JSON.stringify(turn.status)} rather than completing, so nothing was evaluated and nothing is suggested.`,
+    });
+  }
+
+  if (turn.state === 'unreadable') {
+    return answer({
+      adapterId: adapter.id,
+      view: unverified({
+        adapter,
+        family: 'capability',
+        detail: `${adapter.id} reported a turn status of ${JSON.stringify(turn.status)}, which it does not declare; a status this surface never declared is not evidence that the turn completed`,
+      }),
+    });
+  }
+
+  const maxIterations = adapter.capabilities.feedback?.maxIterations ?? null;
+
+  // The client's own counter, where it advances. Every captured payload from a
+  // real loop reported zero, so this bounds nothing on its own — it is the
+  // cheap check, and the record below is the one that holds.
+  if (Number.isInteger(maxIterations) && Number.isInteger(turn.iteration)
+    && turn.iteration >= maxIterations) {
+    return silence({
+      detail: `this turn is auto-follow-up ${turn.iteration} of at most ${maxIterations}; the same preflight result has been reported enough.`,
+    });
+  }
+
+  // The store this evaluation appended to, kept so the answer can be bounded by
+  // what the gate has already recorded rather than by a client counter.
+  let openedStore = null;
 
   const evaluateActivated = async (request) => {
     const configuration = await resolveConfiguration(request.repository.root);
@@ -157,12 +238,15 @@ export const runPreflight = async ({
       throw new Error(store.detail);
     }
 
+    openedStore = store.store;
+
     const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-preflight-exec-'));
     const executor = createBoundedExecutor({
       totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
       resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
       environment,
       captureOutput: true,
+      runtimePath: runtimeSearchPath([...runners.resolved.values()]),
     });
 
     try {
@@ -197,6 +281,19 @@ export const runPreflight = async ({
     return answer({
       adapterId: adapter.id,
       view: unverified({ adapter, family: 'capability', detail: `${adapter.id} is not a declared adapter.` }),
+    });
+  }
+
+  const evaluationId = view.presentation?.evaluationId ?? null;
+  const reported = await timesAlreadyRecorded(openedStore, evaluationId);
+
+  // An evaluation identity is a function of what was evaluated, so a repeated
+  // identity is the same verdict about the same content. The gate counts its
+  // own append-only record, which advances even when the client's counter does
+  // not — which is exactly what the observed loop did.
+  if (Number.isInteger(maxIterations) && reported > maxIterations) {
+    return silence({
+      detail: `this verdict has now been reported ${reported} times for unchanged content, past the ${maxIterations} this surface declares; nothing has changed and nothing further is suggested.`,
     });
   }
 

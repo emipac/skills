@@ -95,6 +95,19 @@ evidence category, and source scope.
   receipt pinned and never re-resolves them: a pin that is absent, or that no
   longer matches its runner, denies and names `gate repair`. Substituting a
   different program is never a recovery.
+- Resolving an executable includes resolving what it needs in order to start.
+  Most real tool binaries are scripts naming an interpreter in their first
+  line, so resolution reads that line and pins the interpreter beside the
+  executable; an interpreter that cannot be found leaves the runner
+  `runner-unresolved` and refuses activation, rather than becoming an
+  `exit 127` at commit time that reads like the maintainer's code failing.
+- A check runs with the environment names its descriptor declares, plus a
+  runtime-owned search path built from the pinned executables, their pinned
+  interpreters, and the platform's own utility directories — in that order.
+  Nothing of the invoking shell is inherited, so no version manager or
+  package-manager prefix can change which program a pinned command reaches. A
+  descriptor that also declares `PATH` has its ambient value appended after the
+  runtime's own entries, never before them.
 
 ### Argument composition
 

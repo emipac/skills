@@ -56,7 +56,7 @@ const CAPABILITY_FIELDS = Object.freeze({
   filesystem: Object.freeze(['sameFilesAsClient']),
   git: Object.freeze(['metadata', 'index']),
   invocation: Object.freeze(['nonInteractive', 'mechanism', 'structuredResult', 'timeoutMs']),
-  feedback: Object.freeze(['channel', 'field', 'none']),
+  feedback: Object.freeze(['channel', 'field', 'none', 'maxIterations']),
 });
 
 /** The sentinel a raced invocation resolves with when its timeout wins. */
@@ -146,6 +146,10 @@ const ADAPTER_REGISTRY = Object.freeze({
       event: 'hook',
       sessionId: 'commitProcessId',
       clientVersion: null,
+      // Git sends no turn: a `pre-commit` invocation is an explicit operator
+      // action that either happened or did not. There is no aborted commit
+      // attempt to be told about (TB-027).
+      turn: null,
       // Git invokes `pre-commit` at the repository root by its own contract, so
       // this surface receives a root rather than a path that might be inside
       // one. It declares that, instead of inheriting a desktop client's
@@ -174,6 +178,7 @@ const ADAPTER_REGISTRY = Object.freeze({
         channel: null,
         field: null,
         none: '',
+        maxIterations: null,
       }),
     }),
   }),
@@ -215,6 +220,10 @@ const ADAPTER_REGISTRY = Object.freeze({
       event: 'hook_event_name',
       sessionId: 'session_id',
       clientVersion: null,
+      // No captured payload from this surface carries a turn status, so none is
+      // declared and every event it sends is a completed turn — the behaviour
+      // this surface has always had (TB-027).
+      turn: null,
       // Observed `cwd` was NOT a repository root, while another client's `cwd`
       // was. Neither assumption is safe, so this surface declares that its
       // value is a path *within* a repository and must be resolved upward.
@@ -245,6 +254,7 @@ const ADAPTER_REGISTRY = Object.freeze({
         channel: null,
         field: null,
         none: '',
+        maxIterations: null,
       }),
     }),
   }),
@@ -279,6 +289,9 @@ const ADAPTER_REGISTRY = Object.freeze({
       event: 'hook_event_name',
       sessionId: 'session_id',
       clientVersion: null,
+      // As with the other desktop surface, no captured payload carries a turn
+      // status, so none is declared (TB-027).
+      turn: null,
       // Observed as a repository root here and NOT one under another client.
       // Same field name, same shape, different truth — so this surface
       // declares its own resolution rule rather than sharing one.
@@ -309,6 +322,7 @@ const ADAPTER_REGISTRY = Object.freeze({
         channel: null,
         field: null,
         none: '',
+        maxIterations: null,
       }),
     }),
   }),
@@ -354,6 +368,22 @@ const ADAPTER_REGISTRY = Object.freeze({
       sessionId: 'session_id',
       // This client self-reports its exact version in every payload.
       clientVersion: 'cursor_version',
+      // Observed from a real client payload: this surface's `stop` event fires
+      // whether the turn finished or the operator stopped it, and says which in
+      // `status`. Only a completed turn is `work-complete`; an interrupted one
+      // is the operator's decision and is answered with nothing at all. A value
+      // in neither list is not guessed into either (TB-027, FR-ADAPT-003).
+      //
+      // The client also reports how many auto-follow-ups it has submitted. Every
+      // captured payload reported `0`, including during an observed loop, so it
+      // is read as a bound when it advances and never relied on when it does
+      // not.
+      turn: Object.freeze({
+        status: 'status',
+        completed: Object.freeze(['completed']),
+        interrupted: Object.freeze(['aborted', 'error']),
+        iteration: 'loop_count',
+      }),
       // This surface sends an ARRAY of workspace roots and supports multi-root
       // workspaces, so its declaration differs in shape from both other
       // desktop surfaces.
@@ -384,6 +414,11 @@ const ADAPTER_REGISTRY = Object.freeze({
         channel: 'stdout-json',
         field: 'followup_message',
         none: '',
+        // This channel re-prompts the agent, so an answer on it is an action,
+        // not a notification. Two says what failed and gives one turn to act
+        // on it; a third repetition of an unchanged verdict has nothing to add
+        // and is how a preflight becomes a loop (TB-027).
+        maxIterations: 2,
       }),
     }),
   }),
@@ -497,6 +532,49 @@ export const normalizeNativeInvocation = ({ adapterId, native } = {}) => {
     sessionId: readNativeString(native, adapter.nativeIdentity.sessionId),
     clientVersion: readNativeString(native, adapter.nativeIdentity.clientVersion),
   };
+};
+
+/**
+ * Read how the turn that fired this event ended, through the adapter's own
+ * declaration.
+ *
+ * A client whose event fires for both a finished turn and a stopped one has not
+ * told the gate `work-complete` merely by firing it: only the declared
+ * completed values mean that. An interrupted turn is the operator's decision,
+ * and a preflight that answered it would put a message in front of the agent
+ * that restarts the work the operator just stopped (FR-ADAPT-003).
+ *
+ * Returns one of three states. `completed` is the only one that is evaluated;
+ * `interrupted` is answered with nothing; `unreadable` is `unverified`, because
+ * a status this surface never declared is not evidence that the turn finished.
+ * A surface declaring no turn at all has always been completed and stays that
+ * way.
+ */
+export const normalizeTurn = ({ adapterId, native } = {}) => {
+  const adapter = describeAdapter(adapterId);
+
+  if (adapter === null) {
+    return null;
+  }
+
+  const declaration = adapter.nativeIdentity.turn ?? null;
+
+  if (declaration === null) {
+    return { declared: false, state: 'completed', status: null, iteration: null };
+  }
+
+  const iterationValue = isPlainObject(native) ? native[declaration.iteration] : null;
+  const iteration = Number.isInteger(iterationValue) ? iterationValue : null;
+  const status = readNativeString(native, declaration.status);
+  const state = (() => {
+    if (declaration.completed.includes(status)) {
+      return 'completed';
+    }
+
+    return declaration.interrupted.includes(status) ? 'interrupted' : 'unreadable';
+  })();
+
+  return { declared: true, state, status, iteration };
 };
 
 /** Whether one directory is a repository root, by the only marker Git guarantees. */
@@ -916,11 +994,19 @@ export const BASELINE_CHECKS = Object.freeze([
  */
 export const buildNativePayload = (adapter, { nativeEvent, repositoryRoot, sessionId }) => {
   const declaration = adapter.nativeIdentity.repositoryRoot;
+  const turn = adapter.nativeIdentity.turn ?? null;
 
   return {
     [adapter.nativeIdentity.event]: nativeEvent,
     [adapter.nativeIdentity.sessionId]: sessionId,
     [declaration.field]: declaration.shape === 'path-array' ? [repositoryRoot] : repositoryRoot,
+    // A surface that declares a turn sends one on every event, so a payload
+    // built from its declaration carries one too. Building one without it would
+    // model a client that does not exist and hide every rule that reads it.
+    ...(turn === null ? {} : {
+      [turn.status]: turn.completed[0],
+      [turn.iteration]: 0,
+    }),
   };
 };
 
