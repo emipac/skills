@@ -1230,6 +1230,10 @@ export const previewActivation = async (request, dependencies = {}) => {
     hookManager: described.hookManager,
     hooks: described.hooks,
     commands: described.commands,
+    // What the checks will be given besides the snapshot itself. Consent is
+    // granted against this preview, so a maintainer sees which installed
+    // directories their own tools will reach (TB-030, FR-LIFE-004).
+    dependencyRoots: [...(request.configuration?.policy?.execution?.dependency_roots ?? [])],
     unresolved: described.runners.unresolved,
     adapters: described.adapters,
     runtimeInputs: described.runtimeInputs,

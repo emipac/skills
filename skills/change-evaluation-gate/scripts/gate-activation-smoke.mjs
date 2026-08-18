@@ -30,9 +30,12 @@
  *    NFR-REL-003, SG-LIFE-001).
  * 5. `vendor-binary-commit` — a clone whose required check is a `composer-bin`
  *    descriptor runs the binary under its own vendor directory: activation pins
- *    it, commits are allowed and denied by it, the evidence names it, and a pin
+ *    it and the interpreter its shebang names, the binary loads the project's
+ *    git-ignored installed dependencies from inside the materialized snapshot,
+ *    commits are allowed and denied by it, the evidence names it, and a pin
  *    whose executable was removed denies as drift rather than re-resolving to
- *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003).
+ *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003,
+ *    TB-028, TB-030).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -229,7 +232,11 @@ const GATE_POLICY = {
 const fixtureConfigurations = new Map();
 
 /** A throwaway clone with one baseline commit, a check, and a configuration. */
-const fixtureRepository = async ({ mappings = MIGRATION_MAPPINGS, files = {} } = {}) => {
+const fixtureRepository = async ({
+  mappings = MIGRATION_MAPPINGS,
+  files = {},
+  policy = GATE_POLICY,
+} = {}) => {
   const root = await temporaryDirectory('gate-activation-smoke-repo-');
 
   await assertThrowawayRepository(root);
@@ -258,12 +265,12 @@ const fixtureRepository = async ({ mappings = MIGRATION_MAPPINGS, files = {} } =
 
   const gateConfiguration = await previewGateConfiguration({
     projectRoot: root,
-    policy: GATE_POLICY,
+    policy,
   });
 
   await configureGate({
     projectRoot: root,
-    policy: GATE_POLICY,
+    policy,
     confirmation: gateConfiguration.previewHash,
   });
 
@@ -734,6 +741,17 @@ const VENDOR_BINARY_PATH = path.join('vendor', 'bin', VENDOR_BINARY);
 const VENDOR_BINARY_LEDGER = path.join('vendor', 'bin', 'ran.log');
 
 /**
+ * The installed dependency this project's own tool loads before it can work.
+ *
+ * It lives inside the git-ignored `vendor/`, so it is in no snapshot the gate
+ * materializes unless the project declared that root and the gate provided it.
+ */
+const VENDOR_AUTOLOAD = 'vendor/autoload.sh';
+
+/** The directories this fixture project installs its dependencies into. */
+const VENDOR_DEPENDENCY_ROOTS = Object.freeze(['vendor']);
+
+/**
  * A real vendor binary. It records its own path each time it runs, so the
  * program that graded a commit is stated by the program itself — the whole
  * point of the defect TB-024 closes, where `composer` ran while the policy,
@@ -747,6 +765,11 @@ const VENDOR_BINARY_SCRIPT = [
   // fixture missed TB-028 the first time.
   '#!/usr/bin/env sh',
   'printf "%s\\n" "$0" >> "$(dirname "$0")/ran.log"',
+  // The tool loads the project's installed dependencies before it can grade
+  // anything — exactly as `artisan` requires `vendor/autoload.php` — and it
+  // resolves them relative to the directory it runs in, which is the
+  // materialized snapshot. Without TB-030 this file is simply not there.
+  `. ./${VENDOR_AUTOLOAD}`,
   `grep -q ${BREAKAGE} "$1" && exit 1`,
   'exit 0',
   '',
@@ -788,11 +811,15 @@ const vendorBinaryCommit = async () => {
   const findings = [];
   const root = await fixtureRepository({
     mappings: VENDOR_MIGRATION_MAPPINGS,
+    policy: { ...GATE_POLICY, execution: { budget_skippable: [], dependency_roots: [...VENDOR_DEPENDENCY_ROOTS] } },
     files: {
       // `vendor/` is git-ignored in a real clone, so the binary is never in the
       // graded snapshot. The tool is not the thing under test; the code is.
       '.gitignore': { contents: 'vendor/\n' },
       [VENDOR_BINARY_PATH]: { contents: VENDOR_BINARY_SCRIPT, mode: 0o755 },
+      // What the tool loads before it grades anything. It is git-ignored, so it
+      // reaches the snapshot only because the project declared its root.
+      [VENDOR_AUTOLOAD]: { contents: '# the installed dependency tree\n' },
     },
   });
   const vendorBinary = path.join(root, VENDOR_BINARY_PATH);

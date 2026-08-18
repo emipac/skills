@@ -14,7 +14,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -122,6 +122,82 @@ const materializeBlobs = async (executionRoot, blobs) => {
   }
 };
 
+/**
+ * Whether one declared dependency root is a repository-relative directory that
+ * stays inside the repository.
+ *
+ * A declaration is a name a project wrote in its own policy, so it is checked
+ * rather than trusted: an absolute path or one that climbs out would let a
+ * declaration reach content the repository does not contain, which is a wider
+ * thing than "let a check load what the project installed" (`SG-CMD-001`).
+ */
+const isContainedRoot = (declared) => {
+  if (typeof declared !== 'string' || declared === '' || path.isAbsolute(declared)) {
+    return false;
+  }
+
+  const normalized = path.normalize(declared);
+
+  return normalized !== '..'
+    && !normalized.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(normalized);
+};
+
+/**
+ * Provide the dependency roots a project declared, beside the snapshot.
+ *
+ * A materialized snapshot holds tracked content, and installed dependencies are
+ * never tracked — so without this a tool starts and immediately cannot find the
+ * autoloader, module tree, or binaries it needs to read the code at all. They
+ * are environment, not subject: the same category as the executable `TB-024`
+ * resolves outside the snapshot, and for the same reason.
+ *
+ * Each root is linked rather than copied. A dependency tree is large enough
+ * that copying it per evaluation would make the budget meaningless, and the
+ * link is to the clone's own installation, which is what the maintainer would
+ * have run the tool against by hand.
+ *
+ * Nothing here is graded: a provided root is absent from the snapshot's path
+ * list, so it is outside the identity, outside the immutability re-check, and
+ * outside every path-based rule that reads it (`SG-EVAL-001`, `NFR-REL-001`).
+ */
+const provideDependencyRoots = async ({ repositoryRoot, executionRoot, dependencyRoots }) => {
+  const provided = [];
+  const missing = [];
+  const refused = [];
+
+  for (const declared of dependencyRoots) {
+    if (!isContainedRoot(declared)) {
+      refused.push(declared);
+
+      continue;
+    }
+
+    const source = path.join(repositoryRoot, declared);
+    const installed = await stat(source).then((entry) => entry.isDirectory(), () => false);
+
+    if (!installed) {
+      missing.push(declared);
+
+      continue;
+    }
+
+    const destination = path.join(executionRoot, declared);
+
+    try {
+      await mkdir(path.dirname(destination), { recursive: true });
+      await symlink(source, destination, 'dir');
+      provided.push(declared);
+    } catch (error) {
+      // A platform or filesystem that cannot link is a stated condition, not a
+      // silent degradation: the check would fail inside its own tool otherwise.
+      missing.push(declared);
+    }
+  }
+
+  return { provided, missing, refused };
+};
+
 /** Recompute the identity of what is actually on disk in the execution root. */
 export const identifyExecutionRoot = async (executionRoot, relatives) => {
   const entries = [];
@@ -147,6 +223,7 @@ export const captureSnapshot = async ({
   baseRevision = 'HEAD',
   executionRoot,
   runGit = defaultRunGit,
+  dependencyRoots = [],
 }) => {
   if (!SNAPSHOT_KINDS.includes(kind)) {
     return {
@@ -175,8 +252,16 @@ export const captureSnapshot = async ({
     }
 
     const paths = relatives.map((relative) => toPosix(relative)).sort();
+    // The identity is derived before anything untracked is placed beside it and
+    // over the tracked paths alone, so what a project installed can never move
+    // the identity of what it wrote (NFR-REL-001).
     const id = await identifyExecutionRoot(executionRoot, paths);
     const changedPaths = await listChangedPaths(repositoryRoot, kind, runGit);
+    const dependencies = await provideDependencyRoots({
+      repositoryRoot,
+      executionRoot,
+      dependencyRoots,
+    });
 
     return {
       captured: true,
@@ -188,6 +273,7 @@ export const captureSnapshot = async ({
         paths,
       },
       changedPaths,
+      dependencies,
     };
   } catch (error) {
     return {

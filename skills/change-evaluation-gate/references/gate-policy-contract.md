@@ -16,7 +16,7 @@ therefore cannot be configured into existence (`FR-POL-004`).
 | `checks` | `required` and `advisory` check identities |
 | `budget` | `total_seconds`, the confirmed total evaluation budget |
 | `bypass` | `enabled`, optional `require_reference`, and the commit-visible `marker` |
-| `execution` | execution policy, including `budget_skippable` advisory identities |
+| `execution` | execution policy, including `budget_skippable` advisory identities and the `dependency_roots` a check needs provided |
 | `evidence` | evidence policy |
 
 No subcontract may carry a command, runner, argument list, working directory,
@@ -64,6 +64,19 @@ dropped when the remaining budget cannot cover them; they are recorded as
 `budget-exhausted` and stay visible as advisories. Required work is never
 skipped: it is attempted with whatever budget remains, and a required check the
 budget cannot cover at all becomes blocking `unverified`.
+
+`execution.dependency_roots` names the repository-relative directories a
+project installs its dependencies into — the ones its own tools load before
+they can read any code. A materialized snapshot holds tracked content only, so
+without this a tool starts inside the snapshot and cannot find its autoloader
+or module tree. Each declared root is provided beside the snapshot and is never
+graded: it is outside the snapshot identity, outside `changedPaths`, and
+outside the immutability re-check, so a tool writing into its own cache never
+becomes `snapshot-mismatch`. A root that is absolute, or that would climb out
+of the repository, is refused by this contract. A declared root the clone has
+not installed is `dependency-root-unavailable` and denies, rather than becoming
+a fatal error from inside somebody's tool. Nothing is ever installed by the
+gate.
 
 ## Bypass
 

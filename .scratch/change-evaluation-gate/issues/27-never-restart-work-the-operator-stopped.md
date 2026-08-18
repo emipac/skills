@@ -189,14 +189,13 @@ conformance scenario this extends.
 
 ## SRS amendment this contract required
 
-Drafted as revision `0.2.6`, awaiting Product Owner approval. The turn-status
-half needed none: a client event that fires for both a finished turn and an
-aborted one is only `work-complete` when it says so, and `FR-ADAPT-003` already
-requires normalizing a deterministic native event to the trigger it actually
-means. The iteration bound is new — `FR-ADAPT-004`'s feedback enumeration,
-approved at `0.2.5`, names the channel, the field, and the silent form, and now
-also names the maximum. `AC-ADAPT-002` carries the matching assertion. Both rows
-are marked `Draft` and the document header still states the approved `0.2.5`.
+Approved as revision `0.2.6` on 2026-08-17. The turn-status half needed none: a
+client event that fires for both a finished turn and an aborted one is only
+`work-complete` when it says so, and `FR-ADAPT-003` already requires
+normalizing a deterministic native event to the trigger it actually means. The
+iteration bound was new — `FR-ADAPT-004`'s feedback enumeration, approved at
+`0.2.5`, named the channel, the field, and the silent form, and now also names
+the maximum, with `AC-ADAPT-002` carrying the matching assertion.
 
 ## Unresolved Assumptions
 
