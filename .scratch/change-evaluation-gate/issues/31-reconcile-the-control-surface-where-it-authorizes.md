@@ -1,4 +1,4 @@
-# TB-031 — Reconcile the control surface on the paths that authorize
+# TB-031 — Enforce the configuration that was activated
 
 Status: ready-for-agent
 Parent: change-evaluation-gate-feature-spec
@@ -15,28 +15,50 @@ Draft key: TB-031
 
 ## Outcome
 
-A clone that can no longer identify what it is enforcing stops authorizing.
-The authoritative runner reconciles the Gate control surfaces the Activation
-receipt pinned against what is on the machine now, and independent drift ends
-the decision as `unverified` with `integrity-drift` — at the moment a commit is
-being decided, not only in a capability that never runs on a maintainer's
-machine.
+A commit is graded by the policy the maintainer approved, or it is not graded
+at all. The authoritative runner reconciles every Gate control surface the
+Activation receipt pinned — the trusted configuration first among them —
+against what is on the machine now, and drift ends the decision as `unverified`
+with `integrity-drift` pointing at `gate repair`. Changing which checks are
+required, what they run, or how severely they bind stops being something a
+clone silently starts enforcing.
 
 ## SRS Traceability
 
-- `FR-EVAL-001`, `FR-LIFE-019`
-- `AC-SEC-001`, `AC-EVAL-001`
-- `SG-TRUST-001`
+- `FR-EVAL-001`, `FR-LIFE-019`, `FR-CFG-002`
+- `AC-SEC-001`, `AC-EVAL-001`, `AC-CFG-004`
+- `SG-TRUST-001`, `SG-POL-001`
 - `NFR-SEC-004`, `NFR-REL-003`
 - `RISK-001`
 
 ## Defect this contract fixes
 
 Found while reviewing the recorded evidence of real commits in `gms`
-(`real-project-evidence/change-evaluation-gate/evidence/`). Every decision, on
-both the authoritative and the preflight path, carries
-`"diagnostics": []` — and it always will, because control-surface
-reconciliation never runs.
+(`real-project-evidence/change-evaluation-gate/evidence/`), and independently
+raised as a `P0` by an external audit of `HEAD` `9569362` — *"activation does
+not bind the approved configuration identity: policy severity, command
+arguments, or checks can be changed after activation while retaining the same
+runner path; the hook evaluates the changed configuration."*
+
+Those are one defect, not two. The receipt already pins the trusted
+configuration identity, `reconcileControlSurface` already compares it against
+what is observed, and nothing calls it — so the binding the audit asks for is
+the wiring this ticket describes, and enforcing the activated configuration is
+what that wiring *does*.
+
+Every decision in the recorded evidence, on both the authoritative and the
+preflight path, carries `"diagnostics": []` — and always will, because
+control-surface reconciliation never runs.
+
+**This is the sharpest defect in the product's own threat model.** The gate is
+built for an AI-assisted workflow where an agent edits the repository, and the
+recorded evidence shows `controlSurfaceChanged: true` because that agent had
+`.agent-framework.yaml` staged. An agent whose commit is blocked can weaken the
+policy that blocks it — drop the failing check from `required`, widen a
+command, lower a severity — and the very next commit is graded against the
+weakened configuration with no re-consent and no signal. Nothing about that
+requires an attacker; it is an ordinary agent doing what it was asked to do,
+which is what makes it worth denying.
 
 `evaluateSnapshot` guards it:
 
@@ -117,9 +139,16 @@ identities observable on this machine at decision time. The public seam is the
 shared observed-surface function and the two runners' use of it; the
 reconciliation rule itself does not move.
 
-First red test: an activated throwaway clone whose registered hook block is
-edited after activation denies the next commit with `integrity-drift`, naming
-the drifted surface — where today the same clone commits normally.
+First red test: an activated throwaway clone whose `.agent-framework.yaml` is
+edited after activation — a required check dropped from `required` — denies the
+next commit with `integrity-drift`, naming the trusted-configuration surface,
+where today the same clone commits normally under the weakened policy.
+
+**The observed configuration identity must be computed the way the receipt's
+was.** `configurationIdentity` in `activation.mjs` is that rule, and the
+comparison is only meaningful if both sides use it: an observation that hashes
+the file differently would report drift on every commit, and one that hashes
+less than the receipt pinned would miss the edit this ticket exists to catch.
 
 ## Safeguards and Invariants
 
@@ -159,6 +188,15 @@ surface or a health view; `gate status` is a separate contract.
   control surface — runtime, adapters, managed hooks, receipt, trusted
   configuration, command descriptors, providers — makes the next commit-time
   evaluation `unverified` with `integrity-drift` and denies it.
+- [ ] `AC-CFG-004`, `SG-POL-001`: an activated clone whose Gate policy is
+  edited afterwards denies the next commit rather than enforcing the edit —
+  proved separately for a check moved out of `required`, a changed command
+  argument, and an added or removed check identity, each driven through a real
+  `git commit`. This is the audit's `P0`, and it is the case a maintainer or an
+  agent reaches without doing anything unusual.
+- [ ] `AC-CFG-004`: the observed configuration identity is computed by
+  `configurationIdentity`, the same rule the receipt was pinned with, so an
+  unedited clone never reports drift and an edited one always does.
 - [ ] `AC-EVAL-001`: an activated clone with no drift is unaffected: the same
   commits are allowed and denied exactly as before, with no added diagnostic.
 - [ ] `SG-SUPPORT-001`: the preflight runner reports the same drift as
@@ -177,7 +215,7 @@ surface or a health view; `gate status` is a separate contract.
 | Layer | Scope | Evidence | Command or capability | Required |
 | --- | --- | --- | --- | --- |
 | focused | both | `AC-SEC-001`, `NFR-SEC-004`, `FR-EVAL-009`: per-surface drift fixtures against both runners, a no-drift baseline, an unobservable-surface case, and the single-observer source scan | `npm run test:unit` | Yes — the unit suite owns both runners and the security control |
-| smoke | both | `AC-SEC-001`, `AC-EVAL-001`: an activated throwaway clone whose registered hook block is edited after activation denies a real `git commit` with `integrity-drift`, and an undrifted clone still commits | `gate-security-control-smoke` extended to drive the packaged runner, with the real-commit half in `gate-activation-smoke` | Yes — today that capability proves the rule against a hand-assembled surface and never against the shipped entry point |
+| smoke | both | `AC-SEC-001`, `AC-CFG-004`, `AC-EVAL-001`: an activated throwaway clone whose Gate policy is weakened after activation denies a real `git commit` with `integrity-drift`; the same for an edited hook block; and an undrifted clone still commits | `gate-security-control-smoke` extended to drive the packaged runner, with the real-commit half in `gate-activation-smoke` | Yes — today that capability proves the rule against a hand-assembled surface and never against the shipped entry point |
 
 Frontend build and browser evidence are inapplicable; this slice changes local
 decision-time observation.

@@ -1,17 +1,37 @@
 # TB-029 — A check that never started has not failed
 
-Status: ready-for-agent
+Status: superseded
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: superseded, defect
 Blocked by:
 Tracker ID: 29-a-check-that-never-started-never-failed
 Draft key: TB-029
 
-**Status:** ready-for-agent
+**Status:** superseded by
+[`TB-033`](33-fail-closed-on-a-decision-the-runner-cannot-verify.md)
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
+
+## Why this ticket was folded rather than delivered
+
+Two things changed after it was written.
+
+`TB-028` removed the cause it was drafted against — the five `exit 127`
+attempts came from checks running with no PATH, and a pinned executable whose
+interpreter cannot be found is now `runner-unresolved` at activation rather
+than a failed check at commit time. `TB-030` removed the neighbouring case, so
+a missing dependency root is `dependency-root-unavailable` rather than a fatal
+error inside a tool. What remains is a residue: a pinned program whose
+interpreter chain breaks *after* activation.
+
+That residue is worth closing, and it is the same principle as the audit's `P0`
+fail-open finding — never report an outcome that was never observed — one level
+down. Keeping them apart would have meant two tickets for one rule, against a
+stated goal of not growing this feature further, so the attempt-level half is
+now an acceptance criterion of `TB-033` and the analysis below stands as its
+background.
 
 ## Outcome
 
