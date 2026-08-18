@@ -1,0 +1,146 @@
+{
+  "receiptVersion": "change-evaluation-gate/activation/v1",
+  "activatedAt": "2026-08-17T06:10:06.534Z",
+  "previewId": "sha256:453bb6492fb32a6735605feddb391dee7616f979be1138c062dc733812c40fc8",
+  "repository": {
+    "root": "/Users/emipac/www/gms",
+    "gitCommonDirectory": "/Users/emipac/www/gms/.git",
+    "identity": "sha256:de5bd6f2ce56133d83e2e4d1724e4e28f5b41670c26a5fd5251b8381527eace0"
+  },
+  "configuration": {
+    "schemaVersion": 4,
+    "identity": "sha256:2604e1f0e335cf117b3d210ec7bc70106f1ce067257b08e1d80495fb3f9d5fa6"
+  },
+  "runtime": {
+    "gate": {
+      "id": "change-evaluation-gate",
+      "version": "1.0.0",
+      "protocolVersion": "1.0"
+    },
+    "runnerVersion": "change-evaluation-gate-precommit/1.0.0",
+    "runners": [
+      {
+        "check_id": "configuration.format.formatter.1",
+        "role": "evaluate",
+        "runner": "composer-bin",
+        "executable": "/Users/emipac/www/gms/vendor/bin/pint",
+        "version": "Pint 1.30.5"
+      },
+      {
+        "check_id": "configuration.format.formatter.2",
+        "role": "evaluate",
+        "runner": "package-script",
+        "executable": "/Users/emipac/.nvm/versions/node/v24.6.0/bin/npm",
+        "version": "11.5.1"
+      },
+      {
+        "check_id": "configuration.static-analysis.static-analysis.1",
+        "role": "evaluate",
+        "runner": "composer-bin",
+        "executable": "/Users/emipac/www/gms/vendor/bin/phpstan",
+        "version": "PHPStan - PHP Static Analysis Tool 2.2.8"
+      },
+      {
+        "check_id": "configuration.static-analysis.static-analysis.2",
+        "role": "evaluate",
+        "runner": "package-script",
+        "executable": "/Users/emipac/.nvm/versions/node/v24.6.0/bin/npm",
+        "version": "11.5.1"
+      },
+      {
+        "check_id": "configuration.build.build",
+        "role": "evaluate",
+        "runner": "package-script",
+        "executable": "/Users/emipac/.nvm/versions/node/v24.6.0/bin/npm",
+        "version": "11.5.1"
+      },
+      {
+        "check_id": "configuration.broad-tests.test",
+        "role": "evaluate",
+        "runner": "php-script",
+        "executable": "/Users/emipac/Library/Application Support/Herd/bin/php",
+        "version": "PHP 8.4.23 (cli) (built: Jul  6 2026 06:39:02) (NTS clang 15.0.0)"
+      }
+    ]
+  },
+  "adapters": [
+    {
+      "id": "git",
+      "version": "1.0.0",
+      "authoritative": true,
+      "selfTest": {
+        "ok": true,
+        "detail": "git git-pre-commit answered"
+      }
+    },
+    {
+      "id": "cursor",
+      "version": "1.0.0",
+      "authoritative": false,
+      "selfTest": {
+        "ok": true,
+        "detail": "cursor cursor-ide-local-agent answered"
+      },
+      "registration": {
+        "kind": "client-configuration-file",
+        "path": "/Users/emipac/www/gms/.cursor/hooks.json",
+        "eventKey": "stop",
+        "blockSchema": "flat-command",
+        "command": "\"/Users/emipac/.nvm/versions/node/v24.6.0/bin/node\" \"/Users/emipac/www/gms/.claude/skills/change-evaluation-gate/scripts/gate-precommit.mjs\"",
+        "entryIdentity": "sha256:94f0aa4bed6278c230d6c07e0668e216695baf66e1a763c510cb73a12a5a438c",
+        "created": {
+          "container": null,
+          "eventKey": true
+        },
+        "registered": true,
+        "confirmed": true,
+        "state": "registered",
+        "reason": null
+      }
+    }
+  ],
+  "hooks": [
+    {
+      "hook": "pre-commit",
+      "path": "/Users/emipac/www/gms/.git/hooks/pre-commit",
+      "ownership": "gate-owned-shim"
+    }
+  ],
+  "hookChain": {
+    "strategy": "gate-owned-shim",
+    "manager": null,
+    "path": "/Users/emipac/www/gms/.git/hooks/pre-commit",
+    "priorIdentity": null,
+    "blockIdentity": "sha256:68408f7606368c96c58db9d669b51ef51e2fa853689d474b66fe04a9d8f03519"
+  },
+  "trust": {
+    "client": "cursor",
+    "established": true,
+    "grantedBy": "cursor-operator",
+    "at": "2026-08-17T06:10:06.203Z"
+  },
+  "runtimeInputs": [],
+  "selfTests": [
+    {
+      "name": "evaluation-process",
+      "ok": true,
+      "detail": "the evaluation process reached failed"
+    },
+    {
+      "name": "hook-program",
+      "ok": true,
+      "detail": "The registered hook program denied the self-test subject with exit 1."
+    },
+    {
+      "name": "adapter:git",
+      "ok": true,
+      "detail": "git git-pre-commit answered"
+    },
+    {
+      "name": "adapter:cursor",
+      "ok": true,
+      "detail": "cursor cursor-ide-local-agent answered"
+    }
+  ],
+  "receiptId": "sha256:8b4cb0bc4e830bd95e7b17ecf47cf1518fad4ecef17447d959f8866418f2c6bc"
+}

@@ -1,0 +1,7 @@
+
+Warning: require(/private/var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-preflight-exec-OEhA53/vendor/autoload.php): Failed to open stream: No such file or directory in /private/var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-preflight-exec-OEhA53/artisan on line 10
+
+Fatal error: Uncaught Error: Failed opening required '/private/var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-preflight-exec-OEhA53/vendor/autoload.php' (include_path='.:') in /private/var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-preflight-exec-OEhA53/artisan:10
+Stack trace:
+#0 {main}
+  thrown in /private/var/folders/gg/sqwfj_pd0rgdgdvtk81w0sw40000gn/T/gate-preflight-exec-OEhA53/artisan on line 10
