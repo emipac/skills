@@ -398,6 +398,10 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     baseRevision: request.change.baseRevision,
     executionRoot: dependencies.executionRoot,
     runGit: dependencies.runGit,
+    // Which directories this project installs its dependencies into is the
+    // project's own declaration. Gate core provides what it is told to provide
+    // and knows nothing about which stack asked (SG-OWNER-001, FR-EVAL-001).
+    dependencyRoots: policy?.execution?.dependency_roots ?? [],
   });
 
   if (!capture.captured) {
@@ -417,6 +421,19 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
   }
 
   const { snapshot } = capture;
+
+  // A declared dependency root the clone does not have is stated, by name,
+  // before any check runs. Letting the evaluation proceed would produce a
+  // fatal error from inside somebody's tool and report it as their code
+  // failing, which is the shape this whole class of defect takes
+  // (NFR-REL-003).
+  for (const unavailable of [...capture.dependencies.missing, ...capture.dependencies.refused]) {
+    diagnostics.push({
+      reasonCode: 'dependency-root-unavailable',
+      detail: `The declared dependency root ${JSON.stringify(unavailable)} could not be provided to this evaluation; a check that needs it cannot run and nothing here is proved.`,
+    });
+  }
+
   const scope = await scopeOf(request, snapshot.executionRoot);
   // A change that edits what judges it is reported before any check runs, so
   // the surfaces are named even when execution later fails (FR-EVAL-009).

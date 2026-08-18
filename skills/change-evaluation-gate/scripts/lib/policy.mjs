@@ -62,6 +62,23 @@ const isCheckIdentity = (value) => typeof value === 'string' && value.length > 0
 
 const isIdentityList = (value) => Array.isArray(value) && value.every(isCheckIdentity);
 
+/**
+ * A repository-relative directory that cannot climb out of the repository.
+ *
+ * The separator is compared as text rather than resolved, so the same
+ * declaration is judged identically on every platform: a path that would escape
+ * is refused wherever the policy is read, not only where it is executed.
+ */
+const isContainedRoot = (value) => {
+  if (typeof value !== 'string' || value === '' || value.startsWith('/') || /^[A-Za-z]:/.test(value)) {
+    return false;
+  }
+
+  return value.split(/[\\/]+/).every((segment) => segment !== '..');
+};
+
+const isContainedRootList = (value) => Array.isArray(value) && value.every(isContainedRoot);
+
 const error = (code, path, message) => ({ code, path, message });
 
 const checksErrors = (checks) => {
@@ -248,6 +265,21 @@ export const validateGatePolicy = (policy) => {
         }
       }
     }
+  }
+
+  // Which directories a project installs its dependencies into is the
+  // project's own declaration; this contract only requires that each one is a
+  // repository-relative directory that stays inside the repository. A
+  // declaration that could climb out would reach content the repository does
+  // not contain (SG-CMD-001).
+  const dependencyRoots = policy.execution?.dependency_roots;
+
+  if (dependencyRoots !== undefined && !isContainedRootList(dependencyRoots)) {
+    errors.push(error(
+      'gate-policy-execution-invalid',
+      'evaluation_gate.execution.dependency_roots',
+      'Dependency roots must be listed as repository-relative directories that stay inside the repository.',
+    ));
   }
 
   return errors;

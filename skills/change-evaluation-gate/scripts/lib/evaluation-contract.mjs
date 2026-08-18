@@ -66,6 +66,10 @@ export const REASON_OUTCOMES = Object.freeze({
   crash: 'unverified',
   'malformed-output': 'unverified',
   'snapshot-mismatch': 'unverified',
+  // A dependency root the project declared could not be provided to the
+  // snapshot, so a check that needs it would fail inside its own tool for a
+  // reason that has nothing to do with the change (FR-EVAL-001).
+  'dependency-root-unavailable': 'unverified',
   'integrity-drift': 'unverified',
   'coordination-failure': 'unverified',
   'attempt-conflict': 'unverified',

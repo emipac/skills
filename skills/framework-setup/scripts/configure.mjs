@@ -764,6 +764,58 @@ const configuredChecksToDraft = async (projectRoot) => {
  * restates either catalogue (SG-OWNER-001), and nothing unproved is invented:
  * bypass stays disabled with no marker, and an unprovable budget stays `null`.
  */
+/**
+ * Which installed dependency directory each logical runner reaches into.
+ *
+ * A `composer-bin` binary lives under the vendor directory and a PHP entry
+ * point autoloads from it; a package script runs through a package manager that
+ * resolves from the module tree. A `repository-script` is run by this Node
+ * runtime against a file the repository tracks and needs neither.
+ */
+const RUNNER_DEPENDENCY_ROOTS = Object.freeze({
+  'composer-bin': { manifest: 'composer.json', root: 'vendor' },
+  'php-script': { manifest: 'composer.json', root: 'vendor' },
+  'package-script': { manifest: 'package.json', root: 'node_modules' },
+});
+
+/**
+ * Where this project installs the dependencies its own checks need to run.
+ *
+ * A materialized Evaluation snapshot holds tracked content, and an installed
+ * dependency tree is never tracked — so a tool starts inside the snapshot and
+ * cannot find the autoloader or module tree it needs to read the code at all.
+ *
+ * Two proved facts are required before a root is declared, and a manifest alone
+ * is not enough: some configured check must run through a runner that reaches
+ * into that directory, *and* the manifest that governs it must exist. A project
+ * carrying a `package.json` whose only check is a repository script needs no
+ * module tree, and declaring one would deny its commits for a directory nothing
+ * was going to read.
+ *
+ * A root the project has not installed yet is the Gate's to report, not this
+ * drafter's to hide.
+ */
+const derivedDependencyRoots = async (projectRoot, checks) => {
+  const resolvedRoot = path.resolve(projectRoot);
+  const roots = [];
+
+  for (const check of checks) {
+    for (const command of [check.evaluate, check.fix]) {
+      const declared = RUNNER_DEPENDENCY_ROOTS[command?.runner] ?? null;
+
+      if (declared === null || roots.includes(declared.root)) {
+        continue;
+      }
+
+      if (await exists(path.join(resolvedRoot, declared.manifest))) {
+        roots.push(declared.root);
+      }
+    }
+  }
+
+  return roots.sort();
+};
+
 export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
   const provider = await resolveDraftProvider(projectRoot);
   const checks = await configuredChecksToDraft(projectRoot);
@@ -782,7 +834,10 @@ export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
     checks: { required, advisory },
     budget: { total_seconds: await derivedBudgetSeconds(projectRoot) },
     bypass: { enabled: false, marker: null },
-    execution: { budget_skippable: [] },
+    execution: {
+      budget_skippable: [],
+      dependency_roots: await derivedDependencyRoots(projectRoot, checks),
+    },
     evidence: {},
   }, out);
 };

@@ -1,14 +1,14 @@
 # TB-030 — Give the evaluation snapshot the dependencies its checks need
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 30-give-the-snapshot-the-dependencies-its-checks-need
 Draft key: TB-030
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -155,24 +155,58 @@ provided.
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVAL-001`, `FR-EVAL-001`: an activated clone whose required check
+- [x] `AC-EVAL-001`, `FR-EVAL-001`: an activated clone whose required check
   loads a git-ignored dependency root executes that check successfully inside
   the execution root, denies on genuinely bad content, and allows on good
   content.
-- [ ] `SG-EVAL-001`, `NFR-REL-001`: the snapshot identity and the post-run
+- [x] `SG-EVAL-001`, `NFR-REL-001`: the snapshot identity and the post-run
   immutability verification are byte-identical whether or not dependency roots
   were provided, and a tool writing inside a provided root never produces
   `snapshot-mismatch`.
-- [ ] `FR-PROF-010`, `SG-OWNER-001`: the dependency roots are declared by the
+- [x] `FR-PROF-010`, `SG-OWNER-001`: the dependency roots are declared by the
   profile that needs them; a source scan finds no `vendor` or `node_modules`
   literal in the snapshot module, gate core, or evaluation contract.
-- [ ] `NFR-REL-003`: a declared dependency root that is absent from the clone
+- [x] `NFR-REL-003`: a declared dependency root that is absent from the clone
   is reported with a stated reason naming the root, and the required check is
   `unverified` rather than failing inside a tool.
-- [ ] A project declaring no dependency roots materializes exactly the tree it
+- [x] A project declaring no dependency roots materializes exactly the tree it
   does today, proved by an unchanged existing fixture.
-- [ ] The preview a maintainer consents to at activation states which
+- [x] The preview a maintainer consents to at activation states which
   dependency roots their checks will be given and how.
+
+## Decisions this slice recorded
+
+**Where the declaration lives: the Gate policy, not a provider plan.** The
+approach section put dependency roots "where that profile is declared", meaning
+a provider. That is not reachable at commit time: an activated clone derives
+its checks from `gateChecksFromConfiguration`, no provider is loaded, and the
+recorded decisions in `real-project-evidence/` carry `profile: null`. The
+declaration therefore lives in `evaluation_gate.execution.dependency_roots`,
+beside `budget_skippable` — an execution concern, validated by the policy
+contract, and already in the runners' hands. `SG-OWNER-001` is satisfied the
+same way either place: gate core provides directories it is handed and names
+none, and the source scan proves it.
+
+**A manifest alone does not prove a dependency root is needed.** The first
+implementation derived `vendor` from `composer.json` and `node_modules` from
+`package.json`, which immediately denied every commit in
+`derived-configuration-round-trip` — a fixture carrying a `package.json` whose
+only check is a Node repository script that reaches into no module tree. Two
+proved facts are now required: some configured check runs through a runner that
+reaches into that directory, *and* the governing manifest exists. Declaring a
+root nothing was going to read would deny commits for a directory no check
+needs, which is the same class of false accusation this ticket exists to end.
+
+**Linked, not copied.** A dependency root is symlinked into the execution root.
+Copying a module tree per evaluation would make the budget meaningless. The
+residual is the one the ticket anticipated and it is real: the link is to the
+clone's own installation, so a tool that writes into its dependency root writes
+into the maintainer's — which is already true of the live binaries `TB-024`
+runs, and is what running the tool by hand would have done.
+
+**A platform that cannot link reports it.** A failed link is recorded as a
+missing root and the evaluation is `unverified`, rather than proceeding into a
+fatal error from inside somebody's tool.
 
 ## Verification Matrix
 
