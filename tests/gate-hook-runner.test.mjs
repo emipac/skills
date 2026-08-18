@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import {
   HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION,
 } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
+import { evaluate as realEvaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import {
   SELF_TEST_ENV,
@@ -840,4 +841,149 @@ test('the packaged runner allows a passing staged change and denies a failing on
 
   assert.notEqual(refused.exitCode, 0, `expected a denial, got: ${refused.output}`);
   assert.match(refused.output, /configuration\.broad-tests\.test/);
+});
+
+/**
+ * TB-033 — Fail closed on any decision the runner cannot verify.
+ *
+ * `report` accepted any decision whose `authorization` and `outcome` were
+ * strings, so the minimal shape below — no checks, no evidence, no evaluation
+ * identity, no snapshot — exited `0` and the commit proceeded. These fixtures
+ * drive the real `runHook` through its injected `evaluate` seam, because the
+ * defect is not that the contract cannot describe a complete decision but that
+ * the authoritative runner never asked it to.
+ */
+
+test('TB-033 NFR-REL-003: a decision that claims allow but proves nothing never exits 0', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: process.env,
+    evaluate: async () => ({ authorization: 'allow', outcome: 'passed' }),
+  });
+
+  assert.notEqual(
+    result.exitCode,
+    0,
+    'a decision naming no checks, no evidence, no evaluation identity and no snapshot authorizes nothing.',
+  );
+  assert.equal(result.reasonCode, 'decision-malformed');
+});
+
+/**
+ * A decision complete enough to be worth altering: the real evaluation is run
+ * first, and each fixture below returns that decision with exactly one part
+ * removed or corrupted. Building the shape by hand would prove only that the
+ * hand-built shape is rejected, and the interesting question is whether a
+ * decision that is complete but for one missing part still reaches `exit 0`.
+ */
+const decisionFromRealEvaluation = async (root) => {
+  let captured = null;
+
+  await runHook({
+    cwd: root,
+    environment: process.env,
+    evaluate: async (request, options) => {
+      captured = await realEvaluate(request, options);
+
+      return captured;
+    },
+  });
+
+  return captured;
+};
+
+test('TB-033 AC-EVAL-001: a decision missing any one part it is judged by denies with a stated reason', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const complete = await decisionFromRealEvaluation(root);
+
+  assert.notEqual(complete, null, 'the fixture must start from a decision the runner really allows.');
+
+  const mutilations = {
+    checks: (decision) => ({ ...decision, checks: undefined }),
+    evaluationId: (decision) => ({ ...decision, evaluationId: undefined }),
+    snapshot: (decision) => ({ ...decision, snapshot: undefined }),
+    evidence: (decision) => ({ ...decision, evidence: undefined }),
+  };
+
+  for (const [part, mutilate] of Object.entries(mutilations)) {
+    const result = await runHook({
+      cwd: root,
+      environment: process.env,
+      evaluate: async () => mutilate(complete),
+    });
+
+    assert.notEqual(result.exitCode, 0, `a decision missing ${part} must not authorize a commit.`);
+    assert.equal(result.reasonCode, 'decision-malformed', `a decision missing ${part} denies.`);
+    assert.match(
+      result.lines.join('\n'),
+      new RegExp(part),
+      `the denial must name the ${part} it could not read.`,
+    );
+  }
+});
+
+test('TB-033 NFR-REL-003: an allow whose evidence was not positively persisted denies whatever shape the claim takes', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const complete = await decisionFromRealEvaluation(root);
+
+  assert.equal(complete?.authorization, 'allow');
+  assert.equal(complete?.evidence?.persisted, true);
+
+  // Absent, false, and malformed persistence take one path: an allow is
+  // authorized by evidence that was recorded, never by the absence of a
+  // statement that it was not.
+  const claims = {
+    absent: { ...complete.evidence, persisted: undefined },
+    stated: { ...complete.evidence, persisted: false },
+    unreferenced: { ...complete.evidence, persisted: true, reference: null },
+    referenceless: {
+      ...complete.evidence,
+      persisted: true,
+      reference: { ...complete.evidence.reference, evidenceId: null },
+    },
+  };
+
+  for (const [shape, evidence] of Object.entries(claims)) {
+    const result = await runHook({
+      cwd: root,
+      environment: process.env,
+      evaluate: async () => ({ ...complete, evidence }),
+    });
+
+    assert.notEqual(result.exitCode, 0, `an allow with ${shape} evidence must not authorize a commit.`);
+    assert.match(
+      result.lines.join('\n'),
+      /evidence/,
+      `the denial for ${shape} evidence must say what could not be proved.`,
+    );
+  }
+});
+
+test('TB-033 AC-EVAL-002: the runner keeps no second completeness rule of its own', async () => {
+  const source = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /validateDecision\(/,
+    'completeness is judged by the contract that defines it.',
+  );
 });

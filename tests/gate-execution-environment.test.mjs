@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -26,6 +26,10 @@ import {
   resolveExecutables,
   runtimeSearchPath,
 } from '../skills/change-evaluation-gate/scripts/lib/command-descriptor.mjs';
+import {
+  UNVERIFIED_REASONS,
+  classifyAttempt,
+} from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
 
 /** Wrap a stored runner/args pair in the rest of the schema v4 command shape. */
 const stored = (runner, args, overrides = {}) => ({
@@ -242,5 +246,110 @@ test('TB-028 NFR-REL-001: the runtime search path is the pins first, then the pl
     runtimeSearchPath([resolution, resolution]).split(path.delimiter).filter(Boolean).length,
     entries.length,
     'a repeated pin contributes its directory once.',
+  );
+});
+
+/**
+ * TB-033 — an attempt whose program never started has not failed.
+ *
+ * In the preserved evidence five checks exited `127` in one to five
+ * milliseconds and were every one classified `failed` / `grader-negative`,
+ * which states that the grader ran and returned a verdict. Nothing ran.
+ * `TB-028` removed the cause; what remains is a pinned program whose
+ * interpreter chain breaks after activation, and the rule that a launch
+ * failure is a harness failure holds whether or not it has a live cause.
+ *
+ * The signal is bounded execution's because bounded execution is the only
+ * participant that knows whether the process it spawned became the program it
+ * named. It is never derived from the exit status: a project's own tool may
+ * legitimately exit `127`, and a descriptor may declare its own success codes.
+ */
+
+test('TB-033 AC-EVAL-006: a pinned interpreter that disappeared after activation is a launch failure, not a verdict', async (t) => {
+  const { root, toolchain, interpreter } = await clone(t);
+  const command = stored('composer-bin', ['grade', 'subject.txt']);
+  const resolve = createRunnerResolver({ repositoryRoot: root, environment: { PATH: toolchain } });
+  const resolution = resolve('composer-bin', command);
+
+  assert.equal(resolution?.interpreter, interpreter);
+
+  // Activation proved the chain; the machine changed afterwards.
+  await rm(interpreter, { force: true });
+
+  const executor = createBoundedExecutor({
+    resolveExecutable: () => resolution,
+    runtimePath: runtimeSearchPath([resolution]),
+    captureOutput: true,
+    environment: {},
+  });
+  const attempt = await executor.execute({ command, executionRoot: root, timeoutSeconds: 60 });
+
+  assert.equal(attempt.executed, false, 'a program that could not start did not run.');
+  assert.equal(attempt.reasonCode, 'launch-failed');
+  assert.deepEqual(
+    classifyAttempt(attempt),
+    { outcome: 'unverified', reasonCode: 'launch-failed' },
+    'a maintainer is never told their code was rejected by a tool that never saw it.',
+  );
+  assert.equal(UNVERIFIED_REASONS.includes('launch-failed'), true);
+});
+
+test('TB-033 NFR-REL-003: an executable that is gone is a launch failure rather than a crash of the checked code', async (t) => {
+  const { root, toolchain } = await clone(t);
+  const command = stored('composer-bin', ['grade', 'subject.txt']);
+  const resolve = createRunnerResolver({ repositoryRoot: root, environment: { PATH: toolchain } });
+  const resolution = resolve('composer-bin', command);
+
+  await rm(path.join(root, 'vendor/bin/grade'), { force: true });
+
+  const executor = createBoundedExecutor({
+    resolveExecutable: () => resolution,
+    runtimePath: runtimeSearchPath([resolution]),
+    environment: {},
+  });
+  const attempt = await executor.execute({ command, executionRoot: root, timeoutSeconds: 60 });
+
+  assert.equal(attempt.executed, false);
+  assert.equal(attempt.reasonCode, 'launch-failed');
+  assert.equal(classifyAttempt(attempt).outcome, 'unverified');
+});
+
+test('TB-033 AC-EVAL-006: a tool that really runs is classified by its own verdict, whatever number it exits with', async (t) => {
+  const { root, toolchain } = await clone(t);
+  const command = stored('composer-bin', ['grade', 'subject.txt']);
+  const resolve = createRunnerResolver({ repositoryRoot: root, environment: { PATH: toolchain } });
+  const resolution = resolve('composer-bin', command);
+  const executor = createBoundedExecutor({
+    resolveExecutable: () => resolution,
+    runtimePath: runtimeSearchPath([resolution]),
+    captureOutput: true,
+    environment: {},
+  });
+
+  await writeFile(path.join(root, 'subject.txt'), 'BROKEN\n', 'utf8');
+
+  const negative = await executor.execute({ command, executionRoot: root, timeoutSeconds: 60 });
+
+  assert.equal(negative.executed, true);
+  assert.equal(negative.reasonCode, undefined, 'a tool that ran carries no harness reason.');
+  assert.deepEqual(
+    classifyAttempt(negative),
+    { outcome: 'failed', reasonCode: 'grader-negative' },
+  );
+
+  // A tool that genuinely exits 127 as its own verdict, under a descriptor that
+  // declares that code a success, is still read as the verdict it is.
+  await writeExecutable(
+    path.join(root, 'vendor/bin/grade'),
+    ['#!/usr/bin/env gradelang', 'exit 127', ''].join('\n'),
+  );
+
+  const conventional = await executor.execute({ command, executionRoot: root, timeoutSeconds: 60 });
+
+  assert.equal(conventional.exitCode, 127);
+  assert.equal(conventional.reasonCode, undefined);
+  assert.deepEqual(
+    classifyAttempt(conventional, { successExitCodes: [127] }),
+    { outcome: 'passed', reasonCode: 'grader-positive' },
   );
 });

@@ -64,6 +64,11 @@ export const REASON_OUTCOMES = Object.freeze({
   timeout: 'unverified',
   'budget-exhausted': 'unverified',
   crash: 'unverified',
+  // The named program never became a running process, so nothing was graded.
+  // A launch failure is a harness failure and belongs to the same family as a
+  // crash or a timeout: reporting it as a verdict tells a maintainer their code
+  // was rejected by a tool that never read a line of it (NFR-REL-003).
+  'launch-failed': 'unverified',
   'malformed-output': 'unverified',
   'snapshot-mismatch': 'unverified',
   // A dependency root the project declared could not be provided to the
@@ -174,6 +179,18 @@ const isPlainObject = (value) => typeof value === 'object'
   && !Array.isArray(value);
 
 const isNonEmptyString = (value) => typeof value === 'string' && value.length > 0;
+
+/**
+ * The members of a list the contract inspects, or none.
+ *
+ * Validation exists to judge malformed decisions, so it never reaches into a
+ * member it has not established is a list. A validator that throws on the input
+ * it was written to reject turns a refusal into a crash, and the crash path is
+ * the one that can be trusted least (`NFR-REL-003`). The wrong-typed member is
+ * already reported in its own right, so reading it as empty here withholds no
+ * finding.
+ */
+const members = (value) => (Array.isArray(value) ? value : []);
 
 const isAbsolutePath = (value) => isNonEmptyString(value)
   && (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value));
@@ -646,8 +663,8 @@ export const validateDecision = (decision) => {
       });
     }
 
-    if ((decision.checks ?? []).some(
-      (check) => (check?.assertions ?? []).some((assertion) => assertion?.kind === 'acceptance'),
+    if (members(decision.checks).some(
+      (check) => members(check?.assertions).some((assertion) => assertion?.kind === 'acceptance'),
     )) {
       errors.push({
         code: 'coverage-scope-violation',
@@ -685,8 +702,8 @@ export const validateDecision = (decision) => {
       message: 'Integrity must state whether served-source binding was required, whether it was proved, and the probes that decided it.',
     });
   } else if (binding.required === true && binding.proved !== true
-    && decision.checks.some((check) => check.outcome === 'passed'
-      && (check.assertions ?? []).some((assertion) => assertion.kind === 'acceptance'))) {
+    && members(decision.checks).some((check) => check?.outcome === 'passed'
+      && members(check?.assertions).some((assertion) => assertion?.kind === 'acceptance'))) {
     // SG-EVAL-002: unproved served-source binding can never underwrite an
     // acceptance claim about the snapshot.
     errors.push({
@@ -696,7 +713,7 @@ export const validateDecision = (decision) => {
     });
   }
 
-  for (const [index, surface] of (decision.integrity?.changedGraderSurfaces ?? []).entries()) {
+  for (const [index, surface] of members(decision.integrity?.changedGraderSurfaces).entries()) {
     if (!isPlainObject(surface)
       || !GRADER_SURFACE_KINDS.includes(surface.kind)
       || !isNonEmptyString(surface.path)

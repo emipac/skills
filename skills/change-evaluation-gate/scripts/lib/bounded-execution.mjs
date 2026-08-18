@@ -11,9 +11,24 @@
  */
 
 import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 
 import { composeArguments } from './command-descriptor.mjs';
+
+const { X_OK } = constants;
+
+/**
+ * Errors the operating system reports when an image could not be executed.
+ *
+ * These are exec failures, not exit statuses: the kernel refused to turn the
+ * process into the program it was asked for, so nothing was graded. Reading the
+ * exit code instead would be guesswork — `127` is a convention a project's own
+ * tool is free to use, and a descriptor may declare its own success codes
+ * (`TB-033`).
+ */
+const LAUNCH_ERRORS = Object.freeze(['ENOENT', 'ENOEXEC', 'EACCES', 'EPERM', 'EISDIR']);
 
 /** Grace between the polite and the final signal to a timed-out tree. */
 export const TERMINATION_GRACE_MS = 100;
@@ -87,6 +102,40 @@ const environmentFor = (allowedEnvironment, source, runtimePath = '') => {
 };
 
 /**
+ * Say why the resolved program could not be started, or `null` if it can.
+ *
+ * Activation pins an executable and, when that executable is a script, the
+ * interpreter it names in its own first line (`TB-028`). If either is gone by
+ * the time a commit is graded, the process the kernel would create is not the
+ * program the descriptor named: a script whose interpreter has vanished exits
+ * `127` in a millisecond, having read no line of the code it was asked to
+ * grade, and that is indistinguishable downstream from the tool itself
+ * returning a negative verdict.
+ *
+ * Bounded execution is the only participant that knows what it was about to
+ * launch, so it decides this here rather than leaving an exit status to be
+ * interpreted by something that does not (`TB-033`, `NFR-REL-003`).
+ */
+const unlaunchable = async (resolution) => {
+  for (const [role, location] of [
+    ['executable', resolution?.executable],
+    ['interpreter', resolution?.interpreter],
+  ]) {
+    if (typeof location !== 'string' || location === '') {
+      continue;
+    }
+
+    const usable = await access(location, X_OK).then(() => true, () => false);
+
+    if (!usable) {
+      return `the pinned ${role} ${location} could not be executed, so this check never started.`;
+    }
+  }
+
+  return null;
+};
+
+/**
  * Create the bounded executor for one evaluation.
  *
  * @param {object} options total budget, executable resolution, and clock
@@ -118,6 +167,18 @@ export const createBoundedExecutor = ({
         exitCode: null,
         durationMs: 0,
         reasonCode: 'configuration-invalid',
+      };
+    }
+
+    const unstartable = await unlaunchable(resolution);
+
+    if (unstartable !== null) {
+      return {
+        executed: false,
+        exitCode: null,
+        durationMs: 0,
+        reasonCode: 'launch-failed',
+        ...(captureOutput ? { output: unstartable, outputTruncated: false } : {}),
       };
     }
 
@@ -212,6 +273,10 @@ export const createBoundedExecutor = ({
           executed: false,
           exitCode: null,
           error: error.message,
+          // An exec failure means the kernel never turned this process into the
+          // program the descriptor named, which is a launch failure rather than
+          // the more general crash a raised error otherwise reports.
+          ...(LAUNCH_ERRORS.includes(error.code) ? { reasonCode: 'launch-failed' } : {}),
           durationMs: Date.now() - startedAt,
           ...captured(),
         });

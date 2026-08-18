@@ -666,3 +666,49 @@ test('AC-EVAL-006 / SG-EVAL-001: a declared prerequisite that cannot be proved i
   assert.equal(decision.outcome, 'unverified');
   assert.deepEqual(validateDecision(decision), []);
 });
+
+/**
+ * TB-033 — a validator refusal is a refusal, not an exception.
+ *
+ * `validateDecision` is the contract's own completeness rule, and the
+ * authoritative runner now denies on its findings. The one input it must never
+ * mishandle is the malformed one it exists to reject: a validator that throws
+ * on that turns a refusal into a crash, and the crash path is the one that can
+ * be trusted least (`NFR-REL-003`, `AC-EVAL-002`).
+ */
+test('TB-033 AC-EVAL-002: validateDecision returns findings for every malformed decision and throws for none', () => {
+  const malformed = [
+    null,
+    undefined,
+    0,
+    '',
+    'a decision',
+    true,
+    [],
+    [{ authorization: 'allow' }],
+    {},
+    { authorization: 'allow', outcome: 'passed' },
+    // The shapes that reached a member access rather than a finding: a section
+    // the contract iterates, carrying something it cannot iterate.
+    { authorization: 'allow', outcome: 'passed', checks: 'not-an-array' },
+    { authorization: 'allow', outcome: 'passed', checks: [{ assertions: 'not-an-array' }] },
+    {
+      authorization: 'allow',
+      outcome: 'passed',
+      coverage: { scope: 'regression-only', limitations: [] },
+      checks: 'not-an-array',
+    },
+    { integrity: { changedGraderSurfaces: 'not-an-array' } },
+    {
+      checks: undefined,
+      integrity: { runtimeBinding: { required: true, proved: null, probes: [], servedSourceId: null, reasonCode: null } },
+    },
+  ];
+
+  for (const decision of malformed) {
+    const findings = validateDecision(decision);
+
+    assert.ok(Array.isArray(findings), `${JSON.stringify(decision)} must be answered with findings.`);
+    assert.ok(findings.length > 0, `${JSON.stringify(decision)} must be refused, not accepted.`);
+  }
+});

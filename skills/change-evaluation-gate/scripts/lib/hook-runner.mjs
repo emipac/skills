@@ -10,11 +10,13 @@
  * either: it runs the executables the receipt pinned, so the programs
  * activation proved are the programs a commit is graded by.
  *
- * It exits `0` only on an `allow` authorization whose Evidence was actually
- * recorded. Every other path — an unreadable configuration, an absent receipt,
- * a drifted runner pin, a store that cannot be opened or written to, a crash —
- * exits non-zero with a stated reason, because a runner that cannot prove a
- * decision has not produced one (`NFR-REL-003`).
+ * It exits `0` only on a complete `allow` decision whose Evidence was actually
+ * recorded, and completeness is judged by the evaluation contract that defines
+ * it rather than by a second rule kept here. Every other path — an unreadable
+ * configuration, an absent receipt, a drifted runner pin, a store that cannot
+ * be opened or written to, a decision missing the parts that make it one, a
+ * crash — exits non-zero with a stated reason, because a runner that cannot
+ * prove a decision has not produced one (`NFR-REL-003`).
  *
  * It claims no protection beyond a cooperative local process: a machine owner
  * can remove or bypass it, and nothing here is tamper-proof (`SG-TRUST-001`).
@@ -35,6 +37,7 @@ import {
   gateChecksFromConfiguration,
   readRepositoryConfiguration,
 } from './configuration.mjs';
+import { validateDecision } from './evaluation-contract.mjs';
 import { PROTOCOL_VERSION, evaluate } from './evaluate.mjs';
 import { openEvidenceStore, resolveGitCommonDirectory, STORE_DIRECTORY } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
@@ -374,6 +377,35 @@ export const openStore = async ({
   }
 };
 
+/** How many contract findings a denial names before it summarizes the rest. */
+const REPORTED_FINDINGS = 6;
+
+/**
+ * Judge the decision by the contract that defines it.
+ *
+ * `validateDecision` is the evaluation contract's own completeness rule, and it
+ * is the only one this runner consults. Inspecting a field here would be a
+ * second, weaker definition of a complete decision living beside the real one,
+ * which is precisely how a decision of `{ authorization: 'allow', outcome:
+ * 'passed' }` — no checks, no evidence, no evaluation identity, no snapshot —
+ * came to exit `0` (`AC-EVAL-002`).
+ *
+ * The validator is total, so a finding is what a malformed decision produces.
+ * A throw would still be a refusal: this path decides whether a commit is
+ * authorized, and it never lets an unexpected error read as the absence of a
+ * problem (`NFR-REL-003`).
+ */
+const contractFindings = (decision) => {
+  try {
+    return validateDecision(decision);
+  } catch (error) {
+    return [{
+      path: '<decision>',
+      message: `the decision contract could not judge this decision (${error.message}).`,
+    }];
+  }
+};
+
 /**
  * Say what the decision was, in a form a maintainer reading `git commit` output
  * can act on, and translate it into an exit status.
@@ -383,16 +415,25 @@ export const openStore = async ({
  * (`NFR-REL-003`).
  */
 const report = (decision) => {
-  const authorization = decision?.authorization ?? null;
-  const outcome = decision?.outcome ?? null;
+  const findings = contractFindings(decision);
 
-  if (typeof authorization !== 'string' || typeof outcome !== 'string') {
-    return denied(
-      'decision-malformed',
-      'the evaluation returned no readable decision, so nothing is authorized.',
-    );
+  if (findings.length > 0) {
+    const named = findings.slice(0, REPORTED_FINDINGS)
+      .map((finding) => `${finding.path}: ${finding.message}`);
+    const remaining = findings.length - named.length;
+
+    return {
+      exitCode: DENIED,
+      reasonCode: 'decision-malformed',
+      lines: [
+        say('the evaluation returned no decision this runner can verify, so nothing is authorized.'),
+        ...named.map((detail) => say(`  ${detail}`)),
+        ...(remaining > 0 ? [say(`  and ${remaining} further contract findings.`)] : []),
+      ],
+    };
   }
 
+  const { authorization, outcome } = decision;
   const lines = [say(`${outcome} / ${authorization}`)];
 
   for (const check of decision.checks ?? []) {
@@ -415,9 +456,19 @@ const report = (decision) => {
     // in general (`NFR-OPER-001`), but the authoritative path's own contract is
     // stricter: nothing here authorizes a commit it cannot also prove
     // (`NFR-REL-003`, `RISK-001`).
-    const evidenceReasonCode = decision.evidence?.persisted === false
-      ? decision.evidence?.reference?.reasonCode ?? 'evidence-not-persisted'
-      : null;
+    //
+    // The rule is stated as presence rather than as a stated failure. Asking
+    // whether persistence was reported as `false` denies a decision that admits
+    // it failed and passes one that says nothing at all, because `undefined ===
+    // false` is `false` — and absence of evidence is never success. An allow is
+    // authorized only by evidence that was positively persisted and carries the
+    // reference it can be read back by.
+    const persisted = decision.evidence.persisted === true
+      && typeof decision.evidence.reference?.evidenceId === 'string'
+      && decision.evidence.reference.evidenceId !== '';
+    const evidenceReasonCode = persisted
+      ? null
+      : decision.evidence.reference?.reasonCode ?? 'evidence-not-persisted';
 
     if (evidenceReasonCode !== null) {
       lines.push(say(`evidence-persistence-failed: ${evidenceReasonCode}: this commit's evidence could not be recorded, so it is not authorized.`));
