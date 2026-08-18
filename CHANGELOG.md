@@ -1,5 +1,67 @@
 # ai-skills-framework
 
+## 0.11.0
+
+### Minor Changes
+
+- [#28](https://github.com/emipac/skills/pull/28) [`964918e`](https://github.com/emipac/skills/commit/964918e594e1be76f2d2365800e146cd35ca253c) Thanks [@emipac](https://github.com/emipac)! - Ship the packaged Change Evaluation Gate preflight runner a desktop client hook
+  can register: it reads the native payload on stdin, evaluates the working tree
+  as `not-authoritative` preflight, answers through the adapter's declared
+  feedback channel, and exits `0` regardless of outcome — a failing required
+  check names the check on that channel, a passing turn writes nothing, and
+  unreadable payloads, unmatched events, missing roots, and internal failures
+  present as `unverified` rather than as silence or a clean pass.
+
+### Patch Changes
+
+- [#30](https://github.com/emipac/skills/pull/30) [`9569362`](https://github.com/emipac/skills/commit/9569362bf07cff7c39e64803f3e7604326adfb30) Thanks [@emipac](https://github.com/emipac)! - Stop the desktop preflight runner from answering a turn the operator
+  interrupted. A client `stop` event fires whether the turn finished or was
+  stopped, and the runner read neither the status nor the iteration counter, so
+  an aborted turn produced a follow-up message the client submitted as the next
+  user message — restarting the work that had just been stopped, and looping
+  until the hook was disabled.
+
+  Adapters now declare the field carrying the turn status, the values that mean
+  completed and interrupted, the field carrying the client's iteration counter,
+  and the maximum number of times one unchanged preflight result may be returned.
+  An interrupted turn is answered with nothing at all, an undeclared status is
+  `unverified` rather than assumed complete, and repetition is bounded by the
+  gate's own append-only record so a client counter that never advances cannot
+  produce an unbounded loop. Every deliberate silence — including a hook
+  registered without `--adapter`, which previously looked exactly like a clean
+  turn — writes its reason to stderr, where the client surfaces it to the
+  maintainer.
+
+- [#28](https://github.com/emipac/skills/pull/28) [`964918e`](https://github.com/emipac/skills/commit/964918e594e1be76f2d2365800e146cd35ca253c) Thanks [@emipac](https://github.com/emipac)! - Bind the authoritative Git hook to the clone-local Evidence store its
+  Activation receipt already identifies, so every commit-time evaluation now
+  appends its Evidence envelope and Lifecycle event instead of persisting
+  nothing. Check output is captured and bounded into the envelope, declared
+  runtime input values are redacted from it, and the clone's own configured
+  Evidence ceilings apply. A store that cannot be opened or written to denies
+  the commit with a distinct stated reason rather than ever authorizing a
+  commit whose evidence could not be recorded.
+
+- [#30](https://github.com/emipac/skills/pull/30) [`9569362`](https://github.com/emipac/skills/commit/9569362bf07cff7c39e64803f3e7604326adfb30) Thanks [@emipac](https://github.com/emipac)! - Give every check the environment its own pinned program needs in order to
+  start. Checks ran with only the environment names their descriptor declared,
+  built from nothing, and migration defaults that declaration to empty — so a
+  check ran with no PATH at all and any executable that is a script exited `127`
+  before reading a line of the code it was asked to grade. Most real tool
+  binaries are scripts: `vendor/bin/pint` and `vendor/bin/phpstan` begin
+  `#!/usr/bin/env php`, `npm` begins `#!/usr/bin/env node`.
+
+  Resolution now reads the first line of a resolved executable and pins the
+  interpreter it names beside it, so an interpreter that cannot be found leaves
+  the runner `runner-unresolved` and refuses activation instead of failing as a
+  mystery check at commit time. Execution supplies a runtime-owned search path
+  built from the pinned executables, their interpreters, and the platform's own
+  utility directories — never the invoking shell, so no version manager or
+  package-manager prefix can change which program a pinned command reaches. A
+  descriptor declaring `PATH` has its ambient value appended after those entries.
+
+  The Activation receipt now pins each runner's interpreter. A clone activated
+  before this change still runs, but a shebang binary whose interpreter lives
+  outside the pinned directories needs `gate repair` to be re-pinned.
+
 ## 0.10.1
 
 ### Patch Changes
