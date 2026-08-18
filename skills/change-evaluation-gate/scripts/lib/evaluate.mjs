@@ -457,7 +457,9 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     if (reconciled.drifted) {
       diagnostics.push({
         reasonCode: reconciled.reasonCode,
-        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved.`,
+        // The drifted surfaces are named, and so is the one confirmed operator
+        // action that resolves them. Nothing is repaired here (FR-LIFE-019).
+        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Run \`gate repair\` to re-resolve and re-pin what this clone was activated with.`,
       });
     }
   }

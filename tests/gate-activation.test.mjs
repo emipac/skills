@@ -427,6 +427,10 @@ test('successful activation records the previewed identities and enables Git las
     // so the receipt pins it. This fixture's resolver names none (TB-028).
     interpreter: null,
     version: '1.0.0',
+    // TB-031: the exact invocation consent was granted against. Pinning the
+    // executable alone leaves what it would be asked to do unpinned, and the
+    // Gate policy section binds which checks are required, not their arguments.
+    preview: '/usr/bin/package-script run test',
   }]);
   assert.deepEqual(receipt.adapters, [{
     id: 'git',

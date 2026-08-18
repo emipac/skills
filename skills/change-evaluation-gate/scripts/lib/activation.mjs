@@ -1764,6 +1764,12 @@ export const activate = async (request, dependencies = {}) => {
         // was, and the hook runs against the same one (TB-028).
         interpreter: entry.interpreter ?? null,
         version: entry.version,
+        // The exact invocation consent was granted against. The executable
+        // alone does not say what it would be asked to do, so a widened or
+        // narrowed argument vector would otherwise be invisible to every later
+        // reconciliation: `evaluation_gate` binds which checks are required,
+        // not what they run (TB-031, AC-CFG-004).
+        preview: entry.preview ?? null,
       })),
     },
     adapters,

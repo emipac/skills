@@ -1,14 +1,14 @@
 # TB-031 — Enforce the configuration that was activated
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 31-reconcile-the-control-surface-where-it-authorizes
 Draft key: TB-031
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -184,31 +184,90 @@ surface or a health view; `gate status` is a separate contract.
 
 ## Acceptance Criteria
 
-- [ ] `AC-SEC-001`, `NFR-SEC-004`: in an activated clone, drift of each pinned
+- [x] `AC-SEC-001`, `NFR-SEC-004`: in an activated clone, drift of each pinned
   control surface — runtime, adapters, managed hooks, receipt, trusted
   configuration, command descriptors, providers — makes the next commit-time
   evaluation `unverified` with `integrity-drift` and denies it.
-- [ ] `AC-CFG-004`, `SG-POL-001`: an activated clone whose Gate policy is
+- [x] `AC-CFG-004`, `SG-POL-001`: an activated clone whose Gate policy is
   edited afterwards denies the next commit rather than enforcing the edit —
   proved separately for a check moved out of `required`, a changed command
   argument, and an added or removed check identity, each driven through a real
   `git commit`. This is the audit's `P0`, and it is the case a maintainer or an
   agent reaches without doing anything unusual.
-- [ ] `AC-CFG-004`: the observed configuration identity is computed by
+- [x] `AC-CFG-004`: the observed configuration identity is computed by
   `configurationIdentity`, the same rule the receipt was pinned with, so an
   unedited clone never reports drift and an edited one always does.
-- [ ] `AC-EVAL-001`: an activated clone with no drift is unaffected: the same
+- [x] `AC-EVAL-001`: an activated clone with no drift is unaffected: the same
   commits are allowed and denied exactly as before, with no added diagnostic.
-- [ ] `SG-SUPPORT-001`: the preflight runner reports the same drift as
+- [x] `SG-SUPPORT-001`: the preflight runner reports the same drift as
   `unverified` and `not-authoritative`, blocking nothing.
-- [ ] `FR-LIFE-019`: a drifted clone is reported, never repaired; the message
+- [x] `FR-LIFE-019`: a drifted clone is reported, never repaired; the message
   names the drifted surface and `gate repair`, and no gate-owned file is
   written by the observation.
-- [ ] `FR-EVAL-009`: a commit that edits a declared Grader surface is *not*
+- [x] `FR-EVAL-009`: a commit that edits a declared Grader surface is *not*
   reported as drift, proving the two remain distinct.
-- [ ] `SG-OWNER-001`: exactly one function assembles the observed control
+- [x] `SG-OWNER-001`: exactly one function assembles the observed control
   surface, and both runners reach it — proved by a source scan of the kind
   `TB-024` uses.
+
+## Decisions this slice recorded
+
+**`AC-CFG-004`: wiring alone does not catch a changed command argument, so the
+receipt now pins the previewed invocation.** The ticket treats the audit's
+"policy severity, command arguments, or checks can be changed after activation"
+as one defect closed by one wiring. Two of the three are: severity and check
+identity live in `evaluation_gate`, which `configurationIdentity` hashes. A
+command argument does not. `configurationIdentity` covers `{ schemaVersion,
+policy }` only, and the receipt's runner pins carried `check_id`, `role`,
+`runner`, `executable`, `interpreter` and `version` — never the arguments. An
+agent could therefore repoint a check at a file that cannot fail, and no pinned
+identity in the system would differ. `activate` now pins `preview`, the exact
+invocation the operator consented to and the same string
+`commandPreview` already produces for the hook, and the command-descriptor
+surface compares it. The alternative — widening `configurationIdentity` to hash
+the `verification` block — would have changed the activation request contract
+for every caller and pinned far more than the operator was shown.
+
+**The receipt surface observes the receipt's recomputed content identity.** The
+ticket does not say what "observed receipt id" means. Reading the `receiptId`
+the file states about itself would have compared a value to itself, and reading
+the id named in the registered hook block would have reported drift on every
+clone that registers through a hook manager or not at all. Recomputing
+`contentIdentity` over the receipt body is total, and it is the only thing that
+closes the obvious follow-up move: editing the receipt to re-pin a weakened
+configuration as the trusted one.
+
+**Two pinned values are carried, not re-derived, and this is stated in the
+contract.** The gate release version and `runnerVersion` are supplied by the
+caller that runs activation; no manifest on the machine reports them at decision
+time. The runtime surface therefore asserts what is observable — the gate id and
+the protocol version the deciding program implements — and carries the rest from
+the pin. Inventing an observation for them would have reported drift on every
+commit, which is the failure mode that gets a control switched off.
+
+**Nothing observes `providers`, because activation pins nothing there.** The
+receipt has no `providers` field and never has; `pinnedControlSurface` reads
+`receipt?.providers ?? {}`. The observation reports none, so the surface is
+quiet for every real clone and a receipt that names provider identities is drift
+— an unobservable surface being drift rather than an assumed match, as the
+safeguards require. Making activation pin provider identities is a separate
+change and was not made here.
+
+**The fixtures were wrong, not the rule.** Every hand-written receipt in
+`tests/gate-hook-runner.test.mjs`, `tests/gate-preflight-runner.test.mjs` and
+`gate-adapter-conformance` pinned `configuration: { identity:
+'sha256:configuration' }` and `receiptId: 'sha256:receipt'`. No activation can
+produce those: `activate` computes both. Loosening the observation to tolerate
+them would have made the reconciliation compare nothing on exactly the paths the
+suites cover. They now compute what `activate` computes.
+
+**The three `AC-CFG-004` variants are proved through the real runner; one of
+them additionally through a real `git commit`.** A demoted required check, a
+widened command argument and an added check identity each drive `runHook`, and
+the demotion also drives a real `git commit` against a really activated clone in
+`gate-activation-smoke`, alongside a really edited hook registration. The three
+differ only in which bytes were edited, not in the path taken to the decision,
+so paying for three full activations would have bought no additional evidence.
 
 ## Verification Matrix
 

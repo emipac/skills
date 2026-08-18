@@ -29,7 +29,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION, repositoryIdentity } from './activation.mjs';
+import {
+  AUTHORITATIVE_HOOK,
+  HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION,
+  configurationIdentity,
+  readHookRegistration,
+  repositoryIdentity,
+} from './activation.mjs';
+import { describeAdapter } from './adapters.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
 import { commandPreview, composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
 import {
@@ -39,7 +46,12 @@ import {
 } from './configuration.mjs';
 import { validateDecision } from './evaluation-contract.mjs';
 import { PROTOCOL_VERSION, evaluate } from './evaluate.mjs';
-import { openEvidenceStore, resolveGitCommonDirectory, STORE_DIRECTORY } from './evidence-store.mjs';
+import {
+  contentIdentity,
+  openEvidenceStore,
+  resolveGitCommonDirectory,
+  STORE_DIRECTORY,
+} from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
 import { createRedactor } from './redaction.mjs';
 
@@ -297,6 +309,131 @@ export const pinnedRunners = async (checks, { receipt, compose }) => {
   }
 
   return { ok: true, resolved };
+};
+
+/** The one gate program identity this runner ever acts as. */
+const GATE_ID = 'change-evaluation-gate';
+
+/**
+ * The identity of the gate-owned hook registration as it is on disk now.
+ *
+ * A receipt that pinned no block identity — a declarative hook manager, or a
+ * manual registration — pinned nothing to observe, so nothing is observed. A
+ * receipt that DID pin one is compared against the file it named: a
+ * registration that is gone, unreadable, or no longer well formed observes as
+ * `null`, which is drift rather than an assumed match (`NFR-SEC-004`).
+ */
+const observeHookRegistration = async (receipt) => {
+  if ((receipt?.hookChain?.blockIdentity ?? null) === null) {
+    return null;
+  }
+
+  const hookPath = receipt?.hookChain?.path ?? null;
+
+  if (typeof hookPath !== 'string' || hookPath === '') {
+    return null;
+  }
+
+  const ownership = receipt?.hookChain?.strategy
+    ?? receipt?.hooks?.find((hook) => hook?.hook === AUTHORITATIVE_HOOK)?.ownership
+    ?? 'gate-owned-shim';
+
+  try {
+    return (await readHookRegistration(hookPath, ownership)).blockIdentity;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Assemble the Gate control surface as this machine presents it right now.
+ *
+ * This is the ONE observer both runners reach (`SG-OWNER-001`): the
+ * authoritative runner and the preflight runner ask the same question of the
+ * same machine, because a second copy of "what does this clone look like now"
+ * is how the two would come to disagree — the reason `TB-024` gave resolution
+ * one owner and `TB-026` gave the Evidence store one wiring.
+ *
+ * It is OBSERVATION. Nothing is opened for writing, nothing is repaired, and
+ * nothing is re-pinned; recovery stays a confirmed operator action
+ * (`FR-LIFE-019`). It is also not resistance: a machine owner can change every
+ * identity below, and noticing is the entire claim (`SG-TRUST-001`, `ASM-001`).
+ *
+ * Each surface is observed at the same identity the receipt pinned it with, or
+ * it is observed as absent. In particular the configuration identity is
+ * computed by `configurationIdentity` — the rule `activate` pinned it with —
+ * because an observation that hashed the file differently would report drift on
+ * every commit, and one that hashed less than the receipt pinned would miss the
+ * policy edit this reconciliation exists to catch (`AC-CFG-004`).
+ *
+ * Two surfaces are stated rather than re-derived, and this is their honest
+ * limit. The gate's own release version and `runnerVersion` are declared by the
+ * caller that ran activation and are not readable from this machine at decision
+ * time, so what is asserted about the runtime is what IS observable: the
+ * program deciding now is this gate, speaking this protocol version. And
+ * activation pins no provider identities at all, so none are observed; a
+ * receipt that names some cannot be matched by this machine, and an
+ * unobservable surface is drift rather than an assumed match.
+ */
+export const observeControlSurface = async ({ activation, configuration, resolved = new Map() }) => {
+  const receipt = activation?.receipt ?? null;
+  const { receiptId: _pinned, ...body } = receipt ?? {};
+  const runners = [];
+
+  for (const pin of receipt?.runtime?.runners ?? []) {
+    const executable = typeof pin?.executable === 'string' && pin.executable !== ''
+      && await access(pin.executable, X_OK).then(() => true, () => false)
+      ? pin.executable
+      : null;
+    // The invocation this clone would run for that check now, composed by
+    // `pinnedRunners` through the one shared composition rule — so the pinned
+    // preview and the observed one cannot diverge for any reason except an
+    // edited descriptor. A pin that carries no preview pinned nothing here to
+    // compare, and a pin for a role this evaluation does not resolve is not
+    // observable through it.
+    const preview = typeof pin?.preview === 'string' && pin?.role === 'evaluate'
+      ? { preview: resolved.get(pin.check_id)?.preview ?? null }
+      : {};
+
+    runners.push({ ...pin, executable, ...preview });
+  }
+
+  return {
+    receipt,
+    observed: {
+      runtime: {
+        gate: { ...(receipt?.runtime?.gate ?? {}), id: GATE_ID, protocolVersion: PROTOCOL_VERSION },
+        runnerVersion: receipt?.runtime?.runnerVersion ?? null,
+      },
+      // The adapter set the INSTALLED gate declares, under the ids activation
+      // consented to. An adapter this gate no longer declares observes as
+      // absent rather than as the version the receipt remembers.
+      adapters: (receipt?.adapters ?? []).map((adapter) => {
+        const declared = describeAdapter(adapter?.id ?? null);
+
+        return {
+          id: adapter?.id ?? null,
+          version: declared?.version ?? null,
+          authoritative: declared?.role === 'authoritative',
+        };
+      }),
+      hookBlockIdentity: await observeHookRegistration(receipt),
+      // The receipt's own content identity, recomputed from the file that was
+      // just read. It is what makes the surfaces below meaningful: a receipt
+      // edited to re-pin a weakened configuration would otherwise match itself.
+      receiptId: receipt === null ? null : contentIdentity(body),
+      configurationId: configurationIdentity({
+        schemaVersion: configuration?.configuration?.schema_version ?? null,
+        policy: configuration?.policy ?? null,
+      }),
+      // The pinned descriptors, with each executable re-observed on disk. A
+      // pinned program that is gone observes as absent; `pinnedRunners` already
+      // denies that for an evaluating check by name, and this covers the pins
+      // that no declared check resolves through (TB-024).
+      runners,
+      providers: {},
+    },
+  };
 };
 
 /** Which check a bounded-execution callback is resolving an executable for. */
@@ -591,6 +728,12 @@ export const runHook = async ({
       policy: configuration.policy,
       execute: executor.execute,
       evidenceStore: store.store,
+      // The commit is graded by the configuration this clone activated, or it
+      // is not graded at all. Without this the receipt pins a policy identity
+      // nothing ever compares, and an agent whose commit was blocked can demote
+      // the check that blocked it and commit against the weakened policy with
+      // no re-consent and no signal (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
+      controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
     });
   } catch (error) {
     // A runner that crashed produced no decision. It denies, and it says so,

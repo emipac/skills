@@ -46,7 +46,7 @@ It pins:
 | `previewId` | The exact preview consent was granted against |
 | `repository`, `configuration` | Clone identity, schema version, and policy identity |
 | `runtime.gate`, `runtime.runnerVersion` | The active runtime |
-| `runtime.runners[]` | Each resolved executable and its version |
+| `runtime.runners[]` | Each resolved executable, its interpreter, its version, and the exact previewed invocation consent was granted against — the executable alone does not say what it would be asked to do |
 | `adapters[]` | Each adapter, its version, and its self-test result |
 | `hooks[]` | Every gate-owned hook location and its ownership — the ownership label *is* the selected strategy |
 | `hookChain` | The selected strategy, the hook manager if any, the exact path, and the identity of the prior hook chain this activation preserved |

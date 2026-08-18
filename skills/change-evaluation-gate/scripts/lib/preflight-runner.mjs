@@ -29,6 +29,7 @@ import { evaluate } from './evaluate.mjs';
 import { openEvidenceStore } from './evidence-store.mjs';
 import {
   commandOwner,
+  observeControlSurface,
   openStore,
   pinnedRunners,
   resolveConfiguration,
@@ -259,6 +260,12 @@ export const runPreflight = async ({
         policy: configuration.policy,
         execute: executor.execute,
         evidenceStore: store.store,
+        // The same observation the authoritative runner makes, from the same
+        // owner, so the two can never disagree about what this machine is
+        // (`SG-OWNER-001`). Under preflight the same drift presents as
+        // `unverified` and `not-authoritative`: it warns a maintainer, and it
+        // blocks nothing (`SG-SUPPORT-001`).
+        controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
       });
     } finally {
       await rm(executionRoot, { recursive: true, force: true });

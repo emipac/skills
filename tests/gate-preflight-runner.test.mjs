@@ -7,11 +7,14 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { configurationIdentity } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
 import {
   describeAdapter,
   normalizeTurn,
 } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
+import { readRepositoryConfiguration } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
 import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
+import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import { runPreflight } from '../skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs';
 
 const runFile = promisify(execFile);
@@ -138,6 +141,12 @@ const PINNED_RUNNER = Object.freeze({
   version: process.versions.node,
 });
 
+/**
+ * TB-031: the pinned identities are computed the way `activate` computes them,
+ * because the preflight runner now reconciles them against this machine. A
+ * receipt pinning `sha256:configuration` describes a clone no activation could
+ * produce and would report drift on every turn.
+ */
 const publishReceipt = async (root) => {
   const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
     cwd: root,
@@ -148,22 +157,29 @@ const publishReceipt = async (root) => {
     common,
     'change-evaluation-gate/evidence/activation',
   );
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const body = {
+    receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+    previewId: 'sha256:preview',
+    repository: { root },
+    configuration: {
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+      schemaVersion: read.configuration?.schema_version ?? null,
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'fixture/1.0.0',
+      runners: [PINNED_RUNNER],
+    },
+  };
 
   await mkdir(directory, { recursive: true });
   await writeFile(
     path.join(directory, 'receipt.json'),
-    `${JSON.stringify({
-      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
-      receiptId: 'sha256:receipt',
-      previewId: 'sha256:preview',
-      repository: { root },
-      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: {
-        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
-        runnerVersion: 'fixture/1.0.0',
-        runners: [PINNED_RUNNER],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ ...body, receiptId: contentIdentity(body) }, null, 2)}\n`,
     'utf8',
   );
 };

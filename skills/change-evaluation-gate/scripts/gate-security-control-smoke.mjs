@@ -17,7 +17,15 @@
  *    `unverified` with `deny`, while the same clone without drift is `healthy`
  *    and authorizes. Observation repairs nothing: the receipt and the store are
  *    byte-identical afterwards (`AC-SEC-001`, `NFR-SEC-004`, `FR-LIFE-019`).
- * 3. `packaged-policy-transition` — a candidate configuration that weakens the
+ * 3. `packaged-runner-drift` — the SHIPPED entry point, `gate-precommit.mjs`,
+ *    run as a real process against an activated clone: it authorizes an
+ *    undrifted commit and refuses the next one after the clone's Gate policy is
+ *    edited, naming `integrity-drift`, the drifted surface, and `gate repair`,
+ *    and leaving the receipt byte-identical. Scenario 2 proves the rule against
+ *    a hand-assembled surface, which is how a reconciliation nothing called
+ *    could look proved for as long as it did (`AC-SEC-001`, `AC-CFG-004`,
+ *    `AC-EVAL-001`).
+ * 4. `packaged-policy-transition` — a candidate configuration that weakens the
  *    policy authorizing its own transition passes its own policy, fails the
  *    Trusted policy, and neither advances trust nor authorizes; a hash-bound
  *    approval advances only once both policies pass (`AC-CFG-003`,
@@ -49,14 +57,20 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { configurationIdentity } from './lib/activation.mjs';
+import { commandPreview } from './lib/command-descriptor.mjs';
+import {
+  gateChecksFromConfiguration,
+  readRepositoryConfiguration,
+} from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
-import { openEvidenceStore } from './lib/evidence-store.mjs';
+import { contentIdentity, openEvidenceStore } from './lib/evidence-store.mjs';
 import { statusGate } from './lib/lifecycle.mjs';
 import { createRedactor, secretForms } from './lib/redaction.mjs';
 import {
@@ -486,6 +500,192 @@ const packagedDrift = async () => {
   return { name: 'packaged-drift', ok: findings.length === 0, findings };
 };
 
+/** The packaged authoritative entry point a registered `pre-commit` shim runs. */
+const PACKAGED_RUNNER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gate-precommit.mjs');
+
+const RUNNER_CHECK_ID = 'configuration.broad-tests.test';
+
+/** The clone configuration the packaged runner reads: one required broad test. */
+const runnerConfiguration = ({ required = [RUNNER_CHECK_ID], advisory = [] } = {}) => [
+  'schema_version: 4',
+  'backend: unknown',
+  'frontend: none',
+  'verification:',
+  '  profile: gate-security-control-smoke',
+  '  capabilities: []',
+  '  commands:',
+  '    test:',
+  '      backend: []',
+  '      frontend: []',
+  '      both:',
+  '        - runner: repository-script',
+  '          args:',
+  '            - tools/check.mjs',
+  '            - source.txt',
+  '          working_directory: "."',
+  '          timeout_seconds: 60',
+  '          allowed_environment:',
+  '            - PATH',
+  '          evidence_category: test',
+  '          source_scope: both',
+  'evaluation_gate:',
+  '  checks:',
+  ...(required.length === 0
+    ? ['    required: []']
+    : ['    required:', ...required.map((id) => `      - ${id}`)]),
+  ...(advisory.length === 0
+    ? ['    advisory: []']
+    : ['    advisory:', ...advisory.map((id) => `      - ${id}`)]),
+  '  budget:',
+  '    total_seconds: 600',
+  '  bypass:',
+  '    enabled: false',
+  '  execution: {}',
+  '  evidence: {}',
+  '',
+].join('\n');
+
+const RUNNER_CHECK_SCRIPT = [
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  '',
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+/**
+ * The receipt a real activation of this clone publishes.
+ *
+ * Every pinned identity is computed the way `activate` computes it, so this is
+ * a clone that could exist. A receipt of placeholders would make the runner
+ * report drift for the wrong reason and prove nothing about what it compares.
+ */
+const publishRunnerReceipt = async (repositoryRoot) => {
+  const read = await readRepositoryConfiguration({ repositoryRoot });
+  const configured = gateChecksFromConfiguration(read.configuration)
+    .checks.find((check) => check.id === RUNNER_CHECK_ID);
+  const common = (await git(repositoryRoot, ['rev-parse', '--git-common-dir'])).stdout.trim();
+  const directory = path.resolve(repositoryRoot, common, 'change-evaluation-gate/evidence/activation');
+  const body = {
+    receiptVersion: 'change-evaluation-gate/activation/v1',
+    previewId: `sha256:${'1'.repeat(64)}`,
+    repository: { root: repositoryRoot },
+    configuration: {
+      schemaVersion: read.configuration?.schema_version ?? null,
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'gate-security-control-smoke/1.0.0',
+      runners: [{
+        check_id: RUNNER_CHECK_ID,
+        role: 'evaluate',
+        runner: 'repository-script',
+        executable: process.execPath,
+        interpreter: null,
+        version: process.versions.node,
+        preview: commandPreview(configured.evaluate, process.execPath),
+      }],
+    },
+    adapters: [{ id: 'git', version: '1.0.0', authoritative: true }],
+    hooks: [],
+    hookChain: {
+      strategy: 'gate-owned-shim', manager: null, path: null, priorIdentity: null, blockIdentity: null,
+    },
+    runtimeInputs: [],
+  };
+
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, 'receipt.json'),
+    `${JSON.stringify({ ...body, receiptId: contentIdentity(body) }, null, 2)}\n`,
+    'utf8',
+  );
+
+  return path.join(directory, 'receipt.json');
+};
+
+const runPackagedRunner = (cwd) => runFile(process.execPath, [PACKAGED_RUNNER], {
+  cwd,
+  env: gitEnvironment(),
+}).then(
+  (result) => ({ exitCode: 0, output: `${result.stdout}${result.stderr}` }),
+  (error) => ({ exitCode: error.code ?? 1, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+/**
+ * The SHIPPED entry point, reconciling what the receipt pinned.
+ *
+ * Everything above proves the rule against a hand-assembled surface, which is
+ * how a reconciliation nothing called could look thoroughly proved for as long
+ * as it did. This drives `gate-precommit.mjs` itself: the program a registered
+ * hook runs, on a clone whose policy was edited after activation
+ * (`AC-SEC-001`, `AC-CFG-004`, `AC-EVAL-001`).
+ */
+const packagedRunnerDrift = async () => {
+  const findings = [];
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-runner-repo-`);
+
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), RUNNER_CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), runnerConfiguration(), 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'baseline',
+  ]);
+
+  const receiptPath = await publishRunnerReceipt(repositoryRoot);
+  const pinned = await readFile(receiptPath, 'utf8');
+
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nrepaired\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const undrifted = await runPackagedRunner(repositoryRoot);
+
+  check(findings, undrifted.exitCode === 0, `The undrifted clone was refused: ${undrifted.output}`);
+  check(
+    findings,
+    !undrifted.output.includes('integrity-drift'),
+    `The undrifted clone reported drift: ${undrifted.output}`,
+  );
+
+  // The one edit an agent whose commit was blocked would reach for.
+  await writeFile(
+    path.join(repositoryRoot, '.agent-framework.yaml'),
+    runnerConfiguration({ required: [], advisory: [RUNNER_CHECK_ID] }),
+    'utf8',
+  );
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nBROKEN\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const drifted = await runPackagedRunner(repositoryRoot);
+
+  check(findings, drifted.exitCode !== 0, `A weakened policy graded a commit: ${drifted.output}`);
+  check(findings, drifted.output.includes('integrity-drift'), `The denial did not name drift: ${drifted.output}`);
+  check(
+    findings,
+    drifted.output.includes('trusted-configuration'),
+    `The denial did not name the drifted surface: ${drifted.output}`,
+  );
+  check(findings, drifted.output.includes('gate repair'), `The denial did not name gate repair: ${drifted.output}`);
+  check(
+    findings,
+    await readFile(receiptPath, 'utf8') === pinned,
+    'The packaged runner re-pinned the receipt it disagreed with.',
+  );
+
+  return { name: 'packaged-runner-drift', ok: findings.length === 0, findings };
+};
+
 const gatePolicy = () => ({
   checks: { required: ['broad_test', 'static_analysis'], advisory: ['format'] },
   budget: { total_seconds: 600 },
@@ -581,6 +781,7 @@ const main = async () => {
     scenarios = [
       await packagedRuntimeInput(),
       await packagedDrift(),
+      await packagedRunnerDrift(),
       packagedPolicyTransition(),
     ];
   } finally {

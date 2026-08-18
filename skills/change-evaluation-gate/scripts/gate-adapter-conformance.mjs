@@ -68,7 +68,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { activate, previewActivation } from './lib/activation.mjs';
+import { activate, configurationIdentity, previewActivation } from './lib/activation.mjs';
 import {
   DESKTOP_ADAPTER_IDS,
   buildNativePayload,
@@ -80,7 +80,12 @@ import {
   runCompatibilityBaseline,
 } from './lib/adapters.mjs';
 import { evaluate } from './lib/evaluate.mjs';
-import { openEvidenceStore } from './lib/evidence-store.mjs';
+import { commandPreview } from './lib/command-descriptor.mjs';
+import {
+  gateChecksFromConfiguration,
+  readRepositoryConfiguration,
+} from './lib/configuration.mjs';
+import { contentIdentity, openEvidenceStore } from './lib/evidence-store.mjs';
 
 const CAPABILITY = 'gate-adapter-conformance';
 
@@ -937,27 +942,44 @@ const packagedPreflightAnswersClient = async () => {
   const common = (await git(root, ['rev-parse', '--git-common-dir'])).stdout.trim();
   const receiptDirectory = path.resolve(root, common, 'change-evaluation-gate/evidence/activation');
 
+  // TB-031: the receipt pins the identities a real activation would pin — the
+  // configuration identity by the rule `activate` uses and the receipt id by
+  // its own content — because the preflight runner now reconciles them against
+  // this clone. A receipt of placeholders describes a clone no activation could
+  // have produced, and it would report drift on every turn.
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const configured = gateChecksFromConfiguration(read.configuration)
+    .checks.find((check) => check.id === 'configuration.broad-tests.test');
+  const receiptBody = {
+    receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+    previewId: 'sha256:preview',
+    repository: { root },
+    configuration: {
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+      schemaVersion: read.configuration?.schema_version ?? null,
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'fixture/1.0.0',
+      runners: [{
+        check_id: 'configuration.broad-tests.test',
+        role: 'evaluate',
+        runner: 'repository-script',
+        executable: process.execPath,
+        interpreter: null,
+        version: process.versions.node,
+        preview: commandPreview(configured.evaluate, process.execPath),
+      }],
+    },
+  };
+
   await mkdir(receiptDirectory, { recursive: true });
   await writeFile(
     path.join(receiptDirectory, 'receipt.json'),
-    `${JSON.stringify({
-      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
-      receiptId: 'sha256:receipt',
-      previewId: 'sha256:preview',
-      repository: { root },
-      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: {
-        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
-        runnerVersion: 'fixture/1.0.0',
-        runners: [{
-          check_id: 'configuration.broad-tests.test',
-          role: 'evaluate',
-          runner: 'repository-script',
-          executable: process.execPath,
-          version: process.versions.node,
-        }],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ ...receiptBody, receiptId: contentIdentity(receiptBody) }, null, 2)}\n`,
     'utf8',
   );
 

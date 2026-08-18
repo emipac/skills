@@ -665,6 +665,114 @@ const authoritativeCommit = async (activated) => {
   return { name: 'authoritative-commit', ok: findings.length === 0, findings };
 };
 
+/**
+ * The activated clone is graded by the configuration it activated, or it is not
+ * graded at all (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
+ *
+ * This runs on the clone `authoritativeCommit` just proved: a real hook, a real
+ * receipt, real commits. The weakening is a hand edit of the configuration file
+ * because the supported writer refuses to reconfigure an already-configured
+ * clone — which is exactly why the edit has to be noticed here: it is the one
+ * route left, it needs no unusual step, and nothing else would ever see it.
+ */
+const activatedConfigurationBinds = async (activated) => {
+  const findings = [];
+  const { root, hookPath } = activated;
+
+  await assertThrowawayRepository(root);
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const trustedConfiguration = await readFile(configurationPath, 'utf8');
+  const weakenedConfiguration = trustedConfiguration.replace(
+    `  checks: ${JSON.stringify(GATE_POLICY.checks)}`,
+    `  checks: ${JSON.stringify({ required: [], advisory: [REQUIRED_CHECK] })}`,
+  );
+
+  check(
+    findings,
+    weakenedConfiguration !== trustedConfiguration,
+    'The fixture policy could not be weakened, so nothing below proves anything.',
+  );
+  await writeFile(configurationPath, weakenedConfiguration, 'utf8');
+
+  // The staged change is the same one the clone just refused. Only the policy
+  // changed — and it changed on disk, without even being staged, which is how
+  // little it would take.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--', SOURCE]);
+
+  const denied = await commit(root, 'a change the weakened policy would allow').then(
+    () => ({ failed: false, stdout: '', stderr: '' }),
+    (error) => ({ failed: true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+  const deniedOutput = `${denied.stdout}${denied.stderr}`;
+
+  check(findings, denied.failed === true, 'A policy edited after activation graded the next commit.');
+  check(findings, deniedOutput.includes('integrity-drift'), 'The denial did not name integrity drift.');
+  check(
+    findings,
+    deniedOutput.includes('trusted-configuration'),
+    'The denial did not name the trusted configuration surface.',
+  );
+  check(findings, deniedOutput.includes('gate repair'), 'The denial did not name `gate repair`.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A commit denied for drift still moved HEAD.',
+  );
+
+  // Nothing was repaired: the weakened configuration is still exactly as its
+  // author left it, and the receipt still pins what activation pinned.
+  check(
+    findings,
+    await readFile(configurationPath, 'utf8') === weakenedConfiguration,
+    'Observing drift rewrote the configuration it disagreed with.',
+  );
+
+  // Restoring the activated policy restores enforcement, so drift is a
+  // reconciliation and never a latch.
+  await writeFile(configurationPath, trustedConfiguration, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired again\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await commit(root, 'a change the activated policy allows').then(
+    () => ({ failed: false, stderr: '' }),
+    (error) => ({ failed: true, stderr: error.stderr ?? '' }),
+  );
+
+  check(findings, allowed.failed === false, `The restored clone refused a passing change: ${allowed.stderr}.`);
+
+  // The other surface a maintainer can reach without trying: the registered
+  // hook itself. Editing the gate-owned block is drift of what activation
+  // pinned, and it is reported by name.
+  const registration = await readFile(hookPath, 'utf8');
+
+  await writeFile(hookPath, `${registration}\n# edited after activation\n`, { encoding: 'utf8', mode: 0o755 });
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired once more\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const tampered = await commit(root, 'a change under an edited registration').then(
+    () => ({ failed: false, stdout: '', stderr: '' }),
+    (error) => ({ failed: true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+  const tamperedOutput = `${tampered.stdout}${tampered.stderr}`;
+
+  check(findings, tampered.failed === true, 'An edited hook registration still authorized a commit.');
+  check(
+    findings,
+    tamperedOutput.includes('managed-hooks'),
+    `The denial did not name the managed-hooks surface: ${tamperedOutput}`,
+  );
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')).includes('# edited after activation'),
+    'Observing an edited registration repaired it.',
+  );
+
+  return { name: 'activated-configuration-binds', ok: findings.length === 0, findings };
+};
+
 /** A failure immediately before Git enablement leaves nothing behind. */
 const rollbackLeavesNoTrace = async () => {
   const findings = [];
@@ -1240,6 +1348,13 @@ const main = async () => {
         ? await authoritativeCommit(activated)
         : {
           name: 'authoritative-commit',
+          ok: false,
+          findings: ['Skipped: the packaged activation did not succeed.'],
+        },
+      activated.ok
+        ? await activatedConfigurationBinds(activated)
+        : {
+          name: 'activated-configuration-binds',
           ok: false,
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
