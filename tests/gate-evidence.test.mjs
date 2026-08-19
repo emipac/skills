@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
 import { validateDecision } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
+import {
+  RUN_LOCAL_PLACEHOLDER,
+  envelopeIdentity,
+} from '../skills/change-evaluation-gate/scripts/lib/evidence-identity.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import { validateLifecycleEvent } from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
 import { resolveBypass } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
@@ -303,7 +308,7 @@ test('repeated evaluations append canonical content-addressed envelopes at the G
 
   const envelope = await store.readEnvelope(first.evidenceId);
 
-  assert.equal(envelope.storeVersion, 'change-evaluation-gate/evidence/v1');
+  assert.equal(envelope.storeVersion, 'change-evaluation-gate/evidence/v2');
   assert.equal(envelope.evidenceId, first.evidenceId);
   assert.equal(envelope.decision.evaluationId, 'evaluation-one');
 
@@ -568,4 +573,225 @@ test('the one-shot bypass ledger is durable across processes', async (t) => {
   assert.deepEqual(events.map((event) => event.type), ['bypass']);
   assert.equal(events[0].outcome, 'succeeded');
   assert.deepEqual(validateLifecycleEvent(events[0]), []);
+});
+
+/**
+ * The preserved evidence of real `gms` runs, written before this rule existed.
+ * It is read here and never modified: it is the reference for what an auditor
+ * reading an older store actually holds (`TB-032`).
+ */
+const PRESERVED_STORE = fileURLToPath(new URL(
+  '../real-project-evidence/change-evaluation-gate/evidence/',
+  import.meta.url,
+));
+
+const preservedLines = async (file) => (await readFile(path.join(PRESERVED_STORE, file), 'utf8'))
+  .split('\n')
+  .filter((line) => line.trim().length > 0)
+  .map((line) => JSON.parse(line));
+
+/** One decision, evaluated twice: same content, different run. */
+const runOf = (executionRoot, durationMs) => decisionFixture('evaluation-one', {
+  snapshot: { kind: 'worktree', id: 'sha256:snapshot', baseRevision: 'HEAD', executionRoot },
+  checks: [{
+    id: 'check.one',
+    stage: 'test',
+    policy: 'required',
+    outcome: 'failed',
+    reasonCode: 'grader-negative',
+    attempts: [{ attempt: 1, outcome: 'failed', reasonCode: 'grader-negative', exitCode: 1, durationMs }],
+  }],
+});
+
+test('TB-032 NFR-REL-001, AC-EVID-001: identical evidence from two execution roots addresses one envelope', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+  const first = '/var/folders/gg/T/gate-preflight-exec-uB9ozI';
+  const second = '/var/folders/gg/T/gate-preflight-exec-OEhA53';
+  // A check reports where it ran, in whichever spelling it resolved.
+  const said = (executionRoot) => `require(/private${executionRoot}/vendor/autoload.php) failed\n`;
+  const appendRun = (executionRoot, durationMs) => store.appendEvidence({
+    decision: runOf(executionRoot, durationMs),
+    outputs: [{ checkId: 'check.one', attempt: 1, text: said(executionRoot) }],
+  });
+
+  const one = await appendRun(first, 1);
+  const two = await appendRun(second, 118);
+
+  assert.equal(
+    two.evidenceId,
+    one.evidenceId,
+    'NFR-REL-001: neither the temporary directory nor the wall clock is a fact about what was evaluated.',
+  );
+  assert.equal(one.deduplicated, false);
+  assert.equal(two.deduplicated, true, 'SG-EVID-001: an envelope already on disk is never rewritten.');
+
+  const files = (await readdir(store.paths.envelopes, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile());
+
+  assert.equal(files.length, 1, 'AC-EVID-001: one evaluation, one stored envelope.');
+
+  // Both appends are recorded, which is what the preflight repetition budget
+  // counts (TB-027), and each carries its own run-local facts.
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2);
+  assert.equal(log.filter((entry) => entry.evaluationId === 'evaluation-one').length, 2);
+  assert.equal(log[0].execution.executionRoot, first);
+  assert.equal(log[1].execution.executionRoot, second);
+  assert.deepEqual(log[0].execution.attempts, [{ checkId: 'check.one', attempt: 1, durationMs: 1 }]);
+  assert.deepEqual(log[1].execution.attempts, [{ checkId: 'check.one', attempt: 1, durationMs: 118 }]);
+
+  const envelope = await store.readEnvelope(one.evidenceId);
+  const stored = JSON.stringify(envelope);
+
+  assert.equal(envelope.decision.snapshot.executionRoot, RUN_LOCAL_PLACEHOLDER);
+  assert.equal(envelope.decision.checks[0].attempts[0].durationMs, RUN_LOCAL_PLACEHOLDER);
+  assert.equal(
+    stored.includes('gate-preflight-exec-'),
+    false,
+    'NFR-REL-001: no host-local execution root reaches the stored envelope, including its excerpts.',
+  );
+  assert.match(envelope.retention.attempts[0].inline, /vendor\/autoload\.php/);
+  assert.equal(
+    new Set((await store.listBlobs()).map((blob) => blob.blobId)).size,
+    1,
+    'the same output from two runs is one content-addressed blob.',
+  );
+});
+
+test('TB-032 FR-EVID-001, NFR-AUD-001: the stored envelope states its own persistence and names its own identity', async (t) => {
+  const root = await fixtureRepository(t);
+
+  await writeFile(path.join(root, 'app.mjs'), 'export const value = 1;\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const store = await openEvidenceStore({ repositoryRoot: root });
+  const executionRoot = path.join(root, '..', `${path.basename(root)}-run-self-stating`);
+
+  t.after(() => rm(executionRoot, { recursive: true, force: true }));
+
+  const decision = await evaluate(evaluationRequest(root), {
+    executionRoot,
+    checks: [descriptorFixture()],
+    changedPaths: ['app.mjs'],
+    evidenceStore: store,
+    execute: async () => ({ executed: true, exitCode: 1, durationMs: 3, output: 'failed\n' }),
+  });
+  const envelope = await store.readEnvelope(decision.evidence.reference.evidenceId);
+
+  assert.equal(envelope.decision.evidence.persisted, true);
+  assert.equal(envelope.decision.evidence.reference.evidenceId, envelope.evidenceId);
+  assert.equal(
+    envelope.decision.evidence.reference.evidenceId,
+    decision.evidence.reference.evidenceId,
+    'AC-EVID-001: the stored statement and the decision the caller received agree.',
+  );
+  // The identity is still computable from the bytes: the self-reference is put
+  // back the way `activation.mjs` puts a receipt id back.
+  assert.equal(envelope.evidenceId, envelopeIdentity(envelope));
+  // The run-local store root and append instant stay on the log entry.
+  assert.equal(envelope.decision.evidence.reference.storeRoot, RUN_LOCAL_PLACEHOLDER);
+  assert.equal(decision.evidence.reference.storeRoot, store.root);
+  assert.equal(
+    JSON.stringify(envelope).includes(executionRoot),
+    false,
+    'NFR-REL-001: the stored record names no host path.',
+  );
+  // The decision the runner reports still tells a maintainer where it ran.
+  assert.equal(decision.snapshot.executionRoot, executionRoot);
+  assert.equal(decision.checks[0].attempts[0].durationMs, 3);
+  assert.deepEqual(validateDecision(decision), []);
+});
+
+test('TB-032 SG-EVID-001, FR-EVID-004: an envelope written before this change stays readable, prunable, and auditable', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+  const preserved = (await preservedLines('log.ndjson')).find((entry) => entry.blobIds.length > 0);
+  const index = (await preservedLines('blobs.ndjson'))
+    .filter((record) => preserved.blobIds.includes(record.blobId));
+  const hex = preserved.evidenceId.replace(/^sha256:/, '');
+
+  // Exactly the bytes the older gate wrote, placed in a store this one opens.
+  await mkdir(path.join(store.paths.envelopes, hex.slice(0, 2)), { recursive: true });
+  await copyFile(
+    path.join(PRESERVED_STORE, preserved.envelopePath),
+    path.join(store.paths.envelopes, hex.slice(0, 2), `${hex}.json`),
+  );
+
+  for (const record of index) {
+    const blobHex = record.blobId.replace(/^sha256:/, '');
+
+    await mkdir(path.join(store.paths.blobs, blobHex.slice(0, 2)), { recursive: true });
+    await copyFile(
+      path.join(PRESERVED_STORE, 'blobs', blobHex.slice(0, 2), blobHex),
+      path.join(store.paths.blobs, blobHex.slice(0, 2), blobHex),
+    );
+    await appendFile(store.paths.blobIndex, `${JSON.stringify(record)}\n`, 'utf8');
+  }
+
+  await appendFile(store.paths.log, `${JSON.stringify(preserved)}\n`, 'utf8');
+
+  const envelope = await store.readEnvelope(preserved.evidenceId);
+
+  assert.notEqual(envelope, null, 'a v1 envelope must still be readable.');
+  assert.equal(envelope.storeVersion, 'change-evaluation-gate/evidence/v1');
+  assert.equal(
+    envelopeIdentity(envelope),
+    envelope.evidenceId,
+    'the identity of a v1 envelope still recomputes from its own bytes.',
+  );
+
+  // It prunes exactly as it always did, and the envelope survives the removal.
+  const distinct = new Set(index.map((record) => record.blobId));
+  const preview = await store.previewPrune({ evaluationIds: [preserved.evaluationId] });
+
+  assert.equal(preview.blobs.length, distinct.size);
+
+  const pruned = await store.confirmPrune({ preview, confirmation: preview.confirmationToken });
+
+  assert.equal(pruned.pruned, true);
+  assert.deepEqual(pruned.removed.slice().sort(), [...distinct].sort());
+  assert.equal((await store.readTombstones()).length, distinct.size);
+  assert.notEqual(await store.readEnvelope(preserved.evidenceId), null);
+  assert.equal((await store.readBlob(preserved.blobIds[0])), null);
+});
+
+test('TB-032 FR-EVID-004: pruning behaves identically for one envelope several appends reference', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+  const append = () => store.appendEvidence({
+    decision: runOf('/var/folders/gg/T/gate-preflight-exec-aaaaaa', 7),
+    outputs: [{ checkId: 'check.one', attempt: 1, text: 'shared output\n' }],
+  });
+  const kept = await store.appendEvidence({
+    decision: decisionFixture('evaluation-two'),
+    outputs: [{ checkId: 'check.one', attempt: 1, text: 'other output\n' }],
+  });
+
+  const one = await append();
+  const two = await append();
+
+  assert.equal(one.evidenceId, two.evidenceId);
+
+  const preview = await store.previewPrune({ evaluationIds: ['evaluation-one'] });
+
+  assert.equal(preview.blobs.length, 1, 'the shared blob is previewed once, not once per append.');
+  assert.equal(preview.blobs[0].references.length, 2, 'the preview names every append it touches.');
+
+  const pruned = await store.confirmPrune({ preview, confirmation: preview.confirmationToken });
+
+  assert.equal(pruned.pruned, true);
+  assert.deepEqual(pruned.removed, [preview.blobs[0].blobId]);
+
+  const [tombstone] = await store.readTombstones();
+
+  assert.equal(tombstone.blobId, preview.blobs[0].blobId);
+  assert.equal(tombstone.references.length, 2);
+  assert.equal(await store.readBlob(preview.blobs[0].blobId), null);
+  // Everything else survives: the deduplicated envelope, the untouched blob,
+  // and both log entries.
+  assert.notEqual(await store.readEnvelope(one.evidenceId), null);
+  assert.notEqual(await store.readBlob(kept.blobs[0].blobId), null);
+  assert.equal((await store.readLog()).length, 3);
 });

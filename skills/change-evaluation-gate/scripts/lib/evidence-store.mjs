@@ -26,13 +26,28 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { boundOutput, resolveEvidenceLimits } from './evidence-bounds.mjs';
+import {
+  contentIdentity,
+  hostPathVariants,
+  storedDecision,
+  withEvidenceIdentity,
+  withoutHostPaths,
+} from './evidence-identity.mjs';
 import { createLifecycleEvent, validateLifecycleEvent } from './lifecycle-event.mjs';
 import { createRedactor, residualFindings } from './redaction.mjs';
 
 const runFile = promisify(execFile);
 
-/** The versioned on-disk shape of this store. */
-export const EVIDENCE_STORE_VERSION = 'change-evaluation-gate/evidence/v1';
+/**
+ * The versioned on-disk shape of this store.
+ *
+ * `v2` states what changed in the envelope: run-local values are elided from
+ * the addressed bytes and the record states its own persistence. The store
+ * layout is unchanged and `v1` envelopes stay readable, prunable, and
+ * auditable beside `v2` ones — which is what versioning an append-only store
+ * is for (`SG-EVID-001`, `FR-EVID-004`).
+ */
+export const EVIDENCE_STORE_VERSION = 'change-evaluation-gate/evidence/v2';
 
 /** Runtime-owned directory name under the Git common directory. */
 export const STORE_DIRECTORY = path.join('change-evaluation-gate', 'evidence');
@@ -47,22 +62,11 @@ const defaultRunGit = async (repositoryRoot, args) => {
   return stdout;
 };
 
-const canonical = (value) => {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonical).join(',')}]`;
-  }
-
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  }
-
-  return JSON.stringify(value ?? null);
-};
-
 const digestOf = (value) => createHash('sha256').update(value).digest('hex');
 
-/** Content identity over a canonical serialization; never over host paths. */
-export const contentIdentity = (value) => `sha256:${digestOf(canonical(value))}`;
+// One scheme, stated once. Re-exported here because this store is where every
+// caller already reaches for it.
+export { contentIdentity };
 
 /**
  * Blobs are content-addressed, so one stored blob can be referenced by several
@@ -416,6 +420,11 @@ export const openEvidenceStore = async ({
     const attempts = [];
     const redactedDecision = redactor.redactValue(decision ?? null);
     const redactionRules = [...redactedDecision.rules];
+    // The one run-local path everything written here is normalized against. A
+    // check reports where it ran; the record of what it decided must not
+    // (NFR-REL-001).
+    const executionRoot = redactedDecision.value?.snapshot?.executionRoot ?? null;
+    const executionRootVariants = hostPathVariants(executionRoot);
     let redactedBytes = redactedDecision.redactedBytes;
     let evaluationBlobBytes = 0;
 
@@ -427,7 +436,14 @@ export const openEvidenceStore = async ({
         ? output.bytes.toString('utf8')
         : String(output?.text ?? '');
       const redactedOutput = redactor.redactText(raw);
-      const captured = Buffer.from(redactedOutput.text, 'utf8');
+      // Elision of the run-local path follows redaction and precedes bounding
+      // and addressing, so identical output from two runs of one evaluation is
+      // one stored blob rather than two that differ by a temporary directory
+      // name (NFR-REL-001, SG-SECRET-001).
+      const captured = Buffer.from(
+        withoutHostPaths(redactedOutput.text, executionRootVariants),
+        'utf8',
+      );
       const checkId = output?.checkId ?? null;
 
       redactionRules.push(...redactedOutput.rules);
@@ -487,10 +503,14 @@ export const openEvidenceStore = async ({
       });
     }
 
+    const blobIds = pending.map(({ bytes }) => `sha256:${digestOf(bytes)}`);
     const envelope = {
       storeVersion: EVIDENCE_STORE_VERSION,
       evaluationId,
-      decision: redactedDecision.value,
+      // The stored decision is the decision with its run-local values elided
+      // and its own persistence stated. The decision the caller received is
+      // untouched (NFR-REL-001, NFR-AUD-001).
+      decision: storedDecision(redactedDecision.value, { blobIds }),
       redaction: {
         version: redactor.version ?? null,
         // Identity and source only; a Sensitive value never travels.
@@ -508,8 +528,8 @@ export const openEvidenceStore = async ({
           blobBytes: evaluationBlobBytes,
         },
       },
-      blobs: pending.map(({ bytes, descriptor }) => ({
-        blobId: `sha256:${digestOf(bytes)}`,
+      blobs: pending.map(({ bytes, descriptor }, index) => ({
+        blobId: blobIds[index],
         bytes: bytes.length,
         checkId: descriptor.checkId,
         attempt: descriptor.attempt,
@@ -557,8 +577,23 @@ export const openEvidenceStore = async ({
     const evidenceId = contentIdentity(envelope);
     const hex = evidenceId.replace(/^sha256:/, '');
     const envelopePath = path.join(paths.envelopes, hex.slice(0, 2), `${hex}.json`);
+    // Identical evidence addresses one envelope, and an envelope that already
+    // exists is left exactly as it was written. Nothing is rewritten, which is
+    // what append-only means here (SG-EVID-001, AC-EVID-001).
+    const existing = await readFile(envelopePath, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') {
+        return null;
+      }
 
-    await writeAtomic(envelopePath, `${JSON.stringify({ ...envelope, evidenceId }, null, 2)}\n`);
+      throw error;
+    });
+
+    if (existing === null) {
+      await writeAtomic(
+        envelopePath,
+        `${JSON.stringify(withEvidenceIdentity(envelope, evidenceId), null, 2)}\n`,
+      );
+    }
 
     const entry = {
       evidenceId,
@@ -566,6 +601,21 @@ export const openEvidenceStore = async ({
       appendedAt: clock().toISOString(),
       envelopePath: path.relative(root, envelopePath),
       blobIds: blobs.map((blob) => blob.blobId),
+      // The run-local facts of this one append. They are elided from the
+      // addressed envelope because they say nothing about what was evaluated,
+      // and they are kept here, per append and never content-addressed,
+      // because every diagnosis of a real run has needed them (NFR-REL-001,
+      // NFR-OPER-001).
+      execution: {
+        executionRoot,
+        attempts: (redactedDecision.value?.checks ?? []).flatMap((check) => (
+          (check?.attempts ?? []).map((attempt) => ({
+            checkId: check?.id ?? null,
+            attempt: attempt?.attempt ?? null,
+            durationMs: attempt?.durationMs ?? null,
+          }))
+        )),
+      },
     };
 
     await appendLine(paths.log, entry);
@@ -579,6 +629,10 @@ export const openEvidenceStore = async ({
 
     return {
       appended: true,
+      // Whether these bytes were already on disk. The append still happened —
+      // it is in the log and it left its Lifecycle event — and one evaluation
+      // still occupies one envelope (AC-EVID-001).
+      deduplicated: existing !== null,
       evidenceId,
       evaluationId,
       envelopePath,

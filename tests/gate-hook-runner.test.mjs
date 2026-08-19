@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -765,6 +765,66 @@ test('TB-026 NFR-REL-003: an otherwise-passing commit whose evidence append fail
   );
   assert.equal(result.reasonCode, 'evidence-persistence-failed');
   assert.match(result.lines.join('\n'), /evidence-store-unavailable/);
+});
+
+test('TB-032 NFR-REL-001, AC-EVID-001: two commit attempts over identical content append one envelope and two log entries', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  // Two real runs of the authoritative runner over the same staged content.
+  // Each materializes its own `mkdtemp` execution root and each measures its
+  // own wall-clock durations; neither is a fact about what was evaluated.
+  const first = await runHook({ cwd: root, environment: process.env });
+  const second = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(first.exitCode, 0, `expected an allow, got: ${first.lines.join('\n')}`);
+  assert.equal(second.exitCode, 0, `expected an allow, got: ${second.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2, 'SG-EVID-001: every append is still recorded in the append-only log.');
+  assert.equal(
+    log[0].evidenceId,
+    log[1].evidenceId,
+    'NFR-REL-001: two evaluations of identical content must address one envelope.',
+  );
+
+  const files = (await readdir(store.paths.envelopes, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile());
+
+  assert.equal(files.length, 1, 'AC-EVID-001: one evaluation, one stored envelope.');
+
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.equal(
+    JSON.stringify(envelope).includes('gate-hook-runner-exec-'),
+    false,
+    'NFR-REL-001: no host-local execution root may reach the stored envelope.',
+  );
+  assert.equal(
+    envelope.decision.evidence.persisted,
+    true,
+    'NFR-AUD-001: the stored record must not state that it was never recorded.',
+  );
+  assert.equal(envelope.decision.evidence.reference.evidenceId, envelope.evidenceId);
+
+  // The run-local execution root stays available to a maintainer, on the
+  // per-append log entry that is not content-addressed.
+  assert.match(log[0].execution.executionRoot, /gate-hook-runner-exec-/);
+  assert.notEqual(
+    log[0].execution.executionRoot,
+    log[1].execution.executionRoot,
+    'the two runs really did materialize different execution roots.',
+  );
+  assert.equal(
+    (await store.readEvents()).filter((event) => event.type === 'evaluation').length,
+    2,
+    'NFR-AUD-001: one governed action, one Lifecycle event — deduplication changes nothing here.',
+  );
 });
 
 test('TB-026: the activation self-test writes no Evidence and leaves no store entry', async (t) => {

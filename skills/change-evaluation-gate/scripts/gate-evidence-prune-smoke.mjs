@@ -12,10 +12,15 @@
  *    the output with its redacted and omitted byte counts; and a secret canary
  *    planted in captured output appears nowhere in the persisted store
  *    (AC-EVID-001, SG-SECRET-001).
- * 2. `preview-mismatch-removes-nothing` — a prune preview identifies the exact
+ * 2. `identical-content-appends-one-envelope` — two real evaluations of the
+ *    same content, materialized into different temporary directories and timed
+ *    independently, append one envelope and two log entries; the stored
+ *    envelope names no host path and states its own persistence
+ *    (AC-EVID-001, NFR-REL-001, NFR-AUD-001).
+ * 3. `preview-mismatch-removes-nothing` — a prune preview identifies the exact
  *    blobs and bytes, and a confirmation that does not reproduce it removes
  *    nothing and records a refusal, never a successful deletion (AC-EVID-002).
- * 3. `confirmed-prune-preserves-audit-trail` — a matching confirmation removes
+ * 4. `confirmed-prune-preserves-audit-trail` — a matching confirmation removes
  *    only the previewed blobs and preserves envelopes, decisions, Lifecycle
  *    events, pruning records, and a tombstone for every removed blob
  *    (AC-EVID-002, SG-EVID-001).
@@ -45,6 +50,7 @@ import { createBoundedExecutor } from './lib/bounded-execution.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { validateDecision } from './lib/evaluation-contract.mjs';
 import { EVIDENCE_CEILINGS } from './lib/evidence-bounds.mjs';
+import { envelopeIdentity } from './lib/evidence-identity.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
 import { collectChecks } from './lib/gate-core.mjs';
 import { validateLifecycleEvent } from './lib/lifecycle-event.mjs';
@@ -288,6 +294,90 @@ const boundedRedactedAppend = async () => {
   return { name: 'bounded-redacted-append', ok: findings.length === 0, findings };
 };
 
+/**
+ * Two real evaluations of identical content leave one envelope and two log
+ * entries.
+ *
+ * Each run materializes its own `mkdtemp` execution root and spends its own
+ * wall-clock time in real spawned processes. Neither is a fact about what was
+ * evaluated, so neither may reach the bytes the envelope is addressed by
+ * (`NFR-REL-001`, `AC-EVID-001`, `TB-032`).
+ */
+const identicalContentAppendsOneEnvelope = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const first = await evaluateOnce(root);
+  const second = await evaluateOnce(root);
+  const store = second.store;
+
+  check(findings, first.decision.evidence.persisted === true, 'The first evaluation persisted nothing.');
+  check(findings, second.decision.evidence.persisted === true, 'The second evaluation persisted nothing.');
+  check(
+    findings,
+    first.decision.evaluationId === second.decision.evaluationId,
+    'The two evaluations of identical content were not one evaluation.',
+  );
+
+  const log = await store.readLog();
+
+  check(findings, log.length === 2, `Expected two log entries, got ${log.length}.`);
+  check(
+    findings,
+    log.length === 2 && log[0].evidenceId === log[1].evidenceId,
+    'Two evaluations of identical content addressed two envelopes.',
+  );
+
+  const files = (await readdir(store.paths.envelopes, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile());
+
+  check(findings, files.length === 1, `Expected exactly one stored envelope, got ${files.length}.`);
+
+  const envelope = await store.readEnvelope(log[0]?.evidenceId);
+
+  check(findings, envelope !== null, 'The appended envelope could not be read back.');
+  check(
+    findings,
+    JSON.stringify(envelope ?? {}).includes('gate-evidence-smoke-exec-') === false,
+    'A host-local execution root reached the stored envelope.',
+  );
+  check(
+    findings,
+    envelope?.decision?.evidence?.persisted === true,
+    'The stored envelope states that it was never persisted.',
+  );
+  check(
+    findings,
+    envelope?.decision?.evidence?.reference?.evidenceId === envelope?.evidenceId,
+    'The stored envelope does not name its own evidence identity.',
+  );
+  check(
+    findings,
+    envelope?.evidenceId === envelopeIdentity(envelope),
+    "The stored envelope's identity does not recompute from its own bytes.",
+  );
+  check(
+    findings,
+    log.every((entry) => typeof entry.execution?.executionRoot === 'string'
+      && entry.execution.executionRoot.includes('gate-evidence-smoke-exec-')),
+    'The run-local execution root was not recorded on the append.',
+  );
+  check(
+    findings,
+    log.length === 2 && log[0].execution.executionRoot !== log[1].execution.executionRoot,
+    'The two runs did not really use different execution roots.',
+  );
+
+  const events = (await store.readEvents()).filter((event) => event.type === 'evaluation');
+
+  check(
+    findings,
+    events.length === 2,
+    `Expected one Lifecycle event per append, got ${events.length}.`,
+  );
+
+  return { name: 'identical-content-appends-one-envelope', ok: findings.length === 0, findings };
+};
+
 /** A confirmation that does not reproduce the preview removes nothing. */
 const previewMismatchRemovesNothing = async () => {
   const findings = [];
@@ -471,6 +561,7 @@ const main = async () => {
   try {
     scenarios = [
       await boundedRedactedAppend(),
+      await identicalContentAppendsOneEnvelope(),
       await previewMismatchRemovesNothing(),
       await confirmedPrunePreservesAuditTrail(),
     ];

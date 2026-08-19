@@ -31,6 +31,7 @@ import {
   reconcileAttempts,
   validateEvaluationRequest,
 } from './evaluation-contract.mjs';
+import { withoutRunLocalValues } from './evidence-identity.mjs';
 import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
 import {
@@ -217,15 +218,18 @@ const buildDecision = ({
 
   return {
     ...body,
-    // The host-local execution root is excluded from the evidence identity: it
-    // names where the snapshot was materialized on this machine, not what was
-    // evaluated, so including it would make an identical binding produce a
-    // different evidence identity (NFR-REL-001).
+    // Run-local values are excluded from the evidence identity: the host-local
+    // execution root names where the snapshot was materialized on this machine
+    // and an attempt's duration is how long it took here, so including either
+    // would make an identical binding produce a different evidence identity
+    // (NFR-REL-001). The rule is the store's own, stated once, so the identity
+    // the decision computes and the identity the store assigns describe the
+    // same thing.
     //
     // `persisted` and `reference` are filled in by the Evidence store when one
     // is bound; an unbound gate still returns a complete, stable identity.
     evidence: {
-      id: identity({ ...body, snapshot: { ...body.snapshot, executionRoot: null } }),
+      id: identity(withoutRunLocalValues(body)),
       format: EVIDENCE_FORMAT,
       persisted: false,
       reference: null,
