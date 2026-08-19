@@ -886,12 +886,33 @@ const packagedPreflightAnswersClient = async () => {
   await writeFile(
     path.join(root, 'tools/check.mjs'),
     [
-      "import { readFile } from 'node:fs/promises';",
+      "import { readdir, readFile } from 'node:fs/promises';",
+      "import path from 'node:path';",
       '',
-      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      'const walk = async (directory) => {',
+      "  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);",
+      '  const files = [];',
       '',
-      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
-      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '  for (const entry of entries) {',
+      '    const absolute = path.join(directory, entry.name);',
+      '',
+      '    files.push(...(entry.isDirectory() ? await walk(absolute) : [absolute]));',
+      '  }',
+      '',
+      '  return files;',
+      '};',
+      '',
+      'const graded = await walk(process.argv[2]);',
+      'let broken = 0;',
+      '',
+      'for (const file of graded) {',
+      "  if ((await readFile(file, 'utf8')).includes('BROKEN')) {",
+      '    broken += 1;',
+      '  }',
+      '}',
+      '',
+      'process.stdout.write(`graded ${graded.length} files, ${broken} broken\\n`);',
+      'process.exitCode = broken === 0 ? 0 : 1;',
       '',
     ].join('\n'),
     'utf8',
@@ -913,7 +934,7 @@ const packagedPreflightAnswersClient = async () => {
       '        - runner: repository-script',
       '          args:',
       '            - tools/check.mjs',
-      '            - app/Order.php',
+      '            - app',
       '          working_directory: "."',
       '          timeout_seconds: 60',
       '          allowed_environment:',
@@ -1057,6 +1078,57 @@ const packagedPreflightAnswersClient = async () => {
     findings,
     unnamed.stdout === '' && unnamed.stderr.includes('change-evaluation-gate'),
     `a preflight with no declared adapter did not report itself: ${unnamed.stdout}${unnamed.stderr}`,
+  );
+
+  // TB-034: the shape the preflight exists for, and the one it reported clean
+  // on. Every tracked file is back at its committed content and the clone's
+  // only change is a file the agent just created and never staged — the most
+  // common kind of work in an AI-assisted session. A worktree snapshot built
+  // from `git ls-files` did not contain it, so the required check graded a tree
+  // the new file was not in and the agent was told its work passed
+  // (AC-ADAPT-001, FR-EVAL-001).
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, 'app/Refund.php'), 'BROKEN\n', 'utf8');
+
+  const untracked = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+  let untrackedBody = null;
+
+  try {
+    untrackedBody = JSON.parse(untracked.stdout);
+  } catch (error) {
+    check(
+      findings,
+      false,
+      `a clone whose only change is a new untracked failing file reported clean: ${JSON.stringify(untracked.stdout)}`,
+    );
+  }
+
+  check(
+    findings,
+    typeof untrackedBody?.[field] === 'string'
+      && untrackedBody[field].includes('configuration.broad-tests.test'),
+    `a new untracked failing file did not reach the client in ${field}: ${untracked.stdout}${untracked.stderr}`,
+  );
+
+  // And the deletion that used to end the whole evaluation in
+  // `snapshot-mismatch` before a single check ran (NFR-REL-003, FR-EVAL-001).
+  await rm(path.join(root, 'app/Refund.php'));
+  await rm(path.join(root, 'app/Order.php'));
+
+  const deleted = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+
+  check(
+    findings,
+    deleted.stdout === '',
+    `deleting a tracked file made an otherwise clean preflight answer: ${deleted.stdout}`,
   );
 
   return { name: 'packaged-preflight-answers-client', ok: findings.length === 0, findings };

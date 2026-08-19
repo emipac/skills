@@ -1,14 +1,14 @@
 # TB-034 — Grade the whole worktree change, including the files that are new
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 34-grade-the-whole-worktree-change
 Draft key: TB-034
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -152,21 +152,57 @@ authoritative evaluation.
 
 ## Acceptance Criteria
 
-- [ ] `FR-EVAL-001`, `AC-EVAL-001`: a worktree snapshot of a clone with a
+- [x] `FR-EVAL-001`, `AC-EVAL-001`: a worktree snapshot of a clone with a
   modified file, a new untracked file, and a deleted file contains the modified
   and new files, omits the deleted one, and captures successfully.
-- [ ] `FR-EVAL-001`: both sides of a rename appear in `changedPaths`, and the
+- [x] `FR-EVAL-001`: both sides of a rename appear in `changedPaths`, and the
   snapshot contains the destination and not the source.
-- [ ] `SG-EVAL-001`: a git-ignored file is absent from the snapshot unless a
+- [x] `SG-EVAL-001`: a git-ignored file is absent from the snapshot unless a
   declared dependency root provides it, and a provided dependency root is still
   outside the identity.
-- [ ] `AC-ADAPT-001`: a preflight in a clone whose only change is a new
+- [x] `AC-ADAPT-001`: a preflight in a clone whose only change is a new
   untracked file that fails a required check reports that failure through the
   declared feedback channel — the case that reports clean today.
-- [ ] `FR-EVAL-004`: the `git-index` path produces byte-identical snapshots and
+- [x] `FR-EVAL-004`: the `git-index` path produces byte-identical snapshots and
   identities to today, proved by an unchanged fixture.
-- [ ] The known limitations — file modes, symlink targets, submodules — are
+- [x] The known limitations — file modes, symlink targets, submodules — are
   stated in the evaluation process contract rather than left implied.
+
+## Decisions this slice recorded
+
+- **`git status` is asked with `-uall`, which the ticket did not name.** Default
+  untracked reporting collapses a wholly new directory into one `dir/` entry. A
+  snapshot materializes files, so the collapsed entry would have been enumerated
+  as a path that is not a file and capture would have failed on exactly the case
+  the ticket exists for — the recorded `tests/Feature/MazeTest.php` sits inside a
+  directory that did not previously exist. Ignored content stays out because
+  `--ignored` is still not asked for, so the safeguard is unchanged.
+- **Untracked paths are now changed paths for a `worktree` change.** The ticket
+  states the content set and states that both sides of a rename reach
+  `changedPaths`, but `listChangedPaths` skipped every `??` entry outright, so a
+  newly created file was reported as no change at all and no applicability rule
+  could ever match it. Grading a file that no rule considers applicable is half
+  the fix. An untracked path remains absent from a `git-index` change, because
+  it is nothing to the index.
+- **A rename names both sides; a copy names only its destination.** The ticket
+  says "both sides of a rename are the change". A copy record carries a source
+  field in the same position, but a copy leaves its source byte-identical, so
+  naming it would report a change to a file nobody touched.
+- **The rename source field is read when either status column reports `R` or
+  `C`.** The existing parser stepped over the second field only when the *index*
+  column did. Git documents `R` and `C` in both columns; a worktree-column
+  rename would have desynchronized the parse and made the source path look like
+  a status record.
+- **The `git-index` regression is pinned to a literal identity, not to a
+  self-comparison.** The fixture's expected identity
+  (`sha256:cdeecced…`) was recorded by running the fixture against the
+  pre-TB-034 module, so it proves byte-identity with what a commit was graded on
+  before rather than with whatever this build happens to produce.
+- **The smoke check now grades the directory it is pointed at.** The existing
+  `packaged-preflight-answers-client` check read one named file, so it could
+  never have failed on a file that did not exist when it was written — the
+  defect would have stayed invisible through the real runner. The check is
+  otherwise the same check, with the same identity and the same runner.
 
 ## Verification Matrix
 

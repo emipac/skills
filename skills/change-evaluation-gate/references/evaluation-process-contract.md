@@ -71,6 +71,42 @@ the checks run, the execution-root identity is re-derived; any difference is
 Materialization writes no Git object, no index, and no commit. This is
 isolation from accidental interference, not a sandbox against hostile code.
 
+## What each snapshot kind contains
+
+| Kind | Content set |
+| --- | --- |
+| `git-index` | Exactly the index, materialized by `git checkout-index --all` |
+| `worktree` | Tracked paths, plus untracked-and-not-ignored paths, minus paths the worktree no longer holds |
+
+A `worktree` snapshot is the change a maintainer would see, so a file the agent
+created is graded and a file it deleted is materialized by absence — neither
+listed nor written, and therefore outside the identity. Both sides of a rename
+are reported in the changed paths: the source is gone and the destination is
+new. A copy names only its destination, because its source is unchanged.
+
+Git-ignored content never enters a snapshot. Ignore rules are Git's, applied by
+asking `git status` without `--ignored` rather than re-implemented here. The one
+way git-ignored content legitimately reaches an execution root is the declared
+dependency roots of the [Gate policy contract](gate-policy-contract.md), and
+those stay outside the snapshot identity.
+
+Only the expected absence of a deleted path stops being a failure. A path Git
+still reports that cannot be read is `snapshot-mismatch`, as before.
+
+### Known limitations
+
+A snapshot carries file content and nothing else. These are stated rather than
+partly modelled:
+
+- **File modes.** A permission change, including making a file executable, is
+  not part of the snapshot identity and no check sees it.
+- **Symlink targets.** A symbolic link is materialized by reading through it,
+  so the link's target is not graded and a retargeting alone is invisible.
+- **Submodules.** A submodule's recorded commit is not part of the snapshot and
+  its working tree is never materialized.
+
+A change consisting only of one of these is a change this gate cannot grade.
+
 ## Delegation
 
 Ordered check resolution and execution are delegated to `verify-change`
