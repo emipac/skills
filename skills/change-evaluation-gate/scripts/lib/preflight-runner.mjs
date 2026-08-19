@@ -29,6 +29,7 @@ import { evaluate } from './evaluate.mjs';
 import { openEvidenceStore } from './evidence-store.mjs';
 import {
   commandOwner,
+  contractFindings,
   observeControlSurface,
   openStore,
   pinnedRunners,
@@ -195,6 +196,13 @@ export const runPreflight = async ({
   // what the gate has already recorded rather than by a client counter.
   let openedStore = null;
 
+  // How many contract findings the returned decision produced, or `null` when
+  // the contract accepted it. Only the count is kept: what the preflight
+  // presents is submitted to an agent as its next user message, so a full dump
+  // of findings would put a wall of contract text where a short instruction
+  // belongs (`FR-ADAPT-005`).
+  let rejectedFindingCount = null;
+
   const evaluateActivated = async (request) => {
     const configuration = await resolveConfiguration(request.repository.root);
 
@@ -251,7 +259,7 @@ export const runPreflight = async ({
     });
 
     try {
-      return await evaluateSeam(request, {
+      const decision = await evaluateSeam(request, {
         executionRoot,
         runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
         providerVersions: { configuration: '1.0.0' },
@@ -267,6 +275,18 @@ export const runPreflight = async ({
         // blocks nothing (`SG-SUPPORT-001`).
         controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
       });
+
+      // The same contract the authoritative runner judges by, consulted at the
+      // earliest point this runner owns the decision. A decision that runner
+      // would refuse is not a set of check results this surface may render as
+      // though someone had produced them (`AC-EVAL-002`, `NFR-REL-003`).
+      const findings = contractFindings(decision);
+
+      if (findings.length > 0) {
+        rejectedFindingCount = findings.length;
+      }
+
+      return decision;
     } finally {
       await rm(executionRoot, { recursive: true, force: true });
     }
@@ -288,6 +308,20 @@ export const runPreflight = async ({
     return answer({
       adapterId: adapter.id,
       view: unverified({ adapter, family: 'capability', detail: `${adapter.id} is not a declared adapter.` }),
+    });
+  }
+
+  // A decision the contract rejects gets the answer every other unreadable
+  // result on this surface already gets. Nothing about authority changes: this
+  // narrows what the preflight is willing to say about a decision, not what it
+  // is allowed to do (`AC-ADAPT-002`, `SG-SUPPORT-001`).
+  if (rejectedFindingCount !== null) {
+    return answer({
+      adapterId: adapter.id,
+      view: unverified({
+        adapter,
+        detail: `the evaluation returned a decision that could not be read against the evaluation contract, so nothing about this working tree was verified (${rejectedFindingCount} contract finding${rejectedFindingCount === 1 ? '' : 's'})`,
+      }),
     });
   }
 

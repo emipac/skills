@@ -531,8 +531,12 @@ const REPORTED_FINDINGS = 6;
  * A throw would still be a refusal: this path decides whether a commit is
  * authorized, and it never lets an unexpected error read as the absence of a
  * problem (`NFR-REL-003`).
+ *
+ * It is exported so the preflight runner judges the same decision by the same
+ * rule. Two runners with two definitions of a complete decision is the
+ * divergence `AC-EVAL-002` exists to prevent (`TB-037`).
  */
-const contractFindings = (decision) => {
+export const contractFindings = (decision) => {
   try {
     return validateDecision(decision);
   } catch (error) {

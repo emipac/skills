@@ -1,14 +1,14 @@
 # TB-037 — Do not present a decision the gate itself would refuse
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 37-do-not-present-a-decision-the-gate-would-refuse
 Draft key: TB-037
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -134,20 +134,53 @@ the authoritative runner — `TB-033` settled it.
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-002`, `NFR-REL-003`: a decision that fails `validateDecision`
+- [x] `AC-ADAPT-002`, `NFR-REL-003`: a decision that fails `validateDecision`
   is presented as `unverified` and `not-authoritative` through the declared
   feedback channel, driven through the real `runPreflight`.
-- [ ] `AC-EVAL-002`: the preflight judges completeness with `validateDecision`;
+- [x] `AC-EVAL-002`: the preflight judges completeness with `validateDecision`;
   a source scan finds no second completeness rule in the preflight runner.
-- [ ] `AC-ADAPT-001`: a decision that passes the contract is presented exactly
+- [x] `AC-ADAPT-001`: a decision that passes the contract is presented exactly
   as it is today — a failing required check still names that check, and a
   passing turn still produces no follow-up.
-- [ ] `FR-EVID-001`: a decision the contract rejects leaves no Evidence
-  envelope.
-- [ ] `SG-SUPPORT-001`: the presented result is `not-authoritative` and
+- [x] `FR-EVID-001`: a decision the contract rejects leaves no Evidence
+  envelope. Held at the seam the preflight owns; see the decision recorded
+  below for what this does and does not guarantee.
+- [x] `SG-SUPPORT-001`: the presented result is `not-authoritative` and
   non-blocking, and the program exits `0`, whatever the decision was.
-- [ ] The presented message states that the decision could not be read without
+- [x] The presented message states that the decision could not be read without
   reproducing every contract finding.
+
+## Decisions this slice recorded
+
+**The defect was narrower than this ticket described, and the fix is the half
+that was genuinely missing.** `runAdapterEvaluation` has validated its
+evaluation seam's return with `validateDecision` since `TB-013`, and refuses a
+rejected decision with `failedPresentation`. So the preflight never rendered a
+malformed decision as check results: the observed behaviour was already
+`unverified` and `not-authoritative`. What was actually missing is what
+`AC-EVAL-002` names — the preflight making its own judgement of the decision by
+the same rule, rather than depending on a check that happens to live in a shared
+adapter helper — and a message fit for the channel. The red test failed on the
+message, which named one contract finding (`decision-field-missing at
+decision.protocolVersion`) and no count.
+
+**The shared rule is `contractFindings`, not `validateDecision` directly.**
+`TB-033` wrapped `validateDecision` in `hook-runner.mjs` so a throw is still a
+refusal. That wrapper is now exported and the preflight consults it, so both
+runners share one definition *and* one behaviour under an unexpected error.
+The only edit to the authoritative runner is the `export` keyword; nothing it
+does changed.
+
+**`FR-EVID-001` cannot be held as absolutely as this ticket assumes.** The
+Evidence append happens inside `evaluate`, in `persistEvidence`, before the
+decision is returned. The preflight opens the store in `evaluateActivated` and
+hands it to `evaluate`; it appends nothing itself. So a decision `evaluate`
+builds, appends, and then returns malformed is already an envelope before any
+check the preflight can make. Preventing that would mean validating inside
+`evaluate` — which is the authoritative runner's shared path and out of scope
+here. What this slice guarantees is what the preflight actually owns: a
+decision returned across its evaluation seam is judged before it is presented,
+and nothing is persisted by the preflight on that path.
 
 ## Verification Matrix
 

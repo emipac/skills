@@ -546,3 +546,118 @@ test('SG-OWNER-001: no client name and no native feedback field lives outside th
   assert.match(declarations, /\bcursor\b/i);
 });
 
+/**
+ * TB-037 — Do not present a decision the gate itself would refuse.
+ *
+ * `TB-033` made the authoritative runner judge every decision with
+ * `validateDecision` before it may exit `0`. The preflight must reach the same
+ * verdict about the same decision, so these fixtures drive the real
+ * `runPreflight` and hand it, through its injected `evaluate` seam, decisions
+ * the contract rejects.
+ */
+
+const evidenceLogPath = (root) => path.join(
+  root,
+  '.git',
+  'change-evaluation-gate/evidence/log.ndjson',
+);
+
+test('TB-037 AC-ADAPT-002 / NFR-REL-003: a decision the contract rejects presents as unverified through the declared channel', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  for (const decision of [
+    { authorization: 'allow', outcome: 'passed' },
+    null,
+    'passed',
+    { protocolVersion: '9.9', authorization: 'allow' },
+  ]) {
+    const result = await runPreflight({
+      cwd: root,
+      stdin: `${JSON.stringify(cursorStopPayload(root))}\n`,
+      argv: ['--adapter', 'cursor'],
+      environment: isolatedGitEnvironment(),
+      evaluate: async () => decision,
+    });
+
+    assert.equal(result.exitCode, 0, `a preflight always exits 0: ${JSON.stringify(decision)}.`);
+    assert.equal(result.view.outcome, 'unverified', JSON.stringify(decision));
+    assert.equal(result.view.authorization, 'not-authoritative', JSON.stringify(decision));
+    assert.equal(result.view.blocking, false, JSON.stringify(decision));
+
+    const body = JSON.parse(result.stdout);
+
+    assert.match(body.followup_message, /unverified/i, JSON.stringify(decision));
+    assert.match(
+      body.followup_message,
+      /could not be read/i,
+      `the message must say the decision could not be read: ${body.followup_message}`,
+    );
+    assert.match(
+      body.followup_message,
+      /\d+ contract finding/i,
+      `the message must count the findings rather than reproduce them: ${body.followup_message}`,
+    );
+    assert.equal(
+      /decision\.(checks|diagnostics|evaluationId)/.test(body.followup_message),
+      false,
+      `a message an agent is prompted with must not dump contract findings: ${body.followup_message}`,
+    );
+  }
+});
+
+test('TB-037 FR-EVID-001: a decision the contract rejects leaves no Evidence envelope', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  const result = await runPreflight({
+    cwd: root,
+    stdin: `${JSON.stringify(cursorStopPayload(root))}\n`,
+    argv: ['--adapter', 'cursor'],
+    environment: isolatedGitEnvironment(),
+    evaluate: async () => ({ authorization: 'allow', outcome: 'passed' }),
+  });
+
+  assert.equal(result.view.outcome, 'unverified');
+
+  const log = await readFile(evidenceLogPath(root), 'utf8').catch(() => '');
+
+  assert.equal(
+    log.trim(),
+    '',
+    `a decision the contract rejects is not a record of an evaluation: ${log}`,
+  );
+});
+
+test('TB-037 AC-EVAL-002: the preflight judges completeness with the contract, and carries no second rule', async () => {
+  const source = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs'),
+    'utf8',
+  );
+
+  const authoritative = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /contractFindings\(/,
+    'the preflight must judge completeness with the contract, not with a field check.',
+  );
+  assert.match(
+    authoritative,
+    /export const contractFindings = \(decision\) => \{\s*try \{\s*return validateDecision\(decision\);/,
+    'the wrapper both runners share must be the one that calls validateDecision.',
+  );
+  assert.equal(
+    /decision\.(checks|outcome|authorization|evaluationId)\s*(===|!==|==|!=|\?\?|\|\|)/.test(source),
+    false,
+    'a second completeness rule in the preflight is the divergence TB-037 removes.',
+  );
+});
+
