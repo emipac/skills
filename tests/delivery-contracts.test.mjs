@@ -133,7 +133,9 @@ Member and authenticated session.
 
 ## Approach and Tradeoffs
 
-Use the existing authentication boundary and preserve its rate limiter.
+Verified: the authentication boundary already rate-limits, read from its own
+tests. Proposed: reuse that boundary rather than adding a second one; the
+implementer confirms the limiter still applies to the new path.
 
 ## Architecture Boundary and Public Seam
 
@@ -284,6 +286,31 @@ test('accepts ready vertical ticket contracts with an acyclic blocker graph', ()
   assert.equal(result.valid, true);
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.metrics.frontier, ['TB-001']);
+});
+
+/**
+ * A contract carries claims about how the code behaves today and proposals
+ * about how to build the slice. Unmarked, the two read identically
+ * authoritative, and an implementer who complies rather than pushes back ships
+ * the author's guess — which is what repeatedly sent implementation down a
+ * path the author had never executed.
+ */
+test('rejects an approach that marks nothing as verified or proposed', () => {
+  const unmarked = ticket({ id: 'TB-001' }).replace(
+    /## Approach and Tradeoffs\n\n[\s\S]*?\n\n## /,
+    '## Approach and Tradeoffs\n\nReuse the authentication boundary.\n\n## ',
+  );
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: unmarked }],
+    { contractContents: featureSpec },
+  );
+
+  assert.equal(result.valid, false);
+  assert.equal(
+    result.errors.some((error) => error.code === 'unmarked-approach'),
+    true,
+    JSON.stringify(result.errors),
+  );
 });
 
 test('rejects blocker cycles and unknown blockers', () => {

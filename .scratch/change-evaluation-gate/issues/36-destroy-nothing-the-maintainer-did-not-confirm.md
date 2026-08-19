@@ -37,12 +37,19 @@ forged-preview/path-containment risk."* A related `P1`: *"adapter registration
 can replace incompatible existing client configuration and lose concurrent
 edits."*
 
-The pattern is one mistake in three places. A destructive operation takes a
-preview object from its caller, matches a confirmation hash *against that
-object*, and then acts on the object's contents. The hash proves the caller
-handed back the same object it was given — it proves nothing about whether that
-object still describes the files on disk, and nothing at all if the caller
-composed the object itself.
+The pattern is one mistake in three places, and the pruning instance was read
+rather than assumed. `confirmPrune({ preview, confirmation })` in
+`evidence-store.mjs:706` compares `confirmation` against
+`preview?.confirmationToken` — both fields of the same caller-supplied object —
+and then removes the blob ids that object names. A caller that composes
+`{ preview: { confirmationToken: 'x', blobs: [ … ] }, confirmation: 'x' }`
+satisfies it exactly. The token proves the caller handed back what it was
+given; it proves nothing about whether that object still describes the files on
+disk, and nothing at all when the caller wrote it.
+
+The implementer should establish the cleanup and registration instances the
+same way before designing for them, rather than trusting this ticket's
+description of them.
 
 Three consequences, in ascending order of how easy they are to reach:
 
@@ -73,35 +80,39 @@ registration surface, Ownership.
 
 ## Approach and Tradeoffs
 
-**Recompute the preview at confirmation, and compare.** The confirmation names
-what the maintainer approved; the operation re-derives the preview from the
-current filesystem and proceeds only when the two agree. A file that changed
-between preview and confirmation stops the operation with a stated reason and
-an instruction to preview again — which is also the correct answer when an
-editor or another process touched it. This is the one change that makes all
-three cases safe, because it removes the caller's object from the trust path
-entirely.
+Verified: `confirmPrune` trusts the caller's object, as quoted above. Verified:
+the confirmation token is the only thing compared; no path or content is
+re-established at removal.
 
-**Bind to path and content, not to a hash of a payload.** Every path a
-destructive operation touches is re-established as contained within the
-directory that operation owns — the store root for pruning, the configuration
-file for cleanup — at the moment of the write, not only when the preview was
-built.
+Proposed — recompute the preview at confirmation and compare. The confirmation
+names what the maintainer approved; the operation re-derives the preview from
+the current filesystem and proceeds only when the two agree, which removes the
+caller's object from the trust path entirely. A store or file that changed in
+between stops the operation with a stated reason and an instruction to preview
+again — the correct answer whether the cause was a forged object, an editor, or
+another process. The implementer confirms this is one mechanism that genuinely
+serves all three call sites rather than three similar ones, and says so if it
+is not.
 
-**Refuse an incompatible shape; never replace it.** A client configuration file
-whose structure does not match the adapter's declaration is `unverified` and
-left alone. `SG-HOOK-001` says the Gate does not rewrite what it does not own,
-and "the shape is unfamiliar" is precisely the case where it does not know what
-it owns.
+Proposed — bind to path and content. Re-establish every path a destructive
+operation touches as contained within the directory that operation owns — the
+store root for pruning, the configuration file for cleanup — at the moment of
+the write, not only when the preview was built.
 
-**Write against what was read.** Registration re-reads the file immediately
-before writing and refuses if it changed since the read the plan was built
-from, so a concurrent edit is reported rather than silently overwritten.
+Proposed — refuse an incompatible shape rather than replacing it. A client
+configuration file whose structure does not match the adapter's declaration is
+`unverified` and left alone; `SG-HOOK-001` says the Gate does not rewrite what
+it does not own, and an unfamiliar shape is precisely where it cannot know what
+it owns. The implementer establishes what registration does today before
+changing it.
 
-**Deliberately not a locking protocol.** No cross-process lease, no file
-locking, no CAS layer. Re-read, compare, refuse — the smallest thing that
-converts silent loss into a stated refusal, which is all a single-developer
-workflow needs.
+Proposed — write against what was read. Re-read immediately before writing and
+refuse if the bytes changed since the read the plan was built from, so a
+concurrent edit is reported rather than silently overwritten.
+
+Deliberately not a locking protocol. No cross-process lease, no file locking,
+no CAS layer. Re-read, compare, refuse is the smallest thing that turns silent
+loss into a stated refusal, which is what a single-developer workflow needs.
 
 ## Architecture Boundary and Public Seam
 

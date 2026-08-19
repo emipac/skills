@@ -4,6 +4,40 @@ A delivery contract is one independently implementable tracer bullet. It
 references durable intent rather than copying it and leaves private
 implementation choices to the red-green loop.
 
+## Claims and proposals
+
+A contract carries two kinds of sentence, and confusing them is the most common
+way a ready ticket turns out to be wrong.
+
+A **claim** states what is true of the codebase now: the defect, the seam, what
+a function does, what nothing calls. A claim is only admissible when the author
+*executed* something to establish it — ran the command, diffed the two files,
+grepped the call site, read the actual bytes. Reading a function and inferring
+its behavior is not execution, and neither is reasoning from a name.
+
+A **proposal** states how the slice should be built. It is the author's opinion,
+it is frequently wrong in ways only implementation reveals, and it is not
+binding.
+
+Mark them. Prefix an established claim with `Verified:` and the evidence that
+established it, and a proposal with `Proposed:`. An unmarked sentence in
+`Approach and Tradeoffs` reads as authoritative as one in the defect analysis,
+and an implementer cannot tell which is which — so an implementer who complies
+rather than pushes back ships the author's guess.
+
+Prefer fewer proposals. `Outcome`, `Safeguards and Invariants`, `Prohibited
+Behavior and Non-goals`, and outcome-shaped acceptance criteria are what
+survive contact with implementation; prescriptions of mechanism are what fail.
+Where a proposal names a specific mechanism — a flag, an API observable, a
+search path, a module that should own something — either execute it once before
+writing it down, or mark it `Proposed:` and say what the implementer must
+confirm.
+
+An acceptance criterion states an observable outcome, never a mechanism. "The
+draft surfaces the field, or the default states the minimum" is a proposal
+wearing an AC's clothes; "migration no longer produces a descriptor that cannot
+launch" is the criterion.
+
 ## Readiness gate
 
 `ready-for-agent` requires:
@@ -20,7 +54,9 @@ implementation choices to the red-green loop.
 - smoke or browser evidence for user-facing behavior;
 - a configured production build for affected frontend code;
 - existing, acyclic blocker edges;
-- no unresolved assumption marked as blocking the start.
+- no unresolved assumption marked as blocking the start;
+- every claim about current behavior established by execution, and every
+  proposal marked as one.
 
 ## Template
 
@@ -47,7 +83,10 @@ implementation choices to the red-green loop.
 
 ## Approach and Tradeoffs
 
-<Chosen delivery approach and material tradeoffs without a file plan.>
+<Chosen delivery approach and material tradeoffs without a file plan. Mark each
+statement `Verified:` with the evidence that established it, or `Proposed:` with
+what the implementer must confirm. Prefer few proposals: a mechanism named here
+and not executed first is the most common thing a contract gets wrong.>
 
 ## Architecture Boundary and Public Seam
 

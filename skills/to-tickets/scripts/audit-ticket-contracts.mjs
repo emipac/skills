@@ -204,6 +204,21 @@ export const auditTicketSet = (
       }
     }
 
+    // A contract carries claims about how the code behaves today and proposals
+    // about how to build the slice. Unmarked, the two read alike, and an
+    // implementer who complies rather than pushes back ships the author's
+    // guess. `Approach and Tradeoffs` is where proposals live, so it is where
+    // the distinction has to be visible.
+    const approach = sections.get(normalize('Approach and Tradeoffs'));
+
+    if (approach && !approach.lines.some((line) => /\b(Verified|Proposed):/.test(line))) {
+      addError(
+        errors,
+        'unmarked-approach',
+        `${ticket.id} Approach and Tradeoffs marks nothing Verified: or Proposed:`,
+      );
+    }
+
     const status = ticket.contents.match(/^\*\*Status:\*\*\s*(.+)$/m)?.[1].trim();
     const parent = ticket.contents.match(
       /^\*\*Parent feature contract:\*\*\s*(.+)$/m,
