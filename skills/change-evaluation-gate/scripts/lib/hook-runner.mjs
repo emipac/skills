@@ -23,8 +23,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { constants } from 'node:fs';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { constants, rmSync } from 'node:fs';
+import { access, lstat, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -47,6 +47,7 @@ import {
 import { validateDecision } from './evaluation-contract.mjs';
 import { PROTOCOL_VERSION, evaluate } from './evaluate.mjs';
 import {
+  containedWithin,
   contentIdentity,
   openEvidenceStore,
   resolveGitCommonDirectory,
@@ -61,6 +62,234 @@ const { X_OK } = constants;
 
 /** Where the Activation receipt lives, relative to the Git common directory. */
 const ACTIVATION_RECEIPT_PATH = path.join(STORE_DIRECTORY, 'activation', 'receipt.json');
+
+/**
+ * The execution-root lifecycle, owned here and used by both runners (TB-038).
+ *
+ * Every evaluation materializes the proposed snapshot into a fresh `mkdtemp`
+ * root and removes it in a `finally`. That covers finishing and crashing. It
+ * does not cover the process never reaching `finally`: `SIGINT` from the
+ * maintainer pressing Ctrl-C on a slow commit, and `SIGKILL`, which cannot be
+ * caught at all. Interruption used to leave a full copy of the snapshot under
+ * the system temporary directory until the operating system reclaimed it.
+ *
+ * Two mechanisms close that, and neither one is allowed to be visible: a
+ * disposition for the signals a process *can* catch, which removes the live
+ * roots and then lets the signal kill the process exactly as it would have; and
+ * a sweep of what earlier runs abandoned, bounded by the gate's own prefixes,
+ * the system temporary directory, and an age ceiling. There is deliberately no
+ * registry, lockfile, or PID file — the prefix and the directory's own mtime
+ * carry everything either mechanism needs, and a registry would be one more
+ * thing that can itself be orphaned.
+ */
+
+/** The prefixes the gate creates execution roots under, and the only ones it sweeps. */
+export const EXECUTION_ROOT_PREFIXES = Object.freeze([
+  'gate-hook-runner-exec-',
+  'gate-preflight-exec-',
+]);
+
+/**
+ * How old an execution root must be before a sweep may reclaim it: 24 hours.
+ *
+ * The ceiling exists to make removing a *live* root belonging to a concurrent
+ * evaluation impossible, so it is chosen against the longest run that could
+ * plausibly still be in flight rather than against the longest normal one. A
+ * configured budget is measured in seconds and capped well below an hour; the
+ * only way a root's mtime gets far older than its run is a machine suspended
+ * mid-evaluation, and a day covers an overnight sleep with room to spare.
+ * Accumulation is bounded at roughly one day's interruptions, which is the
+ * hygiene obligation this discharges — not a disk quota.
+ */
+export const EXECUTION_ROOT_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Housekeeping ceilings. The maintainer is waiting on the gate, not on a sweep,
+ * so the sweep gives up rather than delaying a commit.
+ */
+const SWEEP_ENTRY_CEILING = 512;
+const SWEEP_DEADLINE_MS = 250;
+
+/** Live roots this process owns, so a caught signal knows what to remove. */
+const liveExecutionRoots = new Set();
+
+/** The installed signal handlers, or `null` when this process owns no root. */
+let signalDisposition = null;
+
+const releaseSignalDisposition = () => {
+  if (signalDisposition === null) {
+    return;
+  }
+
+  for (const [signal, handler] of signalDisposition) {
+    process.removeListener(signal, handler);
+  }
+
+  signalDisposition = null;
+};
+
+/**
+ * Remove every live root synchronously.
+ *
+ * Synchronous on purpose: a signal handler that awaited would be racing the
+ * process's own death, and the whole point is that the removal completes before
+ * the signal is honored.
+ */
+const removeLiveExecutionRootsSync = () => {
+  for (const root of liveExecutionRoots) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // Failing to reclaim disk is never a reason to interfere with a signal.
+    }
+  }
+
+  liveExecutionRoots.clear();
+};
+
+/**
+ * Install the disposition for the signals a process can catch.
+ *
+ * The handler cleans up, uninstalls itself, and re-raises the same signal at
+ * this process. With no listener left, Node restores the signal's default
+ * disposition, so the process dies exactly as it would have with no handler at
+ * all — same signal, same status reported to the parent shell. A gate that
+ * declined to die when the maintainer pressed Ctrl-C would be strictly worse
+ * than the orphan this removes, so the signal is honored, never swallowed.
+ */
+const installSignalDisposition = () => {
+  if (signalDisposition !== null) {
+    return;
+  }
+
+  const handlers = new Map();
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    const handler = () => {
+      removeLiveExecutionRootsSync();
+      releaseSignalDisposition();
+      process.kill(process.pid, signal);
+    };
+
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+
+  signalDisposition = handlers;
+};
+
+/**
+ * Materialize a fresh execution root and take responsibility for it.
+ *
+ * @param {string} prefix one of `EXECUTION_ROOT_PREFIXES`
+ * @returns {Promise<string>} the created root
+ */
+export const createExecutionRoot = async (prefix) => {
+  const root = await mkdtemp(path.join(tmpdir(), prefix));
+
+  liveExecutionRoots.add(root);
+  installSignalDisposition();
+
+  return root;
+};
+
+/**
+ * Remove an execution root and stop treating it as live.
+ *
+ * This is what the runners' `finally` blocks call. The removal it performs is
+ * the removal they already performed; what it adds is that a signal arriving
+ * afterwards no longer tries to remove a directory that is already gone, and
+ * that a process owning no roots carries no handlers of ours.
+ *
+ * @param {string} root the root returned by `createExecutionRoot`
+ */
+export const releaseExecutionRoot = async (root) => {
+  liveExecutionRoots.delete(root);
+
+  if (liveExecutionRoots.size === 0) {
+    releaseSignalDisposition();
+  }
+
+  await rm(root, { recursive: true, force: true });
+};
+
+/**
+ * Reclaim execution roots an earlier run abandoned.
+ *
+ * `SIGKILL` cannot be caught, so some roots will always be left behind; this is
+ * what collects them, at the start of a run, with no bookkeeping beyond the
+ * prefix and the directory's own mtime.
+ *
+ * It never throws and never reports. Failing to reclaim disk may not change a
+ * decision, an outcome, a diagnostic, or an exit status, so every failure —
+ * an unreadable temporary directory, an unremovable root, a racing sweep in a
+ * concurrent runner — is simply the end of this sweep.
+ *
+ * @param {object} [options]
+ * @param {string} [options.temporaryRoot] directory to sweep; must be the system
+ *   temporary directory or a directory inside it
+ * @param {number} [options.olderThanMs] the age ceiling
+ * @param {() => number} [options.now] clock seam
+ * @returns {Promise<{ removed: string[], considered: number }>} for tests; callers ignore it
+ */
+export const sweepOrphanedExecutionRoots = async ({
+  temporaryRoot = tmpdir(),
+  olderThanMs = EXECUTION_ROOT_RETENTION_MS,
+  now = Date.now,
+} = {}) => {
+  const removed = [];
+  let considered = 0;
+
+  try {
+    const systemRoot = await realpath(tmpdir()).catch(() => path.resolve(tmpdir()));
+    const sweepRoot = await realpath(temporaryRoot).catch(() => path.resolve(temporaryRoot));
+
+    // SG-LIFE-001: the gate reclaims inside the directory it was given to
+    // create workspaces in, and nowhere else. Never the repository, never the
+    // Evidence store, never a path a maintainer chose.
+    if (sweepRoot !== systemRoot && !containedWithin(systemRoot, sweepRoot)) {
+      return { removed, considered };
+    }
+
+    const deadline = now() + SWEEP_DEADLINE_MS;
+    const entries = await readdir(sweepRoot);
+
+    for (const entry of entries) {
+      if (considered >= SWEEP_ENTRY_CEILING || now() >= deadline) {
+        break;
+      }
+
+      if (!EXECUTION_ROOT_PREFIXES.some((prefix) => entry.startsWith(prefix))) {
+        continue;
+      }
+
+      considered += 1;
+
+      const candidate = path.join(sweepRoot, entry);
+
+      try {
+        // `lstat`, so a symlink wearing the prefix is a decoy rather than a
+        // path out of the temporary directory. Only a real directory is a root.
+        // eslint-disable-next-line no-await-in-loop
+        const described = await lstat(candidate);
+
+        if (!described.isDirectory() || now() - described.mtimeMs < olderThanMs) {
+          continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop
+        await rm(candidate, { recursive: true, force: false });
+        removed.push(candidate);
+      } catch {
+        // A root that cannot be read or removed stays; nothing is said.
+      }
+    }
+  } catch {
+    // A sweep that cannot run at all is a sweep that reclaimed nothing.
+  }
+
+  return { removed, considered };
+};
 
 /** The environment variable that names an activation self-test subject. */
 export const SELF_TEST_ENV = 'CHANGE_EVALUATION_GATE_SELF_TEST';
@@ -690,7 +919,12 @@ export const runHook = async ({
     return denied(store.reasonCode, store.detail);
   }
 
-  const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-hook-runner-exec-'));
+  // What earlier interrupted runs abandoned, reclaimed before this run adds
+  // its own. Bounded and silent: it can neither delay this commit nor change
+  // anything the maintainer is told (TB-038).
+  await sweepOrphanedExecutionRoots();
+
+  const executionRoot = await createExecutionRoot('gate-hook-runner-exec-');
   const executor = createBoundedExecutor({
     totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
     resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
@@ -745,7 +979,7 @@ export const runHook = async ({
     // nobody can read (NFR-REL-003).
     return denied('runner-failed', `the evaluation failed internally (${error.message}); nothing is authorized.`);
   } finally {
-    await rm(executionRoot, { recursive: true, force: true });
+    await releaseExecutionRoot(executionRoot);
   }
 
   return report(decision);

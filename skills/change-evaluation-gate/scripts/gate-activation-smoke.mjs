@@ -36,6 +36,12 @@
  *    whose executable was removed denies as drift rather than re-resolving to
  *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003,
  *    TB-028, TB-030).
+ * 6. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
+ *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
+ *    commit, terminates under the signal, moves no HEAD, and leaves no
+ *    execution root; a root an earlier abandoned run left behind is reclaimed
+ *    by the next commit, and those commits still deny and allow exactly as they
+ *    did before (TB-038, AC-CFG-004, AC-EVAL-004, SG-SECRET-001, NFR-REL-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -52,8 +58,8 @@
  * Exit status is 0 only when every scenario holds.
  */
 
-import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +89,10 @@ import {
 } from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
+import {
+  EXECUTION_ROOT_PREFIXES,
+  EXECUTION_ROOT_RETENTION_MS,
+} from './lib/hook-runner.mjs';
 import { validateGatePolicy } from './lib/policy.mjs';
 
 const CAPABILITY = 'gate-activation-smoke';
@@ -1553,6 +1563,208 @@ const derivedConfigurationRoundTrip = async () => {
   };
 };
 
+/**
+ * A required check that announces it started and then refuses to finish.
+ *
+ * The only way to hold a real `git commit` inside a real evaluation long enough
+ * to interrupt it from outside. The timer is a backstop: this capability kills
+ * the process group long before it elapses, and nothing may be left running if
+ * the kill never lands.
+ */
+const BLOCKING_CHECK_SCRIPT = (sentinel) => [
+  "import { writeFileSync } from 'node:fs';",
+  '',
+  `writeFileSync(${JSON.stringify(sentinel)}, 'started\\n');`,
+  'setTimeout(() => process.exit(0), 30_000);',
+  '',
+].join('\n');
+
+const sleep = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+const executionRootsUnder = async (directory) => (await readdir(directory).catch(() => []))
+  .filter((entry) => EXECUTION_ROOT_PREFIXES.some((prefix) => entry.startsWith(prefix)));
+
+const until = async (predicate, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return true;
+    }
+
+    await sleep(25);
+  }
+
+  return false;
+};
+
+/**
+ * TB-038: a real commit interrupted mid-evaluation leaves no execution root.
+ *
+ * Every other scenario here runs an evaluation to completion, which is what
+ * makes it a test — and is exactly why interruption was never observed. This
+ * one presses Ctrl-C on a real `git commit` against a real activated clone by
+ * signalling the whole process group the way a terminal does, and then requires
+ * that the next commits still decide identically while reclaiming what an
+ * earlier `SIGKILL`-style abandonment left behind (AC-CFG-004, AC-EVAL-004,
+ * SG-SECRET-001, NFR-REL-001).
+ */
+const interruptedCommitLeavesNoRoot = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const { result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+
+  if (result.activated !== true) {
+    return { name: 'interrupted-commit-leaves-no-root', ok: false, findings };
+  }
+
+  // The interrupted commit gets its own temporary directory, so what it leaves
+  // behind is observable in isolation and can never be confused with another
+  // run's live root. The hook inherits TMPDIR through `git`.
+  const temporaryRoot = await temporaryDirectory('gate-activation-smoke-tmp-');
+  const sentinel = path.join(temporaryRoot, 'check-started');
+  const abandoned = path.join(temporaryRoot, 'gate-hook-runner-exec-abandoned');
+  const stale = new Date(Date.now() - EXECUTION_ROOT_RETENTION_MS - 3_600_000);
+
+  // What a `SIGKILL` leaves: a root no signal handler could ever have removed.
+  await mkdir(path.join(abandoned, 'snapshot'), { recursive: true });
+  await writeFile(path.join(abandoned, 'snapshot', SOURCE.replace('/', '-')), 'orphan\n', 'utf8');
+  await utimes(abandoned, stale, stale);
+
+  await writeFile(path.join(root, 'tools/check.mjs'), BLOCKING_CHECK_SCRIPT(sentinel), 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nunder evaluation\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+  const interrupted = spawn('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Smoke',
+    'commit', '--quiet', '--message', 'a commit the maintainer interrupts',
+  ], {
+    cwd: root,
+    detached: true,
+    env: { ...gitEnvironment(), TMPDIR: temporaryRoot },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  interrupted.stdout.resume();
+  interrupted.stderr.resume();
+
+  const ended = new Promise((resolve) => {
+    interrupted.on('close', (exitCode, signal) => resolve({ exitCode, signal }));
+  });
+  const started = await until(
+    async () => stat(sentinel).then(() => true).catch(() => false),
+    30_000,
+  );
+
+  check(findings, started === true, 'The commit never reached the check it grades with, so nothing was interrupted.');
+
+  const live = await executionRootsUnder(temporaryRoot);
+
+  check(
+    findings,
+    live.length === 1 && live[0] !== path.basename(abandoned),
+    `The interrupted commit had no live execution root to observe: ${JSON.stringify(live)}.`,
+  );
+  // The commit now under way already reclaimed what the earlier abandoned run
+  // left, before it materialized anything of its own.
+  check(
+    findings,
+    await stat(abandoned).then(() => false).catch(() => true),
+    'A commit did not reclaim the root an earlier abandoned run left behind.',
+  );
+
+  try {
+    // The whole process group, which is what a terminal signals on Ctrl-C: the
+    // hook and the check it spawned both receive it, exactly as they would.
+    process.kill(-interrupted.pid, 'SIGINT');
+  } catch {
+    check(findings, false, 'The interrupted commit could not be signalled.');
+  }
+
+  const outcome = await ended;
+
+  check(
+    findings,
+    outcome.signal === 'SIGINT' || outcome.exitCode !== 0,
+    `The interrupted commit was not terminated by the signal: ${JSON.stringify(outcome)}.`,
+  );
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'An interrupted commit still moved HEAD.',
+  );
+
+  // The runner's own root goes with the signal. Polled rather than read once,
+  // because `git` dies from the same signal and may report first.
+  const reclaimed = await until(
+    async () => (await executionRootsUnder(temporaryRoot)).length === 0,
+    10_000,
+  );
+
+  check(
+    findings,
+    reclaimed === true,
+    `An interrupted commit left its execution root behind: ${JSON.stringify(await executionRootsUnder(temporaryRoot))}.`,
+  );
+
+  // A second abandonment, so the reclamation is proved on a later run too and
+  // not only on the one that happened to be interrupted.
+  const abandonedAgain = path.join(temporaryRoot, 'gate-preflight-exec-abandoned');
+
+  await mkdir(path.join(abandonedAgain, 'snapshot'), { recursive: true });
+  await utimes(abandonedAgain, stale, stale);
+
+  // And the same clone decides the next commits exactly as it did before,
+  // reclaiming what the earlier abandonment left while it does.
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const commitIn = (message) => runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Smoke',
+    'commit', '--quiet', '--message', message,
+  ], { cwd: root, env: { ...gitEnvironment(), TMPDIR: temporaryRoot } }).then(
+    () => ({ failed: false, output: '' }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  const blocked = await commitIn('a change the gate must still refuse');
+
+  check(findings, blocked.failed === true, 'The clone stopped blocking after an interrupted commit.');
+  check(
+    findings,
+    blocked.output.includes(REQUIRED_CHECK),
+    `The denial after an interruption does not name the failing check: ${blocked.output}.`,
+  );
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await commitIn('a change the gate must still allow');
+
+  check(findings, allowed.failed === false, `The clone stopped allowing after an interrupted commit: ${allowed.output}.`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'The allowed commit after an interruption did not move HEAD.',
+  );
+  check(
+    findings,
+    (await executionRootsUnder(temporaryRoot)).length === 0,
+    `A later run did not reclaim the abandoned root: ${JSON.stringify(await executionRootsUnder(temporaryRoot))}.`,
+  );
+
+  return { name: 'interrupted-commit-leaves-no-root', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1580,6 +1792,7 @@ const main = async () => {
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),
       await derivedConfigurationRoundTrip(),
+      await interruptedCommitLeavesNoRoot(),
     ];
   } finally {
     for (const root of temporaryRoots) {

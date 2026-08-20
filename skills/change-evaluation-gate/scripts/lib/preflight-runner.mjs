@@ -12,10 +12,6 @@
  * told travels through the declared channel.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
 import {
   describeAdapter,
   formatFeedback,
@@ -30,11 +26,14 @@ import { openEvidenceStore } from './evidence-store.mjs';
 import {
   commandOwner,
   contractFindings,
+  createExecutionRoot,
   observeControlSurface,
   openStore,
   pinnedRunners,
+  releaseExecutionRoot,
   resolveConfiguration,
   resolveReceipt,
+  sweepOrphanedExecutionRoots,
 } from './hook-runner.mjs';
 
 const adapterIdFromArgv = (argv) => {
@@ -249,7 +248,12 @@ export const runPreflight = async ({
 
     openedStore = store.store;
 
-    const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-preflight-exec-'));
+    // The same reclamation the authoritative runner performs, from the same
+    // owner: either runner's turn collects what any interrupted run abandoned,
+    // and neither says a word about it (TB-038).
+    await sweepOrphanedExecutionRoots();
+
+    const executionRoot = await createExecutionRoot('gate-preflight-exec-');
     const executor = createBoundedExecutor({
       totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
       resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
@@ -288,7 +292,7 @@ export const runPreflight = async ({
 
       return decision;
     } finally {
-      await rm(executionRoot, { recursive: true, force: true });
+      await releaseExecutionRoot(executionRoot);
     }
   };
 
