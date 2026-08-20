@@ -231,6 +231,48 @@ const isContainedRoot = (declared) => {
 };
 
 /**
+ * Which declared dependency roots this clone cannot offer an evaluation, asked
+ * of the clone alone.
+ *
+ * A root is refused when what was declared is not a contained repository-
+ * relative directory, and missing when the clone simply never installed it.
+ * Neither question is about a snapshot, so neither needs one — which is what
+ * lets an evaluation that materializes nothing still report, by name, a
+ * dependency root a check would have needed (`FR-EVAL-001`, `TB-039`).
+ *
+ * @param {object} input repository root and the declared roots
+ * @returns {Promise<{missing: string[], refused: string[], available: string[]}>}
+ */
+export const unavailableDependencyRoots = async ({
+  repositoryRoot,
+  dependencyRoots = [],
+}) => {
+  const available = [];
+  const missing = [];
+  const refused = [];
+
+  for (const declared of dependencyRoots) {
+    if (!isContainedRoot(declared)) {
+      refused.push(declared);
+
+      continue;
+    }
+
+    const source = path.join(repositoryRoot, declared);
+    // eslint-disable-next-line no-await-in-loop
+    const installed = await stat(source).then((entry) => entry.isDirectory(), () => false);
+
+    if (installed) {
+      available.push(declared);
+    } else {
+      missing.push(declared);
+    }
+  }
+
+  return { available, missing, refused };
+};
+
+/**
  * Provide the dependency roots a project declared, beside the snapshot.
  *
  * A materialized snapshot holds tracked content, and installed dependencies are
@@ -249,40 +291,33 @@ const isContainedRoot = (declared) => {
  * outside every path-based rule that reads it (`SG-EVAL-001`, `NFR-REL-001`).
  */
 const provideDependencyRoots = async ({ repositoryRoot, executionRoot, dependencyRoots }) => {
+  const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
+  const missing = new Set(classified.missing);
   const provided = [];
-  const missing = [];
-  const refused = [];
 
-  for (const declared of dependencyRoots) {
-    if (!isContainedRoot(declared)) {
-      refused.push(declared);
-
-      continue;
-    }
-
-    const source = path.join(repositoryRoot, declared);
-    const installed = await stat(source).then((entry) => entry.isDirectory(), () => false);
-
-    if (!installed) {
-      missing.push(declared);
-
-      continue;
-    }
-
+  for (const declared of classified.available) {
     const destination = path.join(executionRoot, declared);
 
     try {
+      // eslint-disable-next-line no-await-in-loop
       await mkdir(path.dirname(destination), { recursive: true });
-      await symlink(source, destination, 'dir');
+      // eslint-disable-next-line no-await-in-loop
+      await symlink(path.join(repositoryRoot, declared), destination, 'dir');
       provided.push(declared);
-    } catch (error) {
+    } catch {
       // A platform or filesystem that cannot link is a stated condition, not a
       // silent degradation: the check would fail inside its own tool otherwise.
-      missing.push(declared);
+      missing.add(declared);
     }
   }
 
-  return { provided, missing, refused };
+  return {
+    provided,
+    // Declaration order, so what a maintainer reads back is the order they
+    // wrote, whichever way a root turned out to be unavailable.
+    missing: dependencyRoots.filter((declared) => missing.has(declared)),
+    refused: classified.refused,
+  };
 };
 
 /** Recompute the identity of what is actually on disk in the execution root. */
