@@ -1153,3 +1153,80 @@ test('gate status mutates nothing anywhere in the clone, healthy or broken (SG-L
 
   assert.equal(await wholeCloneSnapshot(root), brokenBefore);
 });
+
+test('TB-036 AC-LIFE-008: cleanup refuses a preview whose blocks were altered after production', async (t) => {
+  const { root, store } = await populatedClone(t);
+  const configuration = path.join(root, '.agent-framework.yaml');
+  const preview = await previewConfigurationCleanup({ configurationPath: configuration });
+
+  // The caller widens the previewed range over lines it was never shown, and
+  // recomputes the token from its own altered object so the token still agrees
+  // with itself.
+  const body = {
+    path: preview.path,
+    keys: [{ key: 'evaluation_gate', startLine: 0, endLine: 11 }],
+    removedText: preview.removedText,
+  };
+  const forged = {
+    ...preview,
+    ...body,
+    blocks: [{ ...preview.blocks[0], startLine: 0, endLine: 11 }],
+    confirmationToken: contentIdentity({ ...body, fileIdentity: preview.fileIdentity }),
+  };
+
+  const refused = await confirmConfigurationCleanup({
+    evidenceStore: store,
+    configurationPath: configuration,
+    preview: forged,
+    confirmation: forged.confirmationToken,
+  }, lifecycleDependencies());
+
+  assert.equal(refused.cleaned, false);
+  assert.equal(refused.reasonCode, 'preview-stale');
+  assert.deepEqual(refused.removedKeys, []);
+
+  // Byte-for-byte, the maintainer's file is exactly as it was.
+  assert.equal(await readFile(configuration, 'utf8'), SHARED_CONFIGURATION);
+});
+
+test('TB-036 AC-LIFE-008: cleanup refuses when the file changed between preview and confirmation', async (t) => {
+  const { root, store } = await populatedClone(t);
+  const configuration = path.join(root, '.agent-framework.yaml');
+  const preview = await previewConfigurationCleanup({ configurationPath: configuration });
+  const edited = `${SHARED_CONFIGURATION}notes:\n  owner: somebody-else\n`;
+
+  await writeFile(configuration, edited, 'utf8');
+
+  const refused = await confirmConfigurationCleanup({
+    evidenceStore: store,
+    configurationPath: configuration,
+    preview,
+    confirmation: preview.confirmationToken,
+  }, lifecycleDependencies());
+
+  assert.equal(refused.cleaned, false);
+  assert.equal(refused.reasonCode, 'configuration-changed');
+  assert.deepEqual(refused.removedKeys, []);
+  assert.equal(await readFile(configuration, 'utf8'), edited);
+});
+
+test('TB-036: cleanup refuses to write to a file the preview did not name', async (t) => {
+  const { root, store } = await populatedClone(t);
+  const configuration = path.join(root, '.agent-framework.yaml');
+  const elsewhere = path.join(root, 'somebody-elses.yaml');
+
+  await writeFile(elsewhere, SHARED_CONFIGURATION, 'utf8');
+
+  const preview = await previewConfigurationCleanup({ configurationPath: configuration });
+  const refused = await confirmConfigurationCleanup({
+    evidenceStore: store,
+    configurationPath: elsewhere,
+    preview,
+    confirmation: preview.confirmationToken,
+  }, lifecycleDependencies());
+
+  assert.equal(refused.cleaned, false);
+  assert.equal(refused.reasonCode, 'configuration-path-mismatch');
+  assert.equal(await readFile(elsewhere, 'utf8'), SHARED_CONFIGURATION);
+  assert.equal(await readFile(configuration, 'utf8'), SHARED_CONFIGURATION);
+});

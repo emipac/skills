@@ -24,6 +24,11 @@
  *    only the previewed blobs and preserves envelopes, decisions, Lifecycle
  *    events, pruning records, and a tombstone for every removed blob
  *    (AC-EVID-002, SG-EVID-001).
+ * 5. `altered-preview-removes-nothing` — a preview object altered after it was
+ *    produced, whose token was recomputed from the altered object, removes
+ *    nothing and returns a stated refusal; every other file in the store is
+ *    byte-for-byte unchanged and an honest preview still prunes exactly what it
+ *    names (AC-EVID-002, SG-EVID-001, SG-LIFE-001).
  *
  * It is non-interactive and offline. Every fixture is a throwaway Git
  * repository, every command is a repository script executed by this Node
@@ -51,7 +56,7 @@ import { evaluate } from './lib/evaluate.mjs';
 import { validateDecision } from './lib/evaluation-contract.mjs';
 import { EVIDENCE_CEILINGS } from './lib/evidence-bounds.mjs';
 import { envelopeIdentity } from './lib/evidence-identity.mjs';
-import { openEvidenceStore } from './lib/evidence-store.mjs';
+import { contentIdentity, openEvidenceStore } from './lib/evidence-store.mjs';
 import { collectChecks } from './lib/gate-core.mjs';
 import { validateLifecycleEvent } from './lib/lifecycle-event.mjs';
 import laravelProvider from './lib/providers/laravel.mjs';
@@ -210,6 +215,30 @@ const persistedBytes = async (root) => {
   }
 
   return contents.join('\n');
+};
+
+/**
+ * Every file the store holds, by relative path and content identity.
+ *
+ * A refusal is required to leave the clone exactly as it was, and the only way
+ * to prove that is to compare the whole directory rather than the one file the
+ * operation was aimed at (SG-LIFE-001).
+ */
+const storeSnapshot = async (store) => {
+  const entries = await readdir(store.root, { recursive: true, withFileTypes: true });
+  const snapshot = new Map();
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const absolute = path.join(entry.parentPath ?? entry.path, entry.name);
+
+    snapshot.set(path.relative(store.root, absolute), contentIdentity(await readFile(absolute, 'utf8')));
+  }
+
+  return snapshot;
 };
 
 const check = (findings, condition, detail) => {
@@ -554,6 +583,143 @@ const confirmedPrunePreservesAuditTrail = async () => {
   return { name: 'confirmed-prune-preserves-audit-trail', ok: findings.length === 0, findings };
 };
 
+/**
+ * An altered preview removes nothing, and every other file in the real store is
+ * left byte-for-byte as it was (AC-EVID-002, SG-EVID-001).
+ */
+const alteredPreviewRemovesNothing = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const first = await evaluateOnce(root);
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nproposed\naltered-preview\n', 'utf8');
+
+  const second = await evaluateOnce(root);
+  const store = second.store;
+  const blobs = await store.listBlobs();
+
+  check(findings, blobs.length === 2, `Expected two retained blobs, got ${blobs.length}.`);
+
+  const preview = await store.previewPrune({ evaluationIds: [first.decision.evaluationId] });
+
+  check(findings, preview.blobs.length === 1, 'The preview selected the wrong number of blobs.');
+
+  const keep = blobs.find((blob) => blob.blobId !== preview.blobs[0].blobId) ?? null;
+
+  check(findings, keep !== null, 'The fixture produced no second blob to protect.');
+
+  // The whole point of TB-036: the caller rewrites the preview it was handed to
+  // name a blob it was never shown, and recomputes the token from its own
+  // altered object so the token still agrees with itself.
+  const forgedBlobs = [{
+    ...preview.blobs[0],
+    blobId: keep.blobId,
+    bytes: keep.bytes,
+    appendedAt: keep.appendedAt,
+    references: [{
+      evaluationId: second.decision.evaluationId,
+      checkId: keep.checkId ?? null,
+      attempt: keep.attempt ?? null,
+    }],
+  }];
+  const forged = {
+    ...preview,
+    blobs: forgedBlobs,
+    totalBytes: keep.bytes,
+    confirmationToken: contentIdentity({
+      blobs: forgedBlobs.map(({ blobId, bytes }) => ({ blobId, bytes })),
+      totalBytes: keep.bytes,
+    }),
+  };
+
+  const before = await storeSnapshot(store);
+  const refused = await store.confirmPrune({
+    preview: forged,
+    confirmation: forged.confirmationToken,
+  });
+
+  check(findings, refused.pruned === false, 'An altered preview reported a removal.');
+  check(
+    findings,
+    refused.reasonCode === 'preview-stale',
+    `Expected preview-stale, got ${refused.reasonCode}.`,
+  );
+  check(findings, refused.removed.length === 0, 'An altered preview removed blobs.');
+  check(findings, refused.reclaimedBytes === 0, 'An altered preview claimed reclaimed bytes.');
+  check(
+    findings,
+    typeof refused.reason === 'string' && /preview again/i.test(refused.reason),
+    'The refusal did not direct the operator to preview again.',
+  );
+  check(
+    findings,
+    (await store.readBlob(keep.blobId)) !== null,
+    'An altered preview deleted the blob it named.',
+  );
+  check(
+    findings,
+    (await store.readBlob(preview.blobs[0].blobId)) !== null,
+    'An altered preview deleted the originally previewed blob.',
+  );
+  check(findings, (await store.readTombstones()).length === 0, 'A refusal left a tombstone.');
+
+  // Byte-for-byte across the whole store, excluding the append-only refusal
+  // record and its lifecycle event, which a refusal is required to write.
+  const after = await storeSnapshot(store);
+  const appendOnly = new Set(['prunings.ndjson', 'events.ndjson']);
+  const changed = [...after.keys()]
+    .filter((relative) => !appendOnly.has(relative))
+    .filter((relative) => after.get(relative) !== before.get(relative));
+  const vanished = [...before.keys()].filter((relative) => !after.has(relative));
+
+  check(
+    findings,
+    changed.length === 0,
+    `A refusal changed store files: ${changed.join(', ')}.`,
+  );
+  check(
+    findings,
+    vanished.length === 0,
+    `A refusal removed store files: ${vanished.join(', ')}.`,
+  );
+
+  const prunings = await store.readPrunings();
+
+  check(
+    findings,
+    prunings.length === 1 && prunings[0].outcome === 'refused',
+    'The refusal was not recorded exactly once as a refusal.',
+  );
+  check(
+    findings,
+    prunings.every((record) => record.pruned !== true),
+    'A refused prune recorded a successful deletion.',
+  );
+
+  // And a fresh, unaltered preview still prunes exactly what it names.
+  const honest = await store.previewPrune({ evaluationIds: [first.decision.evaluationId] });
+  const pruned = await store.confirmPrune({ preview: honest, confirmation: honest.confirmationToken });
+
+  check(findings, pruned.pruned === true, 'An honest preview no longer prunes after a refusal.');
+  check(
+    findings,
+    pruned.removed.length === 1 && pruned.removed[0] === honest.blobs[0].blobId,
+    'The honest prune removed something other than what it named.',
+  );
+  check(
+    findings,
+    (await store.readBlob(keep.blobId)) !== null,
+    'The honest prune removed the blob it never named.',
+  );
+  check(
+    findings,
+    (await store.readTombstones()).map((tombstone) => tombstone.blobId).join(',') === honest.blobs[0].blobId,
+    'The honest prune did not write exactly one matching tombstone.',
+  );
+
+  return { name: 'altered-preview-removes-nothing', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -564,6 +730,7 @@ const main = async () => {
       await identicalContentAppendsOneEnvelope(),
       await previewMismatchRemovesNothing(),
       await confirmedPrunePreservesAuditTrail(),
+      await alteredPreviewRemovesNothing(),
     ];
   } finally {
     for (const root of temporaryRoots) {

@@ -13,7 +13,7 @@ import {
   RUN_LOCAL_PLACEHOLDER,
   envelopeIdentity,
 } from '../skills/change-evaluation-gate/scripts/lib/evidence-identity.mjs';
-import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
+import { contentIdentity, openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import { validateLifecycleEvent } from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
 import { resolveBypass } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 
@@ -794,4 +794,127 @@ test('TB-032 FR-EVID-004: pruning behaves identically for one envelope several a
   assert.notEqual(await store.readEnvelope(one.evidenceId), null);
   assert.notEqual(await store.readBlob(kept.blobs[0].blobId), null);
   assert.equal((await store.readLog()).length, 3);
+});
+
+test('a prune whose preview object was altered after production removes nothing', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+
+  const keep = await store.appendEvidence({
+    decision: decisionFixture('evaluation-keep'),
+    outputs: [{ checkId: 'check.keep', attempt: 1, text: 'keep this output'.repeat(8) }],
+  });
+  const target = await store.appendEvidence({
+    decision: decisionFixture('evaluation-target'),
+    outputs: [{ checkId: 'check.target', attempt: 1, text: 'target output'.repeat(8) }],
+  });
+
+  const preview = await store.previewPrune({ evaluationIds: [target.evaluationId] });
+
+  assert.deepEqual(preview.blobs.map((blob) => blob.blobId), [target.blobs[0].blobId]);
+
+  // The whole point: the caller alters the preview it was handed and recomputes
+  // the token from its own altered object, so the token still "matches".
+  const forgedBlobs = [{
+    ...preview.blobs[0],
+    blobId: keep.blobs[0].blobId,
+    bytes: keep.blobs[0].bytes,
+    references: [{ evaluationId: keep.evaluationId, checkId: 'check.keep', attempt: 1 }],
+  }];
+  const forged = {
+    ...preview,
+    blobs: forgedBlobs,
+    totalBytes: keep.blobs[0].bytes,
+    confirmationToken: contentIdentity({
+      blobs: forgedBlobs.map(({ blobId, bytes }) => ({ blobId, bytes })),
+      totalBytes: keep.blobs[0].bytes,
+    }),
+  };
+
+  const before = (await store.listBlobs()).map((blob) => blob.blobId).sort();
+  const refused = await store.confirmPrune({
+    preview: forged,
+    confirmation: forged.confirmationToken,
+  });
+
+  assert.equal(refused.pruned, false);
+  assert.equal(refused.outcome, 'refused');
+  assert.equal(refused.reasonCode, 'preview-stale');
+  assert.deepEqual(refused.removed, []);
+  assert.equal(refused.reclaimedBytes, 0);
+  assert.match(refused.reason ?? '', /preview again/i);
+
+  // Byte-for-byte: nothing left, nothing was tombstoned, both blobs readable.
+  assert.deepEqual((await store.listBlobs()).map((blob) => blob.blobId).sort(), before);
+  assert.deepEqual(await store.readTombstones(), []);
+  assert.ok(await store.readBlob(keep.blobs[0].blobId) !== null);
+  assert.ok(await store.readBlob(target.blobs[0].blobId) !== null);
+});
+
+test('a prune whose store changed between preview and confirmation refuses and says to preview again', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+
+  const first = await store.appendEvidence({
+    decision: decisionFixture('evaluation-one'),
+    outputs: [{ checkId: 'check.one', attempt: 1, text: 'one output'.repeat(8) }],
+  });
+
+  const preview = await store.previewPrune({ appendedBefore: '2999-01-01T00:00:00.000Z' });
+
+  assert.deepEqual(preview.blobs.map((blob) => blob.blobId), [first.blobs[0].blobId]);
+
+  // The store gains a second blob the preview never saw. The same selector now
+  // selects more than the maintainer was shown, so the confirmation is stale.
+  const second = await store.appendEvidence({
+    decision: decisionFixture('evaluation-two'),
+    outputs: [{ checkId: 'check.two', attempt: 1, text: 'two output'.repeat(8) }],
+  });
+
+  const refused = await store.confirmPrune({ preview, confirmation: preview.confirmationToken });
+
+  assert.equal(refused.pruned, false);
+  assert.equal(refused.reasonCode, 'preview-stale');
+  assert.deepEqual(refused.removed, []);
+  assert.match(refused.reason ?? '', /preview again/i);
+
+  assert.ok(await store.readBlob(first.blobs[0].blobId) !== null);
+  assert.ok(await store.readBlob(second.blobs[0].blobId) !== null);
+  assert.deepEqual(await store.readTombstones(), []);
+});
+
+test('a prune whose preview names a blob path outside the store removes nothing', async (t) => {
+  const root = await fixtureRepository(t);
+  const store = await openEvidenceStore({ repositoryRoot: root });
+  const outside = path.join(root, 'not-the-store.txt');
+
+  await writeFile(outside, 'somebody else\n', 'utf8');
+
+  const appended = await store.appendEvidence({
+    decision: decisionFixture('evaluation-one'),
+    outputs: [{ checkId: 'check.one', attempt: 1, text: 'output'.repeat(16) }],
+  });
+  const preview = await store.previewPrune({ evaluationIds: [appended.evaluationId] });
+  const escaping = [{
+    ...preview.blobs[0],
+    blobId: `sha256:${path.relative(path.join(store.paths.blobs, 'xx'), outside)}`,
+  }];
+  const forged = {
+    ...preview,
+    blobs: escaping,
+    confirmationToken: contentIdentity({
+      blobs: escaping.map(({ blobId, bytes }) => ({ blobId, bytes })),
+      totalBytes: preview.totalBytes,
+    }),
+  };
+
+  const refused = await store.confirmPrune({
+    preview: forged,
+    confirmation: forged.confirmationToken,
+  });
+
+  assert.equal(refused.pruned, false);
+  assert.deepEqual(refused.removed, []);
+  assert.equal(await readFile(outside, 'utf8'), 'somebody else\n');
+  assert.ok(await store.readBlob(appended.blobs[0].blobId) !== null);
 });

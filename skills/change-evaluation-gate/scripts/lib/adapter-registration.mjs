@@ -30,7 +30,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { describeAdapter } from './adapters.mjs';
-import { contentIdentity } from './evidence-store.mjs';
+import { containedWithin, contentIdentity } from './evidence-store.mjs';
 
 const isPlainObject = (value) => typeof value === 'object'
   && value !== null
@@ -170,27 +170,41 @@ const containerIn = (document, declaration) => {
 };
 
 /**
- * Follow the declared container path, creating only what is missing — and
+ * Follow the declared container path, creating only what is *missing* — and
  * remembering exactly what had to be created.
  *
  * What the Gate created, the Gate takes back. A file whose owner has never
  * registered a hook must be returned to exactly that state on removal, not left
  * with an empty container implying a registration that is not there.
+ *
+ * A segment that is *present* but is not the shape the declaration expects is a
+ * different thing entirely: it is content this client owns and the Gate does
+ * not understand. Overwriting it with an empty mapping would destroy it, so
+ * this refuses instead and the surface is reported `unverified` — an unfamiliar
+ * shape is precisely where the Gate cannot know what it owns (SG-HOOK-001,
+ * AC-ADAPT-003).
  */
 const ensureContainer = (document, declaration) => {
   let node = document;
   let createdAt = null;
+  const traversed = [];
 
-  declaration.container.forEach((key, index) => {
+  for (const [index, key] of declaration.container.entries()) {
+    traversed.push(key);
+
+    if (key in node && !isPlainObject(node[key])) {
+      return { container: null, createdAt: null, incompatible: traversed.join('.') };
+    }
+
     if (!isPlainObject(node[key])) {
       node[key] = {};
       createdAt = createdAt === null ? index : createdAt;
     }
 
     node = node[key];
-  });
+  }
 
-  return { container: node, createdAt };
+  return { container: node, createdAt, incompatible: null };
 };
 
 /** Drop the outermost container segment the Gate created, if it created one. */
@@ -208,8 +222,35 @@ const dropCreatedContainer = (document, declaration, createdAt) => {
   delete node[declaration.container[createdAt]];
 };
 
-/** Publish a configuration document by one atomic rename. */
-const publishDocument = async ({ surface, document, indent, trailingNewline }) => {
+/**
+ * Publish a configuration document by one atomic rename — against the bytes the
+ * plan was actually built from.
+ *
+ * The document being written is a transformation of one specific read. If those
+ * bytes are no longer what is on disk, whoever wrote the new ones is an editor
+ * this write would silently discard, so the write is refused and their file is
+ * left exactly as they wrote it. This is not a lock and not a retry: it turns a
+ * lost edit into a stated refusal, which is the whole of what is claimed here
+ * (NFR-REL-002, SG-HOOK-001).
+ *
+ * `beforePublish` is an injected seam. Nothing in production passes it; a
+ * fixture uses it to be the concurrent editor at the one instant that matters.
+ */
+const publishDocument = async ({
+  surface,
+  document,
+  indent,
+  trailingNewline,
+  expectedText,
+  repositoryRoot,
+  beforePublish = null,
+}) => {
+  // Re-established here, not only where the surface was described: the file
+  // about to be replaced has to be one this clone contains.
+  if (repositoryRoot != null && !containedWithin(repositoryRoot, surface.path)) {
+    return { published: false, reason: 'surface-path-escapes-clone', detail: `The declared registration file ${surface.path} is not inside this clone.` };
+  }
+
   const directory = path.dirname(surface.path);
   const staged = path.join(directory, `.${path.basename(surface.path)}.${randomUUID()}.part`);
   const serialized = `${JSON.stringify(document, null, indent)}${trailingNewline ? '\n' : ''}`;
@@ -218,12 +259,36 @@ const publishDocument = async ({ surface, document, indent, trailingNewline }) =
   await writeFile(staged, serialized, 'utf8');
 
   try {
+    if (beforePublish !== null) {
+      await beforePublish();
+    }
+
+    const current = await readFile(surface.path, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') {
+        return null;
+      }
+
+      throw error;
+    });
+
+    if (current !== expectedText) {
+      await rm(staged, { force: true });
+
+      return {
+        published: false,
+        reason: 'surface-changed-since-read',
+        detail: `${surface.declaration.file} changed after it was read, so it was left exactly as its editor wrote it.`,
+      };
+    }
+
     await rename(staged, surface.path);
   } catch (error) {
     await rm(staged, { force: true });
 
     throw error;
   }
+
+  return { published: true, reason: null, detail: null };
 };
 
 /**
@@ -237,6 +302,7 @@ export const registerAdapterSurface = async ({
   adapterId,
   repositoryRoot,
   command,
+  beforePublish = null,
 } = {}) => {
   const surface = describeRegistrationSurface({ adapterId, repositoryRoot });
 
@@ -284,8 +350,26 @@ export const registerAdapterSurface = async ({
   }
 
   const entry = plannedRegistrationEntry({ declaration: surface.declaration, command });
-  const { container, createdAt } = ensureContainer(read.document, surface.declaration);
-  const createdEventKey = !Array.isArray(container[surface.eventKey]);
+  const { container, createdAt, incompatible } = ensureContainer(read.document, surface.declaration);
+
+  if (incompatible !== null) {
+    // Somebody's own content sits where the declaration expects a mapping. The
+    // Gate does not repair it, does not normalize it, and does not replace it.
+    return record({
+      reason: 'surface-shape-incompatible',
+      detail: `${surface.declaration.file} holds a value at ${incompatible} that is not the container ${surface.adapterId} declares, so the Gate cannot know what it owns there and left the file unchanged.`,
+    });
+  }
+
+  const existingEntries = container[surface.eventKey];
+  const createdEventKey = !(surface.eventKey in container);
+
+  if (!createdEventKey && !Array.isArray(existingEntries)) {
+    return record({
+      reason: 'surface-shape-incompatible',
+      detail: `${surface.declaration.file} holds a value at ${surface.eventKey} that is not the entry array ${surface.adapterId} declares, so the Gate cannot know what it owns there and left the file unchanged.`,
+    });
+  }
 
   if (createdEventKey) {
     container[surface.eventKey] = [];
@@ -293,12 +377,19 @@ export const registerAdapterSurface = async ({
 
   container[surface.eventKey].push(entry);
 
-  await publishDocument({
+  const published = await publishDocument({
     surface,
+    repositoryRoot,
     document: read.document,
     indent: detectIndent(read.text),
     trailingNewline: read.text.endsWith('\n'),
+    expectedText: read.text,
+    beforePublish,
   });
+
+  if (!published.published) {
+    return record({ reason: published.reason, detail: published.detail });
+  }
 
   return record({
     registered: true,
@@ -435,6 +526,7 @@ export const withdrawAdapterRegistration = async ({
   repositoryRoot,
   registration = null,
   dryRun = false,
+  beforePublish = null,
 } = {}) => {
   const refuse = (reason, detail = null) => ({ removable: false, removed: false, reason, detail });
   const surface = describeRegistrationSurface({ adapterId, repositoryRoot });
@@ -495,12 +587,22 @@ export const withdrawAdapterRegistration = async ({
     }
   }
 
-  await publishDocument({
+  const published = await publishDocument({
     surface,
+    repositoryRoot,
     document: read.document,
     indent: detectIndent(read.text),
     trailingNewline: read.text.endsWith('\n'),
+    expectedText: read.text,
+    beforePublish,
   });
+
+  if (!published.published) {
+    // The withdrawal is still `removable`: nothing about the entry changed, the
+    // file underneath it did. Reporting it that way keeps a compensating unwind
+    // able to say the entry survived rather than that it was never the Gate's.
+    return { removable: true, removed: false, reason: published.reason, detail: published.detail };
+  }
 
   return { removable: true, removed: true, reason: null, detail: null };
 };
