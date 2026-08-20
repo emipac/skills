@@ -590,6 +590,26 @@ const preservedLines = async (file) => (await readFile(path.join(PRESERVED_STORE
   .filter((line) => line.trim().length > 0)
   .map((line) => JSON.parse(line));
 
+/**
+ * Whether the preserved store is present at all.
+ *
+ * `real-project-evidence/` is git-ignored: it is one maintainer's copy of a real
+ * `gms` run, kept because no fixture can be written after the fact to prove what
+ * an older gate actually wrote. A clone that does not have it — every CI
+ * checkout — cannot run the test below, and a test that fails for the absence of
+ * something the repository deliberately does not carry reports nothing about the
+ * code. It is skipped there, and stated as skipped rather than silently passing.
+ */
+const preservedStorePresent = async () => {
+  try {
+    await readFile(path.join(PRESERVED_STORE, 'log.ndjson'), 'utf8');
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** One decision, evaluated twice: same content, different run. */
 const runOf = (executionRoot, durationMs) => decisionFixture('evaluation-one', {
   snapshot: { kind: 'worktree', id: 'sha256:snapshot', baseRevision: 'HEAD', executionRoot },
@@ -705,6 +725,12 @@ test('TB-032 FR-EVID-001, NFR-AUD-001: the stored envelope states its own persis
 });
 
 test('TB-032 SG-EVID-001, FR-EVID-004: an envelope written before this change stays readable, prunable, and auditable', async (t) => {
+  if (!await preservedStorePresent()) {
+    t.skip('real-project-evidence/ is git-ignored and absent in this clone.');
+
+    return;
+  }
+
   const root = await fixtureRepository(t);
   const store = await openEvidenceStore({ repositoryRoot: root });
   const preserved = (await preservedLines('log.ndjson')).find((entry) => entry.blobIds.length > 0);
