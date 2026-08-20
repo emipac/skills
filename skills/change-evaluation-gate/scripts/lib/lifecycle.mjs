@@ -964,6 +964,22 @@ const locateGateKeys = (contents, keys) => {
 };
 
 /**
+ * The load-bearing identity of one located set of Gate blocks.
+ *
+ * The key, the exact line range, and the exact text — everything a removal acts
+ * on. A preview and a fresh relocation that share this identity describe the
+ * same removal from the same bytes; two that differ do not.
+ */
+const cleanupBlockIdentity = (blocks) => contentIdentity(
+  (blocks ?? []).map((block) => ({
+    key: block?.key ?? null,
+    startLine: block?.startLine ?? null,
+    endLine: block?.endLine ?? null,
+    text: block?.text ?? null,
+  })),
+);
+
+/**
  * Preview one configuration cleanup.
  *
  * The preview writes nothing. It names every Gate key it would remove, quotes
@@ -1053,6 +1069,32 @@ export const confirmConfigurationCleanup = async ({
     }]);
   }
 
+  // The file this cleanup is about to rewrite has to be the file the preview
+  // was taken against. Confirming one file and writing another is the same
+  // mistake as obeying an altered preview, reached through the argument list
+  // instead (SG-LIFE-001).
+  if (typeof preview.path !== 'string'
+    || path.resolve(configurationPath) !== path.resolve(preview.path)) {
+    return refuse('configuration-path-mismatch', [{
+      expected: preview.path ?? null,
+      actual: configurationPath,
+    }]);
+  }
+
+  // Cleanup owns the Gate's own top-level keys and nothing else. A preview
+  // naming any other key is naming somebody else's configuration, whoever
+  // produced it.
+  const unowned = preview.blocks
+    .map((block) => block?.key ?? null)
+    .filter((key) => !GATE_CONFIGURATION_KEYS.includes(key));
+
+  if (unowned.length > 0) {
+    return refuse('key-not-owned', [{
+      keys: unowned,
+      message: 'Cleanup removes only the Gate\'s own top-level keys.',
+    }]);
+  }
+
   const contents = await readFile(configurationPath, 'utf8').catch(() => null);
 
   if (contents === null) {
@@ -1066,9 +1108,23 @@ export const confirmConfigurationCleanup = async ({
     }]);
   }
 
+  // Where the Gate's blocks actually are, in the bytes about to be rewritten.
+  // The preview is a claim about this file; the claim is re-established here
+  // and the removal is driven by the answer, so the caller's line ranges never
+  // decide which lines go (AC-LIFE-008, SG-LIFE-001).
+  const located = locateGateKeys(contents, [...GATE_CONFIGURATION_KEYS]);
+
+  if (cleanupBlockIdentity(located) !== cleanupBlockIdentity(preview.blocks)) {
+    return refuse('preview-stale', [{
+      expected: cleanupBlockIdentity(preview.blocks),
+      actual: cleanupBlockIdentity(located),
+      message: 'The Gate keys in this file are not the ones the preview named. Preview again and confirm the new preview.',
+    }]);
+  }
+
   const dropped = new Set();
 
-  for (const block of preview.blocks) {
+  for (const block of located) {
     for (let line = block.startLine; line <= block.endLine; line += 1) {
       dropped.add(line);
     }
@@ -1085,7 +1141,7 @@ export const confirmConfigurationCleanup = async ({
     cleaned: true,
     reasonCode: null,
     errors: [],
-    removedKeys: preview.blocks.map((block) => block.key),
+    removedKeys: located.map((block) => block.key),
     fileDeleted: false,
   });
 };

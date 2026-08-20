@@ -31,6 +31,7 @@ import {
   reconcileAttempts,
   validateEvaluationRequest,
 } from './evaluation-contract.mjs';
+import { withoutRunLocalValues } from './evidence-identity.mjs';
 import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
 import {
@@ -45,7 +46,12 @@ import {
   unboundRuntime,
 } from './runtime-binding.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
-import { ISOLATION, captureSnapshot, verifySnapshot } from './snapshot.mjs';
+import {
+  ISOLATION,
+  captureSnapshot,
+  unavailableDependencyRoots,
+  verifySnapshot,
+} from './snapshot.mjs';
 import { delegateResolution } from './verification-seam.mjs';
 
 export { PROTOCOL_VERSION };
@@ -217,15 +223,18 @@ const buildDecision = ({
 
   return {
     ...body,
-    // The host-local execution root is excluded from the evidence identity: it
-    // names where the snapshot was materialized on this machine, not what was
-    // evaluated, so including it would make an identical binding produce a
-    // different evidence identity (NFR-REL-001).
+    // Run-local values are excluded from the evidence identity: the host-local
+    // execution root names where the snapshot was materialized on this machine
+    // and an attempt's duration is how long it took here, so including either
+    // would make an identical binding produce a different evidence identity
+    // (NFR-REL-001). The rule is the store's own, stated once, so the identity
+    // the decision computes and the identity the store assigns describe the
+    // same thing.
     //
     // `persisted` and `reference` are filled in by the Evidence store when one
     // is bound; an unbound gate still returns a complete, stable identity.
     evidence: {
-      id: identity({ ...body, snapshot: { ...body.snapshot, executionRoot: null } }),
+      id: identity(withoutRunLocalValues(body)),
       format: EVIDENCE_FORMAT,
       persisted: false,
       reference: null,
@@ -457,7 +466,9 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     if (reconciled.drifted) {
       diagnostics.push({
         reasonCode: reconciled.reasonCode,
-        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved.`,
+        // The drifted surfaces are named, and so is the one confirmed operator
+        // action that resolves them. Nothing is repaired here (FR-LIFE-019).
+        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Run \`gate repair\` to re-resolve and re-pin what this clone was activated with.`,
       });
     }
   }
@@ -634,6 +645,193 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     buildDecision(graded),
     { store: dependencies.evidenceStore ?? null, outputs: capturedOutputs, graded },
   );
+};
+
+/**
+ * What a decision's evidence reference says when nothing was appended because
+ * there was nothing to record — as distinct from an append that was attempted
+ * and failed, which carries a `reasonCode` instead (`AC-EVID-002`).
+ */
+const NOT_RECORDED_NO_CHANGE = 'no-change-to-record';
+
+/**
+ * Decide one evaluation whose change set is empty, without materializing
+ * anything (`TB-039`, `FR-EVAL-004`, `NFR-PERF-001`).
+ *
+ * Applicability is a function of the changed paths alone. With none, every
+ * configured check is `not-applicable` before a snapshot exists, so the copy a
+ * capture makes is read by no check and the identity it derives names no
+ * change. Asking whether there is a subject before performing an evaluation is
+ * the whole of this: the answer is the same, and the copy, its hashing, and its
+ * removal are not made.
+ *
+ * This is the preflight's path only. On the authoritative surface the snapshot
+ * is what the checks run against and what the decision must name, so that
+ * runner captures unconditionally (`AC-EVAL-004`, `NFR-REL-001`).
+ *
+ * Everything that does not need a materialized tree is still reported: a
+ * declared dependency root this clone cannot offer, a drifted control surface,
+ * and every policy-binding diagnostic. An empty change set is not a reason to
+ * stop saying what is wrong with the gate itself, and a turn that says
+ * something is a turn that can be repeated — so that turn is recorded, and the
+ * record is what bounds repeating it.
+ *
+ * @param {object} request versioned evaluation request
+ * @param {object} dependencies resolved gate inputs; no executor is used
+ */
+export const evaluateWithoutSubject = async (request, dependencies = {}) => {
+  const profile = dependencies.profile ?? null;
+  const policy = dependencies.policy ?? null;
+  const runnerVersion = dependencies.runnerVersion ?? UNKNOWN_RUNNER_VERSION;
+  const providerVersions = dependencies.providerVersions ?? {};
+  const diagnostics = [];
+
+  const requestErrors = validateEvaluationRequest(request);
+
+  if (requestErrors.length > 0) {
+    return buildDecision({
+      request,
+      snapshot: null,
+      checks: [],
+      diagnostics: [{
+        reasonCode: 'configuration-invalid',
+        detail: `The evaluation request is not valid: ${requestErrors.map((error) => `${error.path} ${error.code}`).join('; ')}.`,
+      }],
+      outcome: 'unverified',
+      profile,
+      policy,
+      runnerVersion,
+      providerVersions,
+      scope: await scopeOf(request, null),
+      delegation: delegateResolution({ checks: [], changedPaths: [] }).delegation,
+    });
+  }
+
+  // The same refusal the graded path makes, at the same point: a binding that
+  // offers a declared mutating command as its evaluation command is refused
+  // whether or not this turn had a subject (FR-POL-009, AC-POL-004).
+  const mutation = mutationDiagnostic(dependencies.checks ?? []);
+
+  if (mutation !== null) {
+    return buildDecision({
+      request,
+      snapshot: null,
+      checks: [],
+      diagnostics: [mutation],
+      outcome: 'unverified',
+      profile,
+      policy,
+      runnerVersion,
+      providerVersions,
+      scope: await scopeOf(request, null),
+      delegation: delegateResolution({ checks: [], changedPaths: [] }).delegation,
+    });
+  }
+
+  const unavailable = await unavailableDependencyRoots({
+    repositoryRoot: request.repository.root,
+    dependencyRoots: policy?.execution?.dependency_roots ?? [],
+  });
+
+  for (const declared of [...unavailable.missing, ...unavailable.refused]) {
+    diagnostics.push({
+      reasonCode: 'dependency-root-unavailable',
+      detail: `The declared dependency root ${JSON.stringify(declared)} could not be provided to this evaluation; a check that needs it cannot run and nothing here is proved.`,
+    });
+  }
+
+  if (dependencies.controlSurface) {
+    const reconciled = reconcileControlSurface({
+      receipt: dependencies.controlSurface.receipt ?? null,
+      observed: dependencies.controlSurface.observed ?? null,
+    });
+
+    if (reconciled.drifted) {
+      diagnostics.push({
+        reasonCode: reconciled.reasonCode,
+        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Run \`gate repair\` to re-resolve and re-pin what this clone was activated with.`,
+      });
+    }
+  }
+
+  const scope = await scopeOf(request, null);
+  const acceptanceIds = new Set(scope.acceptanceIds);
+  const resolution = delegateResolution({
+    checks: dependencies.checks ?? [],
+    changedPaths: [],
+    policy,
+  });
+
+  diagnostics.push(...resolution.diagnostics);
+
+  const checks = resolution.ordered.map((descriptor) => resultFor(descriptor.check, [], {
+    acceptanceIds,
+    override: { outcome: 'not-applicable', reasonCode: 'not-applicable' },
+  }));
+  const gradedOutcome = diagnostics.some(
+    (diagnostic) => REASON_OUTCOMES[diagnostic.reasonCode] === 'unverified',
+  )
+    ? 'unverified'
+    : decisionOutcome(checks);
+  const bypass = resolveBypass({
+    grant: dependencies.bypass ?? null,
+    policy,
+    snapshotId: null,
+    outcome: gradedOutcome,
+    checks,
+    ledger: dependencies.bypassLedger ?? null,
+  });
+  const outcome = bypass?.applied === true ? 'bypassed' : gradedOutcome;
+  const graded = {
+    request,
+    // A decision that names no snapshot authorizes nothing, which is what every
+    // decision on this path already is by role (`SG-EVAL-001`).
+    snapshot: null,
+    checks,
+    diagnostics,
+    outcome,
+    bypass,
+    profile,
+    policy,
+    runnerVersion,
+    providerVersions,
+    scope,
+    // No changed path can have touched a Grader surface, and no check ran, so
+    // no runtime was ever probed.
+    surfaces: [],
+    runtimeBinding: null,
+    delegation: resolution.delegation,
+  };
+  const decision = buildDecision(graded);
+  const store = dependencies.evidenceStore ?? null;
+
+  // A turn with nothing to say is a turn with nothing to repeat, and the record
+  // this path would append exists to bound repetition. A turn that carries a
+  // diagnostic will be said, and said again, so it is recorded — dropping that
+  // record is what would let an unchanged verdict repeat without bound
+  // (`RISK-010`, `AC-EVID-002`).
+  if (outcome !== 'passed') {
+    return persistEvidence(decision, { store, outputs: [], graded });
+  }
+
+  return {
+    ...decision,
+    evidence: {
+      ...decision.evidence,
+      persisted: false,
+      // Said in the decision, so a reader can tell a turn that was never
+      // recorded from one whose record was lost: an append that failed names
+      // the reason it failed and this names why none was attempted.
+      reference: {
+        evidenceId: null,
+        storeRoot: store?.root ?? null,
+        appendedAt: null,
+        blobIds: [],
+        reasonCode: null,
+        notRecorded: NOT_RECORDED_NO_CHANGE,
+      },
+    },
+  };
 };
 
 /**

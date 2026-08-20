@@ -1,14 +1,14 @@
 # TB-033 — Fail closed on any decision the runner cannot verify
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 33-fail-closed-on-a-decision-the-runner-cannot-verify
 Draft key: TB-033
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -167,22 +167,55 @@ anything.
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVAL-001`, `NFR-REL-003`: a decision missing checks, evidence,
+- [x] `AC-EVAL-001`, `NFR-REL-003`: a decision missing checks, evidence,
   evaluation identity, or snapshot denies with a stated reason, driven through
   the real `runHook` rather than a library call.
-- [ ] `AC-EVAL-002`: completeness is judged by `validateDecision`; a source
+- [x] `AC-EVAL-002`: completeness is judged by `validateDecision`; a source
   scan finds no second completeness rule in the runner.
-- [ ] `NFR-REL-003`: an `allow` whose evidence was not positively persisted
+- [x] `NFR-REL-003`: an `allow` whose evidence was not positively persisted
   denies — absent, `false`, and malformed evidence all take the same path.
-- [ ] `AC-EVAL-002`: `validateDecision` returns findings for every malformed
+- [x] `AC-EVAL-002`: `validateDecision` returns findings for every malformed
   input in a fixture set including `null`, primitives, arrays, and objects with
   wrong-typed members, and throws for none of them.
-- [ ] `AC-EVAL-006`, `NFR-REL-003`: an attempt whose program could not be
+- [x] `AC-EVAL-006`, `NFR-REL-003`: an attempt whose program could not be
   launched is `unverified` with a launch-failure reason, never `failed` /
   `grader-negative`; a tool that genuinely runs and exits non-zero — including
   under declared non-zero success codes — is classified exactly as before.
-- [ ] Every existing denial and every existing allow behaves identically,
+- [x] Every existing denial and every existing allow behaves identically,
   proved by the unchanged commit fixtures in `gate-activation-smoke`.
+
+## Decisions this slice recorded
+
+**`AC-EVAL-006`: the launch-failure signal is taken before the spawn, not read
+out of how the process terminated.** The approach section describes bounded
+execution reporting "the case where the process started and immediately
+reported that it could not exec what it was asked to". No such observation
+exists at that seam. When a script's shebang names `/usr/bin/env php` and `php`
+is gone, the kernel really does run `env`, so the spawn succeeds, no error is
+raised, and the only remaining differences from a genuine verdict are the exit
+status — which the ticket rightly prohibits classifying by — and the captured
+text, which would mean parsing another program's diagnostics. Bounded execution
+therefore checks the chain it is about to launch: the executable and, when the
+receipt pinned one, the interpreter that executable names, both immediately
+before spawning. That is still the executor deciding from what it knows it was
+about to run, it produces no verdict for a program that never started, and it
+covers the residue `TB-029` identified — a pinned program whose interpreter
+chain breaks after activation. An exec-level `ENOENT`, `ENOEXEC`, `EACCES`,
+`EPERM`, or `EISDIR` reported by the spawn itself carries the same reason; a
+raised error of any other kind stays `crash`, which is what it is.
+
+**The denial names the contract's findings rather than restating them.** A
+refused decision prints the first six findings by path and message and
+summarizes the remainder. Composing a runner-authored explanation of what was
+missing would have been the second completeness rule this ticket exists to
+remove, one sentence at a time.
+
+**No smoke capability was extended.** `TB-029`'s matrix asked
+`gate-activation-smoke` to grow a scenario whose required check cannot launch.
+That belonged to a ticket about a live failure; here the acceptance criterion is
+that the *existing* commit fixtures are unchanged and still allow and deny
+exactly as before, which a new scenario would not prove. The capability ran
+unmodified.
 
 ## Verification Matrix
 

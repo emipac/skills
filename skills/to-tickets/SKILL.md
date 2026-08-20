@@ -27,6 +27,15 @@ Read [the delivery contract](references/delivery-contract.md) before drafting.
    verification capabilities and scoped commands, glossary, and ADRs. Identify
    optional prefactoring that makes the feature easy without changing behavior.
 
+   Establish every claim about current behavior by running something, not by
+   reading and inferring: execute the command, diff the files, grep the call
+   site. "Nothing calls this", "these differ only in X", and "this observable
+   exists" are each one cheap check away, and each is a claim a contract has
+   been wrong about.
+
+   Completion criterion: every statement the contract will make about how the
+   code behaves today was observed, not deduced.
+
 3. **Draft tracer bullets.** Each ticket cuts a narrow but complete path through
    every affected layer, is independently demoable or verifiable, and fits one
    fresh context. Preserve the upstream wide-refactor exception: use
@@ -83,4 +92,11 @@ unknown edge or cycle.
   of contracts; a decision-rich prototype excerpt is the narrow exception.
 - Treat ticket contracts as constraints with room for TDD learning, not
   immutable generation scripts.
+- Separate claims from proposals. A claim about current behavior is admissible
+  only when execution established it; a proposal about how to build the slice is
+  an opinion and is marked as one. Unmarked, the two read alike, and an
+  implementer who complies rather than pushes back ships the author's guess.
+- Constrain outcomes, not mechanisms. Outcome, safeguards, non-goals and
+  outcome-shaped acceptance criteria survive implementation; prescriptions of
+  mechanism are what implementation disproves.
 - Preserve every existing `AGENTS.md` exactly.

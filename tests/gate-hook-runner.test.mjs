@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,8 +9,14 @@ import { promisify } from 'node:util';
 
 import {
   HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION,
+  configurationIdentity,
 } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
-import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
+import { readRepositoryConfiguration } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
+import { evaluate as realEvaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
+import {
+  contentIdentity,
+  openEvidenceStore,
+} from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import {
   SELF_TEST_ENV,
   runHook,
@@ -308,7 +314,16 @@ const PINNED_RUNNER = Object.freeze({
   version: process.versions.node,
 });
 
-/** The Activation receipt a real activation publishes; the runner's input here. */
+/**
+ * The Activation receipt a real activation publishes; the runner's input here.
+ *
+ * TB-031: the pinned identities are COMPUTED the way `activate` computes them —
+ * the configuration identity by `configurationIdentity` over the file this
+ * clone was configured with, and the receipt id as the content identity of the
+ * receipt body. A fixture pinning `sha256:configuration` describes a clone no
+ * activation could produce, and now that the runner reconciles what the receipt
+ * pinned, such a fixture would report drift on every commit.
+ */
 const publishReceipt = async (root, { runners = [PINNED_RUNNER], ...overrides } = {}) => {
   const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
     cwd: root,
@@ -319,23 +334,30 @@ const publishReceipt = async (root, { runners = [PINNED_RUNNER], ...overrides } 
     common,
     'change-evaluation-gate/evidence/activation',
   );
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const body = {
+    receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+    previewId: 'sha256:preview',
+    repository: { root },
+    configuration: {
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+      schemaVersion: read.configuration?.schema_version ?? null,
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'fixture/1.0.0',
+      runners,
+    },
+    ...overrides,
+  };
 
   await mkdir(directory, { recursive: true });
   await writeFile(
     path.join(directory, 'receipt.json'),
-    `${JSON.stringify({
-      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
-      receiptId: 'sha256:receipt',
-      previewId: 'sha256:preview',
-      repository: { root },
-      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: {
-        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
-        runnerVersion: 'fixture/1.0.0',
-        runners,
-      },
-      ...overrides,
-    }, null, 2)}\n`,
+    `${JSON.stringify({ ...body, receiptId: contentIdentity(body) }, null, 2)}\n`,
     'utf8',
   );
 
@@ -745,6 +767,66 @@ test('TB-026 NFR-REL-003: an otherwise-passing commit whose evidence append fail
   assert.match(result.lines.join('\n'), /evidence-store-unavailable/);
 });
 
+test('TB-032 NFR-REL-001, AC-EVID-001: two commit attempts over identical content append one envelope and two log entries', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  // Two real runs of the authoritative runner over the same staged content.
+  // Each materializes its own `mkdtemp` execution root and each measures its
+  // own wall-clock durations; neither is a fact about what was evaluated.
+  const first = await runHook({ cwd: root, environment: process.env });
+  const second = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(first.exitCode, 0, `expected an allow, got: ${first.lines.join('\n')}`);
+  assert.equal(second.exitCode, 0, `expected an allow, got: ${second.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2, 'SG-EVID-001: every append is still recorded in the append-only log.');
+  assert.equal(
+    log[0].evidenceId,
+    log[1].evidenceId,
+    'NFR-REL-001: two evaluations of identical content must address one envelope.',
+  );
+
+  const files = (await readdir(store.paths.envelopes, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile());
+
+  assert.equal(files.length, 1, 'AC-EVID-001: one evaluation, one stored envelope.');
+
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.equal(
+    JSON.stringify(envelope).includes('gate-hook-runner-exec-'),
+    false,
+    'NFR-REL-001: no host-local execution root may reach the stored envelope.',
+  );
+  assert.equal(
+    envelope.decision.evidence.persisted,
+    true,
+    'NFR-AUD-001: the stored record must not state that it was never recorded.',
+  );
+  assert.equal(envelope.decision.evidence.reference.evidenceId, envelope.evidenceId);
+
+  // The run-local execution root stays available to a maintainer, on the
+  // per-append log entry that is not content-addressed.
+  assert.match(log[0].execution.executionRoot, /gate-hook-runner-exec-/);
+  assert.notEqual(
+    log[0].execution.executionRoot,
+    log[1].execution.executionRoot,
+    'the two runs really did materialize different execution roots.',
+  );
+  assert.equal(
+    (await store.readEvents()).filter((event) => event.type === 'evaluation').length,
+    2,
+    'NFR-AUD-001: one governed action, one Lifecycle event — deduplication changes nothing here.',
+  );
+});
+
 test('TB-026: the activation self-test writes no Evidence and leaves no store entry', async (t) => {
   const root = await throwawayRepository(t);
 
@@ -840,4 +922,149 @@ test('the packaged runner allows a passing staged change and denies a failing on
 
   assert.notEqual(refused.exitCode, 0, `expected a denial, got: ${refused.output}`);
   assert.match(refused.output, /configuration\.broad-tests\.test/);
+});
+
+/**
+ * TB-033 — Fail closed on any decision the runner cannot verify.
+ *
+ * `report` accepted any decision whose `authorization` and `outcome` were
+ * strings, so the minimal shape below — no checks, no evidence, no evaluation
+ * identity, no snapshot — exited `0` and the commit proceeded. These fixtures
+ * drive the real `runHook` through its injected `evaluate` seam, because the
+ * defect is not that the contract cannot describe a complete decision but that
+ * the authoritative runner never asked it to.
+ */
+
+test('TB-033 NFR-REL-003: a decision that claims allow but proves nothing never exits 0', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: process.env,
+    evaluate: async () => ({ authorization: 'allow', outcome: 'passed' }),
+  });
+
+  assert.notEqual(
+    result.exitCode,
+    0,
+    'a decision naming no checks, no evidence, no evaluation identity and no snapshot authorizes nothing.',
+  );
+  assert.equal(result.reasonCode, 'decision-malformed');
+});
+
+/**
+ * A decision complete enough to be worth altering: the real evaluation is run
+ * first, and each fixture below returns that decision with exactly one part
+ * removed or corrupted. Building the shape by hand would prove only that the
+ * hand-built shape is rejected, and the interesting question is whether a
+ * decision that is complete but for one missing part still reaches `exit 0`.
+ */
+const decisionFromRealEvaluation = async (root) => {
+  let captured = null;
+
+  await runHook({
+    cwd: root,
+    environment: process.env,
+    evaluate: async (request, options) => {
+      captured = await realEvaluate(request, options);
+
+      return captured;
+    },
+  });
+
+  return captured;
+};
+
+test('TB-033 AC-EVAL-001: a decision missing any one part it is judged by denies with a stated reason', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const complete = await decisionFromRealEvaluation(root);
+
+  assert.notEqual(complete, null, 'the fixture must start from a decision the runner really allows.');
+
+  const mutilations = {
+    checks: (decision) => ({ ...decision, checks: undefined }),
+    evaluationId: (decision) => ({ ...decision, evaluationId: undefined }),
+    snapshot: (decision) => ({ ...decision, snapshot: undefined }),
+    evidence: (decision) => ({ ...decision, evidence: undefined }),
+  };
+
+  for (const [part, mutilate] of Object.entries(mutilations)) {
+    const result = await runHook({
+      cwd: root,
+      environment: process.env,
+      evaluate: async () => mutilate(complete),
+    });
+
+    assert.notEqual(result.exitCode, 0, `a decision missing ${part} must not authorize a commit.`);
+    assert.equal(result.reasonCode, 'decision-malformed', `a decision missing ${part} denies.`);
+    assert.match(
+      result.lines.join('\n'),
+      new RegExp(part),
+      `the denial must name the ${part} it could not read.`,
+    );
+  }
+});
+
+test('TB-033 NFR-REL-003: an allow whose evidence was not positively persisted denies whatever shape the claim takes', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const complete = await decisionFromRealEvaluation(root);
+
+  assert.equal(complete?.authorization, 'allow');
+  assert.equal(complete?.evidence?.persisted, true);
+
+  // Absent, false, and malformed persistence take one path: an allow is
+  // authorized by evidence that was recorded, never by the absence of a
+  // statement that it was not.
+  const claims = {
+    absent: { ...complete.evidence, persisted: undefined },
+    stated: { ...complete.evidence, persisted: false },
+    unreferenced: { ...complete.evidence, persisted: true, reference: null },
+    referenceless: {
+      ...complete.evidence,
+      persisted: true,
+      reference: { ...complete.evidence.reference, evidenceId: null },
+    },
+  };
+
+  for (const [shape, evidence] of Object.entries(claims)) {
+    const result = await runHook({
+      cwd: root,
+      environment: process.env,
+      evaluate: async () => ({ ...complete, evidence }),
+    });
+
+    assert.notEqual(result.exitCode, 0, `an allow with ${shape} evidence must not authorize a commit.`);
+    assert.match(
+      result.lines.join('\n'),
+      /evidence/,
+      `the denial for ${shape} evidence must say what could not be proved.`,
+    );
+  }
+});
+
+test('TB-033 AC-EVAL-002: the runner keeps no second completeness rule of its own', async () => {
+  const source = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /validateDecision\(/,
+    'completeness is judged by the contract that defines it.',
+  );
 });

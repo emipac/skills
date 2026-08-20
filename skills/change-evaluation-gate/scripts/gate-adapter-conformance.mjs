@@ -68,7 +68,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { activate, previewActivation } from './lib/activation.mjs';
+import { activate, configurationIdentity, previewActivation } from './lib/activation.mjs';
 import {
   DESKTOP_ADAPTER_IDS,
   buildNativePayload,
@@ -80,7 +80,12 @@ import {
   runCompatibilityBaseline,
 } from './lib/adapters.mjs';
 import { evaluate } from './lib/evaluate.mjs';
-import { openEvidenceStore } from './lib/evidence-store.mjs';
+import { commandPreview } from './lib/command-descriptor.mjs';
+import {
+  gateChecksFromConfiguration,
+  readRepositoryConfiguration,
+} from './lib/configuration.mjs';
+import { contentIdentity, openEvidenceStore } from './lib/evidence-store.mjs';
 
 const CAPABILITY = 'gate-adapter-conformance';
 
@@ -175,7 +180,7 @@ if (selfTestSubject !== null) {
   const subject = JSON.parse(await readFile(selfTestSubject, 'utf8'));
   const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');
 
-  process.stdout.write(\`change-evaluation-gate: \${denied ? 'denied' : 'allowed'} / self-test\\n\`);
+  process.stdout.write(\`change-evaluation-gate: \${denied ? 'denied' : 'allowed'} / self-test \${subject.selfTestId}\\n\`);
   process.exit(denied ? 1 : 0);
 }
 
@@ -881,12 +886,33 @@ const packagedPreflightAnswersClient = async () => {
   await writeFile(
     path.join(root, 'tools/check.mjs'),
     [
-      "import { readFile } from 'node:fs/promises';",
+      "import { readdir, readFile } from 'node:fs/promises';",
+      "import path from 'node:path';",
       '',
-      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      'const walk = async (directory) => {',
+      "  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);",
+      '  const files = [];',
       '',
-      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
-      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '  for (const entry of entries) {',
+      '    const absolute = path.join(directory, entry.name);',
+      '',
+      '    files.push(...(entry.isDirectory() ? await walk(absolute) : [absolute]));',
+      '  }',
+      '',
+      '  return files;',
+      '};',
+      '',
+      'const graded = await walk(process.argv[2]);',
+      'let broken = 0;',
+      '',
+      'for (const file of graded) {',
+      "  if ((await readFile(file, 'utf8')).includes('BROKEN')) {",
+      '    broken += 1;',
+      '  }',
+      '}',
+      '',
+      'process.stdout.write(`graded ${graded.length} files, ${broken} broken\\n`);',
+      'process.exitCode = broken === 0 ? 0 : 1;',
       '',
     ].join('\n'),
     'utf8',
@@ -908,7 +934,7 @@ const packagedPreflightAnswersClient = async () => {
       '        - runner: repository-script',
       '          args:',
       '            - tools/check.mjs',
-      '            - app/Order.php',
+      '            - app',
       '          working_directory: "."',
       '          timeout_seconds: 60',
       '          allowed_environment:',
@@ -937,27 +963,44 @@ const packagedPreflightAnswersClient = async () => {
   const common = (await git(root, ['rev-parse', '--git-common-dir'])).stdout.trim();
   const receiptDirectory = path.resolve(root, common, 'change-evaluation-gate/evidence/activation');
 
+  // TB-031: the receipt pins the identities a real activation would pin — the
+  // configuration identity by the rule `activate` uses and the receipt id by
+  // its own content — because the preflight runner now reconciles them against
+  // this clone. A receipt of placeholders describes a clone no activation could
+  // have produced, and it would report drift on every turn.
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const configured = gateChecksFromConfiguration(read.configuration)
+    .checks.find((check) => check.id === 'configuration.broad-tests.test');
+  const receiptBody = {
+    receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+    previewId: 'sha256:preview',
+    repository: { root },
+    configuration: {
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+      schemaVersion: read.configuration?.schema_version ?? null,
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'fixture/1.0.0',
+      runners: [{
+        check_id: 'configuration.broad-tests.test',
+        role: 'evaluate',
+        runner: 'repository-script',
+        executable: process.execPath,
+        interpreter: null,
+        version: process.versions.node,
+        preview: commandPreview(configured.evaluate, process.execPath),
+      }],
+    },
+  };
+
   await mkdir(receiptDirectory, { recursive: true });
   await writeFile(
     path.join(receiptDirectory, 'receipt.json'),
-    `${JSON.stringify({
-      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
-      receiptId: 'sha256:receipt',
-      previewId: 'sha256:preview',
-      repository: { root },
-      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: {
-        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
-        runnerVersion: 'fixture/1.0.0',
-        runners: [{
-          check_id: 'configuration.broad-tests.test',
-          role: 'evaluate',
-          runner: 'repository-script',
-          executable: process.execPath,
-          version: process.versions.node,
-        }],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ ...receiptBody, receiptId: contentIdentity(receiptBody) }, null, 2)}\n`,
     'utf8',
   );
 
@@ -1035,6 +1078,57 @@ const packagedPreflightAnswersClient = async () => {
     findings,
     unnamed.stdout === '' && unnamed.stderr.includes('change-evaluation-gate'),
     `a preflight with no declared adapter did not report itself: ${unnamed.stdout}${unnamed.stderr}`,
+  );
+
+  // TB-034: the shape the preflight exists for, and the one it reported clean
+  // on. Every tracked file is back at its committed content and the clone's
+  // only change is a file the agent just created and never staged — the most
+  // common kind of work in an AI-assisted session. A worktree snapshot built
+  // from `git ls-files` did not contain it, so the required check graded a tree
+  // the new file was not in and the agent was told its work passed
+  // (AC-ADAPT-001, FR-EVAL-001).
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, 'app/Refund.php'), 'BROKEN\n', 'utf8');
+
+  const untracked = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+  let untrackedBody = null;
+
+  try {
+    untrackedBody = JSON.parse(untracked.stdout);
+  } catch (error) {
+    check(
+      findings,
+      false,
+      `a clone whose only change is a new untracked failing file reported clean: ${JSON.stringify(untracked.stdout)}`,
+    );
+  }
+
+  check(
+    findings,
+    typeof untrackedBody?.[field] === 'string'
+      && untrackedBody[field].includes('configuration.broad-tests.test'),
+    `a new untracked failing file did not reach the client in ${field}: ${untracked.stdout}${untracked.stderr}`,
+  );
+
+  // And the deletion that used to end the whole evaluation in
+  // `snapshot-mismatch` before a single check ran (NFR-REL-003, FR-EVAL-001).
+  await rm(path.join(root, 'app/Refund.php'));
+  await rm(path.join(root, 'app/Order.php'));
+
+  const deleted = await runPackagedPreflight({
+    cwd: root,
+    payload,
+    args: ['--adapter', adapter.id],
+  });
+
+  check(
+    findings,
+    deleted.stdout === '',
+    `deleting a tracked file made an otherwise clean preflight answer: ${deleted.stdout}`,
   );
 
   return { name: 'packaged-preflight-answers-client', ok: findings.length === 0, findings };

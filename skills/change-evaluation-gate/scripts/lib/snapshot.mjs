@@ -8,8 +8,14 @@
  * FR-EVAL-004, NFR-SEC-001).
  *
  * Nothing here writes to the repository: no index is written, no object is
- * created, and no commit is made. Git is used only to enumerate tracked paths
- * and staged status.
+ * created, and no commit is made. Git is used only to enumerate what the change
+ * consists of — tracked paths, and the worktree status that says which of them
+ * the tree still holds and which paths it holds that Git does not yet track.
+ *
+ * Known limitations, stated rather than half-modelled: a snapshot carries file
+ * content only. File modes, symlink targets, and submodule commits are not part
+ * of the identity, so a change to one of them alone is not something this gate
+ * can see. They are recorded in the evaluation process contract.
  */
 
 import { execFile } from 'node:child_process';
@@ -61,43 +67,124 @@ export const listTrackedPaths = async (repositoryRoot, runGit = defaultRunGit) =
 ).sort();
 
 /**
- * Changed paths for applicability resolution. `git status --porcelain` needs no
- * HEAD, so a repository without commits is handled without a special case.
+ * One parse of `git status --porcelain=v1 -z`, serving both questions the
+ * snapshot asks of it: which paths changed, and which paths the worktree
+ * actually holds. `git status` needs no HEAD, so a repository without commits
+ * is handled without a special case.
+ *
+ * `-uall` is not optional here. Default untracked reporting collapses a wholly
+ * new directory into a single `dir/` entry, and a snapshot materializes files:
+ * a collapsed entry would be enumerated as a path that is not a file, and the
+ * files the agent just wrote inside it would be graded by nothing
+ * (`FR-EVAL-001`).
+ *
+ * Ignored paths are absent because `--ignored` is not asked for. That keeps the
+ * ignore rules where Git owns them instead of re-implementing them here, and it
+ * is why nothing git-ignored can reach a snapshot through this path
+ * (`SG-EVAL-001`).
  */
-export const listChangedPaths = async (repositoryRoot, kind, runGit = defaultRunGit) => {
-  const stdout = await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z']);
-  const changed = new Set();
-  const entries = splitNul(stdout);
+const readStatus = async (repositoryRoot, runGit) => {
+  const entries = splitNul(
+    await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z', '-uall']),
+  );
+  const records = [];
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const indexStatus = entry[0];
     const worktreeStatus = entry[1];
     const relative = entry.slice(3);
+    let source = null;
 
-    if (indexStatus === 'R' || indexStatus === 'C') {
-      // Rename and copy entries are followed by their source path.
+    if ('RC'.includes(indexStatus) || 'RC'.includes(worktreeStatus)) {
+      // A rename or copy record names its destination in the entry itself and
+      // its source in a separate NUL-terminated field that follows.
       index += 1;
+      source = entries[index] ?? null;
     }
 
+    records.push({ indexStatus, worktreeStatus, relative, source });
+  }
+
+  return records;
+};
+
+/** Changed paths for applicability resolution. */
+export const listChangedPaths = async (repositoryRoot, kind, runGit = defaultRunGit) => {
+  const changed = new Set();
+
+  for (const { indexStatus, worktreeStatus, relative, source } of await readStatus(
+    repositoryRoot,
+    runGit,
+  )) {
     if (indexStatus === '?') {
-      continue;
-    }
-
-    if (kind === 'git-index') {
-      if (indexStatus !== ' ') {
+      // An untracked path is nothing to the index, so it is not part of a
+      // `git-index` change. For a worktree change it is the most common shape
+      // the change takes — a file the agent just created — and reporting it as
+      // no change at all is what kept applicability rules from ever seeing new
+      // work (`FR-EVAL-001`).
+      if (kind !== 'git-index') {
         changed.add(relative);
       }
 
       continue;
     }
 
-    if (indexStatus !== ' ' || worktreeStatus !== ' ') {
-      changed.add(relative);
+    const staged = indexStatus !== ' ';
+
+    if (kind === 'git-index' ? !staged : !staged && worktreeStatus === ' ') {
+      continue;
+    }
+
+    changed.add(relative);
+
+    // Both sides of a rename are the change: the source is gone and the
+    // destination is new, so a rule matching either one sees the whole move. A
+    // copy leaves its source exactly as it was and never names it.
+    if (source !== null && (indexStatus === 'R' || worktreeStatus === 'R')) {
+      changed.add(source);
     }
   }
 
   return [...changed].sort();
+};
+
+/**
+ * The content set of a worktree snapshot: what a maintainer looking at the
+ * clone would see, which is the tracked paths plus the untracked-and-not-
+ * ignored ones, minus the ones the worktree no longer has.
+ *
+ * `git ls-files` alone answers a different question — what the index already
+ * tracks — and grading that meant grading everything except the file the agent
+ * had just written, while an ordinary deletion left an index entry pointing at
+ * a file that was gone and failed the capture outright (`FR-EVAL-001`,
+ * `NFR-REL-003`).
+ *
+ * A deletion is materialized by absence: the path is neither listed nor
+ * written, so the identity still names exactly the tree the checks ran against
+ * (`SG-EVAL-001`, `FR-EVAL-004`). Only that expected absence is excluded — a
+ * path Git still reports and the filesystem cannot read remains a stated
+ * failure.
+ */
+export const listWorktreePaths = async (repositoryRoot, runGit = defaultRunGit) => {
+  const paths = new Set(await listTrackedPaths(repositoryRoot, runGit));
+
+  for (const { indexStatus, worktreeStatus, relative } of await readStatus(
+    repositoryRoot,
+    runGit,
+  )) {
+    if (indexStatus === '?') {
+      paths.add(relative);
+
+      continue;
+    }
+
+    if (worktreeStatus === 'D' || indexStatus === 'D') {
+      paths.delete(relative);
+    }
+  }
+
+  return [...paths].sort();
 };
 
 const readBlobs = async (repositoryRoot, relatives) => {
@@ -144,6 +231,48 @@ const isContainedRoot = (declared) => {
 };
 
 /**
+ * Which declared dependency roots this clone cannot offer an evaluation, asked
+ * of the clone alone.
+ *
+ * A root is refused when what was declared is not a contained repository-
+ * relative directory, and missing when the clone simply never installed it.
+ * Neither question is about a snapshot, so neither needs one — which is what
+ * lets an evaluation that materializes nothing still report, by name, a
+ * dependency root a check would have needed (`FR-EVAL-001`, `TB-039`).
+ *
+ * @param {object} input repository root and the declared roots
+ * @returns {Promise<{missing: string[], refused: string[], available: string[]}>}
+ */
+export const unavailableDependencyRoots = async ({
+  repositoryRoot,
+  dependencyRoots = [],
+}) => {
+  const available = [];
+  const missing = [];
+  const refused = [];
+
+  for (const declared of dependencyRoots) {
+    if (!isContainedRoot(declared)) {
+      refused.push(declared);
+
+      continue;
+    }
+
+    const source = path.join(repositoryRoot, declared);
+    // eslint-disable-next-line no-await-in-loop
+    const installed = await stat(source).then((entry) => entry.isDirectory(), () => false);
+
+    if (installed) {
+      available.push(declared);
+    } else {
+      missing.push(declared);
+    }
+  }
+
+  return { available, missing, refused };
+};
+
+/**
  * Provide the dependency roots a project declared, beside the snapshot.
  *
  * A materialized snapshot holds tracked content, and installed dependencies are
@@ -162,40 +291,33 @@ const isContainedRoot = (declared) => {
  * outside every path-based rule that reads it (`SG-EVAL-001`, `NFR-REL-001`).
  */
 const provideDependencyRoots = async ({ repositoryRoot, executionRoot, dependencyRoots }) => {
+  const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
+  const missing = new Set(classified.missing);
   const provided = [];
-  const missing = [];
-  const refused = [];
 
-  for (const declared of dependencyRoots) {
-    if (!isContainedRoot(declared)) {
-      refused.push(declared);
-
-      continue;
-    }
-
-    const source = path.join(repositoryRoot, declared);
-    const installed = await stat(source).then((entry) => entry.isDirectory(), () => false);
-
-    if (!installed) {
-      missing.push(declared);
-
-      continue;
-    }
-
+  for (const declared of classified.available) {
     const destination = path.join(executionRoot, declared);
 
     try {
+      // eslint-disable-next-line no-await-in-loop
       await mkdir(path.dirname(destination), { recursive: true });
-      await symlink(source, destination, 'dir');
+      // eslint-disable-next-line no-await-in-loop
+      await symlink(path.join(repositoryRoot, declared), destination, 'dir');
       provided.push(declared);
-    } catch (error) {
+    } catch {
       // A platform or filesystem that cannot link is a stated condition, not a
       // silent degradation: the check would fail inside its own tool otherwise.
-      missing.push(declared);
+      missing.add(declared);
     }
   }
 
-  return { provided, missing, refused };
+  return {
+    provided,
+    // Declaration order, so what a maintainer reads back is the order they
+    // wrote, whichever way a root turned out to be unavailable.
+    missing: dependencyRoots.filter((declared) => missing.has(declared)),
+    refused: classified.refused,
+  };
 };
 
 /** Recompute the identity of what is actually on disk in the execution root. */
@@ -234,7 +356,14 @@ export const captureSnapshot = async ({
   }
 
   try {
-    const relatives = await listTrackedPaths(repositoryRoot, runGit);
+    // Each kind is enumerated by the same question its materialization answers:
+    // `checkout-index` writes the index, so the index is what `git-index` lists;
+    // a worktree snapshot is written from the worktree, so the worktree is what
+    // it lists. Enumerating one and materializing the other is what let the two
+    // disagree (`SG-EVAL-001`).
+    const relatives = kind === 'git-index'
+      ? await listTrackedPaths(repositoryRoot, runGit)
+      : await listWorktreePaths(repositoryRoot, runGit);
 
     await mkdir(executionRoot, { recursive: true });
 

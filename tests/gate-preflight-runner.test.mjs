@@ -1,17 +1,39 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { configurationIdentity } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
 import {
   describeAdapter,
   normalizeTurn,
 } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
-import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
+import { readRepositoryConfiguration } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
+import {
+  evaluate,
+  evaluateWithoutSubject,
+} from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
+import {
+  OPERATION,
+  PROTOCOL_VERSION,
+  validateDecision,
+  validateEvaluationRequest,
+} from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
+import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
+import { EXECUTION_ROOT_PREFIXES } from '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs';
 import { runPreflight } from '../skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs';
 
 const runFile = promisify(execFile);
@@ -74,7 +96,7 @@ const throwawayRepository = async (t) => {
   return root;
 };
 
-const configureClone = async (root) => {
+const configureClone = async (root, { dependencyRoots = [] } = {}) => {
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(
     path.join(root, 'tools/check.mjs'),
@@ -122,7 +144,13 @@ const configureClone = async (root) => {
       '    total_seconds: 600',
       '  bypass:',
       '    enabled: false',
-      '  execution: {}',
+      ...(dependencyRoots.length === 0
+        ? ['  execution: {}']
+        : [
+          '  execution:',
+          '    dependency_roots:',
+          ...dependencyRoots.map((declared) => `      - ${declared}`),
+        ]),
       '  evidence: {}',
       '',
     ].join('\n'),
@@ -138,6 +166,12 @@ const PINNED_RUNNER = Object.freeze({
   version: process.versions.node,
 });
 
+/**
+ * TB-031: the pinned identities are computed the way `activate` computes them,
+ * because the preflight runner now reconciles them against this machine. A
+ * receipt pinning `sha256:configuration` describes a clone no activation could
+ * produce and would report drift on every turn.
+ */
 const publishReceipt = async (root) => {
   const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
     cwd: root,
@@ -148,22 +182,29 @@ const publishReceipt = async (root) => {
     common,
     'change-evaluation-gate/evidence/activation',
   );
+  const read = await readRepositoryConfiguration({ repositoryRoot: root });
+  const body = {
+    receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
+    previewId: 'sha256:preview',
+    repository: { root },
+    configuration: {
+      identity: configurationIdentity({
+        schemaVersion: read.configuration?.schema_version ?? null,
+        policy: read.configuration?.evaluation_gate ?? null,
+      }),
+      schemaVersion: read.configuration?.schema_version ?? null,
+    },
+    runtime: {
+      gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
+      runnerVersion: 'fixture/1.0.0',
+      runners: [PINNED_RUNNER],
+    },
+  };
 
   await mkdir(directory, { recursive: true });
   await writeFile(
     path.join(directory, 'receipt.json'),
-    `${JSON.stringify({
-      receiptVersion: 'change-evaluation-gate/activation-receipt/v1',
-      receiptId: 'sha256:receipt',
-      previewId: 'sha256:preview',
-      repository: { root },
-      configuration: { identity: 'sha256:configuration', schemaVersion: 4 },
-      runtime: {
-        gate: { id: 'change-evaluation-gate', version: '1.0.0', protocolVersion: '1.0' },
-        runnerVersion: 'fixture/1.0.0',
-        runners: [PINNED_RUNNER],
-      },
-    }, null, 2)}\n`,
+    `${JSON.stringify({ ...body, receiptId: contentIdentity(body) }, null, 2)}\n`,
     'utf8',
   );
 };
@@ -183,10 +224,15 @@ const cursorStopPayload = (root, overrides = {}) => ({
   ...overrides,
 });
 
-const runPackaged = ({ cwd, payload, args = ['--adapter', 'cursor'] }) => new Promise((resolve, reject) => {
+const runPackaged = ({
+  cwd,
+  payload,
+  args = ['--adapter', 'cursor'],
+  environment = {},
+}) => new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [PACKAGED_RUNNER, ...args], {
     cwd,
-    env: isolatedGitEnvironment(),
+    env: { ...isolatedGitEnvironment(), ...environment },
   });
   let stdout = '';
   let stderr = '';
@@ -530,3 +576,406 @@ test('SG-OWNER-001: no client name and no native feedback field lives outside th
   assert.match(declarations, /\bcursor\b/i);
 });
 
+/**
+ * TB-037 — Do not present a decision the gate itself would refuse.
+ *
+ * `TB-033` made the authoritative runner judge every decision with
+ * `validateDecision` before it may exit `0`. The preflight must reach the same
+ * verdict about the same decision, so these fixtures drive the real
+ * `runPreflight` and hand it, through its injected `evaluate` seam, decisions
+ * the contract rejects.
+ */
+
+const evidenceLogPath = (root) => path.join(
+  root,
+  '.git',
+  'change-evaluation-gate/evidence/log.ndjson',
+);
+
+test('TB-037 AC-ADAPT-002 / NFR-REL-003: a decision the contract rejects presents as unverified through the declared channel', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  for (const decision of [
+    { authorization: 'allow', outcome: 'passed' },
+    null,
+    'passed',
+    { protocolVersion: '9.9', authorization: 'allow' },
+  ]) {
+    const result = await runPreflight({
+      cwd: root,
+      stdin: `${JSON.stringify(cursorStopPayload(root))}\n`,
+      argv: ['--adapter', 'cursor'],
+      environment: isolatedGitEnvironment(),
+      evaluate: async () => decision,
+    });
+
+    assert.equal(result.exitCode, 0, `a preflight always exits 0: ${JSON.stringify(decision)}.`);
+    assert.equal(result.view.outcome, 'unverified', JSON.stringify(decision));
+    assert.equal(result.view.authorization, 'not-authoritative', JSON.stringify(decision));
+    assert.equal(result.view.blocking, false, JSON.stringify(decision));
+
+    const body = JSON.parse(result.stdout);
+
+    assert.match(body.followup_message, /unverified/i, JSON.stringify(decision));
+    assert.match(
+      body.followup_message,
+      /could not be read/i,
+      `the message must say the decision could not be read: ${body.followup_message}`,
+    );
+    assert.match(
+      body.followup_message,
+      /\d+ contract finding/i,
+      `the message must count the findings rather than reproduce them: ${body.followup_message}`,
+    );
+    assert.equal(
+      /decision\.(checks|diagnostics|evaluationId)/.test(body.followup_message),
+      false,
+      `a message an agent is prompted with must not dump contract findings: ${body.followup_message}`,
+    );
+  }
+});
+
+test('TB-037 FR-EVID-001: a decision the contract rejects leaves no Evidence envelope', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  const result = await runPreflight({
+    cwd: root,
+    stdin: `${JSON.stringify(cursorStopPayload(root))}\n`,
+    argv: ['--adapter', 'cursor'],
+    environment: isolatedGitEnvironment(),
+    evaluate: async () => ({ authorization: 'allow', outcome: 'passed' }),
+  });
+
+  assert.equal(result.view.outcome, 'unverified');
+
+  const log = await readFile(evidenceLogPath(root), 'utf8').catch(() => '');
+
+  assert.equal(
+    log.trim(),
+    '',
+    `a decision the contract rejects is not a record of an evaluation: ${log}`,
+  );
+});
+
+test('TB-037 AC-EVAL-002: the preflight judges completeness with the contract, and carries no second rule', async () => {
+  const source = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs'),
+    'utf8',
+  );
+
+  const authoritative = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /contractFindings\(/,
+    'the preflight must judge completeness with the contract, not with a field check.',
+  );
+  assert.match(
+    authoritative,
+    /export const contractFindings = \(decision\) => \{\s*try \{\s*return validateDecision\(decision\);/,
+    'the wrapper both runners share must be the one that calls validateDecision.',
+  );
+  assert.equal(
+    /decision\.(checks|outcome|authorization|evaluationId)\s*(===|!==|==|!=|\?\?|\|\|)/.test(source),
+    false,
+    'a second completeness rule in the preflight is the divergence TB-037 removes.',
+  );
+});
+
+/**
+ * TB-039 — Do no work for a turn that changed nothing.
+ *
+ * The preflight is registered on the end of every turn, so it runs when the
+ * maintainer only asked a question and nothing in the worktree moved. For that
+ * turn it used to materialize the whole clone, hash it, remove it, and append
+ * an Evidence envelope, in order to reach the silence that was already
+ * determined before any of it began.
+ *
+ * Applicability is a function of the changed paths alone: with none, every
+ * configured check is `not-applicable` whether or not a copy exists. These
+ * fixtures observe the copy directly, through a temporary directory the runner
+ * cannot create anything in — a run that tries to materialize a root there
+ * fails and says so, and a run that never tries is silent.
+ */
+
+const commitWorktree = async (root, message) => {
+  await runFile('git', ['add', '--all'], { cwd: root, env: isolatedGitEnvironment() });
+  await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Preflight Runner',
+    'commit', '--quiet', '--message', message,
+  ], { cwd: root, env: isolatedGitEnvironment() });
+};
+
+/** A clone whose worktree has nothing in it Git does not already have. */
+const settledClone = async (t, options = {}) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, options);
+  await commitWorktree(root, 'configured');
+  await publishReceipt(root);
+
+  const status = await runFile('git', ['status', '--porcelain'], {
+    cwd: root,
+    env: isolatedGitEnvironment(),
+  });
+
+  assert.equal(status.stdout, '', 'the fixture must start with nothing changed at all.');
+
+  return root;
+};
+
+/**
+ * A readable, unwritable temporary directory for one child runner.
+ *
+ * `mkdtemp` cannot create a directory here, so materializing an execution root
+ * is impossible rather than merely unobserved. This is the whole observation:
+ * the roots a run leaves behind are removed in a `finally`, so counting them
+ * afterwards can never tell a run that copied the tree from one that did not.
+ */
+const unwritableTemporaryRoot = async (t) => {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'gate-preflight-tmp-')));
+
+  t.after(async () => {
+    await chmod(root, 0o700).catch(() => {});
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  });
+  await chmod(root, 0o500);
+
+  return root;
+};
+
+const rootsUnder = async (directory) => (await readdir(directory).catch(() => []))
+  .filter((entry) => EXECUTION_ROOT_PREFIXES.some((prefix) => entry.startsWith(prefix)));
+
+test('TB-039 AC-EVAL-004 / NFR-PERF-001: a preflight turn against a clean worktree materializes no execution root', async (t) => {
+  const root = await settledClone(t);
+  const temporaryRoot = await unwritableTemporaryRoot(t);
+
+  const settled = await runPackaged({
+    cwd: root,
+    payload: cursorStopPayload(root),
+    environment: { TMPDIR: temporaryRoot },
+  });
+
+  assert.equal(settled.exitCode, 0, `expected exit 0, got ${settled.exitCode}: ${settled.stderr}`);
+  assert.equal(
+    settled.stdout,
+    '',
+    `a turn that changed nothing must reach silence without materializing anything: ${settled.stdout}`,
+  );
+  assert.deepEqual(await rootsUnder(temporaryRoot), []);
+
+  // The same clone, the same unwritable directory, one untracked file: the
+  // skip must trigger on an empty change set and on nothing else, so this turn
+  // still tries to materialize and reports that it could not.
+  await writeFile(path.join(root, 'app/Invoice.php'), 'new\n', 'utf8');
+
+  const changed = await runPackaged({
+    cwd: root,
+    payload: cursorStopPayload(root),
+    environment: { TMPDIR: temporaryRoot },
+  });
+
+  assert.match(
+    JSON.parse(changed.stdout).followup_message,
+    /unverified/i,
+    'an untracked file is a change, and a change is still captured before it is graded.',
+  );
+  assert.deepEqual(await rootsUnder(temporaryRoot), []);
+});
+
+test('TB-039 FR-ADAPT-005: a settled turn answers with exactly the silence the surface declares', async (t) => {
+  const root = await settledClone(t);
+  const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    result.stdout,
+    describeAdapter('cursor').capabilities.feedback.none,
+    `the agent's channel must carry the declared silence form and nothing else: ${result.stdout}`,
+  );
+  assert.equal(
+    result.stderr,
+    '',
+    `a settled turn is not a deliberate silence a maintainer needs explained: ${result.stderr}`,
+  );
+});
+
+test('TB-039 AC-EVAL-004: a settled turn still grades every configured check as not-applicable', async (t) => {
+  const root = await settledClone(t);
+  const result = await runPreflight({
+    cwd: root,
+    stdin: `${JSON.stringify(cursorStopPayload(root))}\n`,
+    argv: ['--adapter', 'cursor'],
+    environment: isolatedGitEnvironment(),
+  });
+
+  assert.equal(result.view.outcome, 'passed');
+  assert.equal(result.view.authorization, 'not-authoritative');
+  assert.equal(result.view.blocking, false);
+  assert.deepEqual(
+    result.view.presentation.checks.map((check) => [check.id, check.outcome]),
+    [['configuration.broad-tests.test', 'not-applicable']],
+    'the configured checks are still reported, and still reported as not applicable.',
+  );
+});
+
+test('TB-039 RISK-010 / FR-EVID-001: a settled turn appends no Evidence envelope', async (t) => {
+  const root = await settledClone(t);
+
+  await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+  await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  const log = await readFile(evidenceLogPath(root), 'utf8').catch(() => '');
+
+  assert.equal(
+    log.trim(),
+    '',
+    `a turn that carried no verdict about any change is not a record worth keeping: ${log}`,
+  );
+});
+
+/** The request shape the preflight normalizes one settled turn into. */
+const settledRequest = (root) => {
+  const adapter = describeAdapter('cursor');
+
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    operation: OPERATION,
+    repository: { root },
+    change: { kind: 'worktree', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'regression-only', contractRef: null },
+    invocation: {
+      role: adapter.role,
+      trigger: 'work-complete',
+      adapter: {
+        id: adapter.id,
+        surface: adapter.surface,
+        version: adapter.version,
+        capabilities: { nativeBlocking: adapter.capabilities.blocking.native },
+      },
+      sessionId: 'preflight-session',
+    },
+  };
+};
+
+test('TB-039 AC-EVID-002: the decision says an unrecorded settled turn was never recorded, so a reader cannot mistake it for a lost one', async (t) => {
+  const root = await settledClone(t);
+  const request = settledRequest(root);
+
+  assert.deepEqual(validateEvaluationRequest(request), []);
+
+  const appended = [];
+  const store = {
+    root: path.join(root, '.git/change-evaluation-gate/evidence'),
+    appendEvidence: async (entry) => {
+      appended.push(entry);
+
+      return { appended: true, evidenceId: `sha256:${'1'.repeat(64)}`, entry: {} };
+    },
+  };
+  const decision = await evaluateWithoutSubject(request, {
+    runnerVersion: 'fixture/1.0.0',
+    providerVersions: { configuration: '1.0.0' },
+    checks: [],
+    policy: null,
+    evidenceStore: store,
+  });
+
+  assert.deepEqual(validateDecision(decision), [], 'the no-subject decision must satisfy the contract.');
+  assert.equal(decision.outcome, 'passed');
+  assert.equal(decision.snapshot.id, null);
+  assert.equal(decision.snapshot.executionRoot, null);
+  assert.deepEqual(appended, [], 'a settled turn appends nothing.');
+  assert.equal(decision.evidence.persisted, false);
+  assert.equal(
+    decision.evidence.reference.notRecorded,
+    'no-change-to-record',
+    `the decision must state that nothing was recorded and why: ${JSON.stringify(decision.evidence.reference)}`,
+  );
+  assert.equal(
+    decision.evidence.reference.reasonCode,
+    null,
+    'a turn deliberately not recorded carries no store failure.',
+  );
+});
+
+test('TB-039 AC-EVID-002 / FR-EVID-001: a settled turn that has something to say is recorded, because the record is what bounds repeating it', async (t) => {
+  const root = await settledClone(t);
+  const request = settledRequest(root);
+  const appended = [];
+  const store = {
+    root: path.join(root, '.git/change-evaluation-gate/evidence'),
+    appendEvidence: async (entry) => {
+      appended.push(entry);
+
+      return { appended: true, evidenceId: `sha256:${'2'.repeat(64)}`, entry: {} };
+    },
+  };
+  const decision = await evaluateWithoutSubject(request, {
+    runnerVersion: 'fixture/1.0.0',
+    providerVersions: { configuration: '1.0.0' },
+    checks: [],
+    // A declared dependency root this clone never installed: nothing changed,
+    // and the evaluation still has a diagnostic to report.
+    policy: { execution: { dependency_roots: ['vendor'] } },
+    evidenceStore: store,
+  });
+
+  assert.deepEqual(validateDecision(decision), []);
+  assert.equal(decision.outcome, 'unverified');
+  assert.equal(appended.length, 1, 'a verdict that will be repeated must be counted.');
+  assert.equal(decision.evidence.persisted, true);
+});
+
+test('TB-039 AC-EVID-002: the repetition budget still bounds the follow-up loop when nothing in the worktree ever changes', async (t) => {
+  // A settled worktree whose evaluation is still unverified, because a declared
+  // dependency root is not installed. This is the shape that could loop: the
+  // preflight speaks, the client re-prompts, the worktree stays exactly as it
+  // was, and the same verdict comes back. The bound is the gate's own appended
+  // record, so this proves the record is still made where it is load-bearing.
+  const root = await settledClone(t, { dependencyRoots: ['vendor'] });
+  const { maxIterations } = describeAdapter('cursor').capabilities.feedback;
+  const answered = [];
+
+  for (let attempt = 0; attempt < maxIterations + 2; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+    answered.push(result.stdout !== '');
+  }
+
+  assert.equal(
+    answered.slice(0, maxIterations).every((spoke) => spoke === true),
+    true,
+    `the first ${maxIterations} unverified verdicts are worth saying: ${JSON.stringify(answered)}.`,
+  );
+  assert.equal(
+    answered.slice(maxIterations).some((spoke) => spoke === true),
+    false,
+    `an unchanged verdict repeated past the declared bound must go quiet: ${JSON.stringify(answered)}.`,
+  );
+});
+
+test('TB-039 NFR-REL-001: the authoritative runner asks no question before it captures', async () => {
+  const authoritative = await readFile(
+    path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(
+    authoritative,
+    /listChangedPaths|evaluateWithoutSubject/,
+    'on a commit the snapshot is what the checks run against, so that runner always captures.',
+  );
+});

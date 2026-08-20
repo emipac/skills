@@ -1,14 +1,14 @@
 # TB-032 — Keep host paths out of the stored envelope, and let it state that it was stored
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 32-keep-host-paths-out-of-the-evidence-identity
 Draft key: TB-032
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -170,21 +170,65 @@ state rather than history and is out of scope.
 
 ## Acceptance Criteria
 
-- [ ] `NFR-REL-001`, `AC-EVID-001`: two evaluations of identical content in one
+- [x] `NFR-REL-001`, `AC-EVID-001`: two evaluations of identical content in one
   clone, materialized into different temporary directories, append exactly one
   envelope, and the log records both appends referencing that one envelope.
-- [ ] `FR-EVID-001`, `NFR-AUD-001`: a stored envelope states that it was
+- [x] `FR-EVID-001`, `NFR-AUD-001`: a stored envelope states that it was
   persisted and names its own evidence identity, and that statement is
   consistent with the decision the caller received.
-- [ ] `NFR-REL-001`: no stored envelope contains a host-local execution-root
+- [x] `NFR-REL-001`: no stored envelope contains a host-local execution-root
   path; the run-local path remains available to a maintainer through the
   Lifecycle event or a retention field, and that location is recorded on
   completion.
-- [ ] `SG-EVID-001`, `AC-EVID-002`: appends stay atomic and append-only, one
+- [x] `SG-EVID-001`, `AC-EVID-002`: appends stay atomic and append-only, one
   Lifecycle event per append is unchanged, and existing envelopes written
   before this change remain readable, prunable, and auditable.
-- [ ] `FR-EVID-004`: pruning previews, confirmations, and tombstones behave
+- [x] `FR-EVID-004`: pruning previews, confirmations, and tombstones behave
   identically for a deduplicated envelope referenced by several evaluations.
+
+## Decisions this slice recorded
+
+1. **The duplication had three causes, not one.** The ticket states the five
+   preflight envelopes differ "only in strings like `gate-preflight-exec-uB9ozI`
+   versus `gate-preflight-exec-OEhA53`". Diffing the preserved envelopes shows
+   they also differ in each attempt's `durationMs` and in captured output that
+   quotes the execution root — and therefore in `decision.evidence.id` itself,
+   which is different in all five. The execution-root exclusion never made that
+   identity stable; it only looked stable in the two hook-runner envelopes,
+   which executed no attempts and so had no durations to vary. Deduplication
+   required eliding all three: the path wherever it appears, the durations, and
+   the path inside captured output and its inline excerpt.
+
+2. **The execution root is recorded on the append-only log entry.** The ticket
+   offered the Lifecycle event or "a per-append retention field". The envelope's
+   `retention` block is inside the addressed bytes, so it cannot hold a value
+   that varies per append; the Lifecycle event is schema-audited and states one
+   governed action, not a runner's scaffolding. The log entry is the per-append
+   record that is neither addressed nor schema-bound, so `log.ndjson` entries
+   now carry `execution: { executionRoot, attempts: [{ checkId, attempt,
+   durationMs }] }`. The decision the caller receives is untouched, so a
+   runner's diagnostics and stderr still name the real path.
+
+3. **`decision.evidence.id` had to change too.** It is embedded in the stored
+   decision, so an identity that varied per run would have made the envelope
+   vary per run whatever the store normalized. `buildDecision` now computes it
+   over the same projection the store writes, which is what `NFR-REL-001`
+   already claimed it was.
+
+4. **The store version was bumped rather than the envelope shape kept.**
+   Envelopes are `change-evaluation-gate/evidence/v2`. The layout is unchanged,
+   `v1` and `v2` envelopes coexist in one store, and all eight preserved
+   real-world `v1` envelopes still recompute their own identity under the new
+   reader — which is the backward-readability evidence for `SG-EVID-001` and
+   `FR-EVID-004`.
+
+5. **Deduplication is a skipped write, not a skipped append.** An envelope
+   already on disk is left exactly as written and reported as
+   `deduplicated: true`; the log entry and the Lifecycle event are still
+   appended. One governed action still leaves one event, and `TB-027`'s
+   repetition budget — which counts log entries matching an `evaluationId` —
+   counts exactly what it counted before, proved by its own existing packaged
+   test continuing to pass.
 
 ## Verification Matrix
 

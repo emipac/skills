@@ -97,6 +97,24 @@ becomes `sensitive-capture-unsafe` / `unverified`.
 the pinned identity of each surface against the observed one. Independent drift
 of any of them is `authoritative` severity:
 
+`observeControlSurface` (`hook-runner.mjs`) is the one function that assembles
+the observed side, and both runners that reach a maintainer reach it: the
+authoritative runner and the packaged preflight runner pass its result to
+`evaluate` as the `controlSurface` dependency on every evaluation. A second
+assembly of it is prohibited (`SG-OWNER-001`).
+
+What it observes, and what it cannot:
+
+| Surface | Observed from |
+| --- | --- |
+| `runtime` | The gate program deciding now — its identity and protocol version. The gate release version and `runnerVersion` are declared by the caller that ran activation and are not readable from the machine, so they are carried from the pin rather than asserted |
+| `adapters` | The adapter set the installed gate declares, under the ids activation consented to |
+| `managed-hooks` | The gate-owned registration on disk, at the path the receipt named. A receipt that pinned no block identity pinned nothing to observe |
+| `receipt` | The receipt's own content identity, recomputed from the file. Without it a receipt edited to re-pin a weakened configuration would match itself |
+| `trusted-configuration` | `configurationIdentity` over the clone's configuration — the same rule the receipt was pinned with (`AC-CFG-004`) |
+| `command-descriptors` | The pinned executables re-observed on disk, and the invocation each declared check would run now, composed through the one shared composition rule |
+| `providers` | Nothing. Activation pins no provider identities, so a receipt that names some cannot be matched by this machine — and an unobservable surface is drift, never an assumed match |
+
 - `gate status` reports `broken` (`lifecycle.mjs`, `controlSurface` input).
 - An authoritative evaluation carries the `integrity-drift` diagnostic, which
   normalizes the decision to `unverified` and the authorization to `deny`
@@ -128,7 +146,7 @@ independent drift of the machine.
 
 ## Capability
 
-`gate-security-control-smoke` proves all three packaged behaviors against
+`gate-security-control-smoke` proves all four packaged behaviors against
 throwaway Git repositories under the OS temporary directory, a real Evidence
 store, a real child-process check, and a real isolated materialization. Its
 canaries are synthetic literals invented for the fixture.

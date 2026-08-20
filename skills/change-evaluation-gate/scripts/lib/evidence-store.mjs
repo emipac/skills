@@ -26,13 +26,28 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { boundOutput, resolveEvidenceLimits } from './evidence-bounds.mjs';
+import {
+  contentIdentity,
+  hostPathVariants,
+  storedDecision,
+  withEvidenceIdentity,
+  withoutHostPaths,
+} from './evidence-identity.mjs';
 import { createLifecycleEvent, validateLifecycleEvent } from './lifecycle-event.mjs';
 import { createRedactor, residualFindings } from './redaction.mjs';
 
 const runFile = promisify(execFile);
 
-/** The versioned on-disk shape of this store. */
-export const EVIDENCE_STORE_VERSION = 'change-evaluation-gate/evidence/v1';
+/**
+ * The versioned on-disk shape of this store.
+ *
+ * `v2` states what changed in the envelope: run-local values are elided from
+ * the addressed bytes and the record states its own persistence. The store
+ * layout is unchanged and `v1` envelopes stay readable, prunable, and
+ * auditable beside `v2` ones — which is what versioning an append-only store
+ * is for (`SG-EVID-001`, `FR-EVID-004`).
+ */
+export const EVIDENCE_STORE_VERSION = 'change-evaluation-gate/evidence/v2';
 
 /** Runtime-owned directory name under the Git common directory. */
 export const STORE_DIRECTORY = path.join('change-evaluation-gate', 'evidence');
@@ -47,22 +62,11 @@ const defaultRunGit = async (repositoryRoot, args) => {
   return stdout;
 };
 
-const canonical = (value) => {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonical).join(',')}]`;
-  }
-
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  }
-
-  return JSON.stringify(value ?? null);
-};
-
 const digestOf = (value) => createHash('sha256').update(value).digest('hex');
 
-/** Content identity over a canonical serialization; never over host paths. */
-export const contentIdentity = (value) => `sha256:${digestOf(canonical(value))}`;
+// One scheme, stated once. Re-exported here because this store is where every
+// caller already reaches for it.
+export { contentIdentity };
 
 /**
  * Blobs are content-addressed, so one stored blob can be referenced by several
@@ -95,6 +99,52 @@ const groupByBlob = (records) => {
 
   return [...grouped.values()];
 };
+
+/**
+ * Is `candidate` a path the directory `owner` actually contains?
+ *
+ * Destructive operations answer this again at the moment of the write. A
+ * containment established when a preview was built proves nothing about the
+ * string a removal is about to hand the filesystem, and the id a blob path is
+ * derived from is only ever as trustworthy as whatever produced it.
+ */
+export const containedWithin = (owner, candidate) => {
+  const root = path.resolve(owner);
+  const target = path.resolve(candidate);
+  const relative = path.relative(root, target);
+
+  return relative !== ''
+    && !relative.startsWith('..')
+    && !path.isAbsolute(relative);
+};
+
+/**
+ * The load-bearing identity of one prune preview.
+ *
+ * Everything a removal acts on and nothing that merely describes when it was
+ * taken: the selector that chose the blobs, every blob's id, size, age, and the
+ * evaluations referencing it, and the total. Two previews with this identity
+ * describe the same removal against the same store; two that differ do not, and
+ * a confirmation granted against one of them cannot be spent on the other.
+ */
+const prunePreviewIdentity = (preview) => contentIdentity({
+  selector: {
+    evaluationIds: preview?.selector?.evaluationIds ?? null,
+    appendedBefore: preview?.selector?.appendedBefore ?? null,
+    reclaimBytes: preview?.selector?.reclaimBytes ?? null,
+  },
+  blobs: (preview?.blobs ?? []).map((blob) => ({
+    blobId: blob?.blobId ?? null,
+    bytes: blob?.bytes ?? null,
+    appendedAt: blob?.appendedAt ?? null,
+    references: (blob?.references ?? []).map((reference) => ({
+      evaluationId: reference?.evaluationId ?? null,
+      checkId: reference?.checkId ?? null,
+      attempt: reference?.attempt ?? null,
+    })),
+  })),
+  totalBytes: preview?.totalBytes ?? null,
+});
 
 /**
  * Resolve the Git common directory. All linked worktrees of one clone answer
@@ -416,6 +466,11 @@ export const openEvidenceStore = async ({
     const attempts = [];
     const redactedDecision = redactor.redactValue(decision ?? null);
     const redactionRules = [...redactedDecision.rules];
+    // The one run-local path everything written here is normalized against. A
+    // check reports where it ran; the record of what it decided must not
+    // (NFR-REL-001).
+    const executionRoot = redactedDecision.value?.snapshot?.executionRoot ?? null;
+    const executionRootVariants = hostPathVariants(executionRoot);
     let redactedBytes = redactedDecision.redactedBytes;
     let evaluationBlobBytes = 0;
 
@@ -427,7 +482,14 @@ export const openEvidenceStore = async ({
         ? output.bytes.toString('utf8')
         : String(output?.text ?? '');
       const redactedOutput = redactor.redactText(raw);
-      const captured = Buffer.from(redactedOutput.text, 'utf8');
+      // Elision of the run-local path follows redaction and precedes bounding
+      // and addressing, so identical output from two runs of one evaluation is
+      // one stored blob rather than two that differ by a temporary directory
+      // name (NFR-REL-001, SG-SECRET-001).
+      const captured = Buffer.from(
+        withoutHostPaths(redactedOutput.text, executionRootVariants),
+        'utf8',
+      );
       const checkId = output?.checkId ?? null;
 
       redactionRules.push(...redactedOutput.rules);
@@ -487,10 +549,14 @@ export const openEvidenceStore = async ({
       });
     }
 
+    const blobIds = pending.map(({ bytes }) => `sha256:${digestOf(bytes)}`);
     const envelope = {
       storeVersion: EVIDENCE_STORE_VERSION,
       evaluationId,
-      decision: redactedDecision.value,
+      // The stored decision is the decision with its run-local values elided
+      // and its own persistence stated. The decision the caller received is
+      // untouched (NFR-REL-001, NFR-AUD-001).
+      decision: storedDecision(redactedDecision.value, { blobIds }),
       redaction: {
         version: redactor.version ?? null,
         // Identity and source only; a Sensitive value never travels.
@@ -508,8 +574,8 @@ export const openEvidenceStore = async ({
           blobBytes: evaluationBlobBytes,
         },
       },
-      blobs: pending.map(({ bytes, descriptor }) => ({
-        blobId: `sha256:${digestOf(bytes)}`,
+      blobs: pending.map(({ bytes, descriptor }, index) => ({
+        blobId: blobIds[index],
         bytes: bytes.length,
         checkId: descriptor.checkId,
         attempt: descriptor.attempt,
@@ -557,8 +623,23 @@ export const openEvidenceStore = async ({
     const evidenceId = contentIdentity(envelope);
     const hex = evidenceId.replace(/^sha256:/, '');
     const envelopePath = path.join(paths.envelopes, hex.slice(0, 2), `${hex}.json`);
+    // Identical evidence addresses one envelope, and an envelope that already
+    // exists is left exactly as it was written. Nothing is rewritten, which is
+    // what append-only means here (SG-EVID-001, AC-EVID-001).
+    const existing = await readFile(envelopePath, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') {
+        return null;
+      }
 
-    await writeAtomic(envelopePath, `${JSON.stringify({ ...envelope, evidenceId }, null, 2)}\n`);
+      throw error;
+    });
+
+    if (existing === null) {
+      await writeAtomic(
+        envelopePath,
+        `${JSON.stringify(withEvidenceIdentity(envelope, evidenceId), null, 2)}\n`,
+      );
+    }
 
     const entry = {
       evidenceId,
@@ -566,6 +647,21 @@ export const openEvidenceStore = async ({
       appendedAt: clock().toISOString(),
       envelopePath: path.relative(root, envelopePath),
       blobIds: blobs.map((blob) => blob.blobId),
+      // The run-local facts of this one append. They are elided from the
+      // addressed envelope because they say nothing about what was evaluated,
+      // and they are kept here, per append and never content-addressed,
+      // because every diagnosis of a real run has needed them (NFR-REL-001,
+      // NFR-OPER-001).
+      execution: {
+        executionRoot,
+        attempts: (redactedDecision.value?.checks ?? []).flatMap((check) => (
+          (check?.attempts ?? []).map((attempt) => ({
+            checkId: check?.id ?? null,
+            attempt: attempt?.attempt ?? null,
+            durationMs: attempt?.durationMs ?? null,
+          }))
+        )),
+      },
     };
 
     await appendLine(paths.log, entry);
@@ -579,6 +675,10 @@ export const openEvidenceStore = async ({
 
     return {
       appended: true,
+      // Whether these bytes were already on disk. The append still happened —
+      // it is in the log and it left its Lifecycle event — and one evaluation
+      // still occupies one envelope (AC-EVID-001).
+      deduplicated: existing !== null,
       evidenceId,
       evaluationId,
       envelopePath,
@@ -645,23 +745,27 @@ export const openEvidenceStore = async ({
   };
 
   /**
-   * Remove exactly what one preview identified, and only after its confirmation
-   * token matches. A mismatch removes nothing and records a refusal — never a
-   * successful deletion (AC-EVID-002).
+   * Remove exactly what a preview recomputed against the store right now
+   * identifies, and only after the maintainer's confirmation reproduces it.
+   *
+   * The confirmation names what the maintainer approved. It does not authorize
+   * the object it arrived beside: that object is a claim about the store, and
+   * the claim is re-established here by re-deriving the preview from the files
+   * as they are at the moment of removal. Nothing the caller holds decides what
+   * is deleted, which is what makes an altered preview — or a preview the
+   * caller wrote outright — remove nothing (AC-EVID-002, SG-EVID-001).
    */
   const confirmPrune = async ({ preview = null, confirmation = null } = {}) => {
     const expected = preview?.confirmationToken ?? null;
-    const matched = typeof expected === 'string'
-      && typeof confirmation === 'string'
-      && expected === confirmation;
-
-    if (!matched) {
+    const refuse = async (reasonCode, reason, detail = null) => {
       const refusal = {
         pruningId: randomUUID(),
         prunedAt: clock().toISOString(),
         pruned: false,
         outcome: 'refused',
-        reasonCode: 'preview-mismatch',
+        reasonCode,
+        reason,
+        ...(detail === null ? {} : { detail }),
         selector: preview?.selector ?? null,
         previewedBlobIds: (preview?.blobs ?? []).map((blob) => blob.blobId),
         expectedConfirmation: expected,
@@ -676,45 +780,69 @@ export const openEvidenceStore = async ({
         before: expected,
         after: null,
         outcome: 'refused',
-        reason: 'preview-mismatch: the confirmation did not reproduce the preview, so nothing was removed.',
+        reason: `${reasonCode}: ${reason}`,
       });
 
       return { ...refusal };
+    };
+
+    const matched = typeof expected === 'string'
+      && typeof confirmation === 'string'
+      && expected === confirmation;
+
+    if (!matched) {
+      return refuse(
+        'preview-mismatch',
+        'the confirmation did not reproduce the preview, so nothing was removed.',
+      );
+    }
+
+    // The one step that removes the caller's object from the trust path. The
+    // same selector is re-run against the store as it is now, and the removal
+    // proceeds only when that fresh preview is the very thing the maintainer
+    // confirmed. A store that changed — for any reason, forged object or
+    // ordinary concurrent append — stops here.
+    const recomputed = await previewPrune(preview.selector ?? {});
+
+    if (recomputed.confirmationToken !== confirmation
+      || prunePreviewIdentity(recomputed) !== prunePreviewIdentity(preview)) {
+      return refuse(
+        'preview-stale',
+        'the store no longer matches the preview this confirmation was granted against, so nothing was removed; preview again and confirm the new preview.',
+        {
+          expected: prunePreviewIdentity(preview),
+          actual: prunePreviewIdentity(recomputed),
+          recomputedConfirmationToken: recomputed.confirmationToken,
+        },
+      );
+    }
+
+    // Every path this removal will touch, re-established as living under the
+    // blob directory this store owns — at the moment of the write, not when the
+    // preview was built. A blob id that resolves anywhere else is not this
+    // store's to delete, whatever produced it (SG-EVID-001).
+    const escaping = recomputed.blobs.filter((blob) => !containedWithin(paths.blobs, blobPath(blob.blobId)));
+
+    if (escaping.length > 0) {
+      return refuse(
+        'path-escapes-store',
+        'a previewed blob resolves outside the Evidence store, so nothing was removed; preview again and confirm the new preview.',
+        { blobIds: escaping.map((blob) => blob.blobId) },
+      );
     }
 
     const pruningId = randomUUID();
     const prunedAt = clock().toISOString();
     const removed = [];
+    // Kept in the record shape because pruning records are append-only history
+    // that existing readers parse. Nothing reaches it any more: a blob another
+    // evaluation referenced since the preview now changes the recomputed
+    // preview, so that case is a stated refusal above rather than a silent
+    // partial prune.
     const retained = [];
     let reclaimedBytes = 0;
 
-    // A preview is a snapshot of what was referenced when it was taken. Between
-    // then and now another evaluation may have appended output with identical
-    // content, which content-addressing stores as this same blob. Removing it
-    // would strand an envelope nobody asked to prune, so the live index decides
-    // (FR-EVID-004, SG-EVID-001).
-    const live = new Map(groupByBlob(await listBlobs()).map((blob) => [blob.blobId, blob]));
-    const referenceKey = (reference) => [
-      reference?.evaluationId ?? null,
-      reference?.checkId ?? null,
-      reference?.attempt ?? null,
-    ].join('\x00');
-
-    for (const blob of preview.blobs) {
-      const previewed = new Set((blob.references ?? []).map(referenceKey));
-      const current = live.get(blob.blobId)?.references ?? [];
-      const gained = current.filter((reference) => !previewed.has(referenceKey(reference)));
-
-      if (gained.length > 0) {
-        retained.push({
-          blobId: blob.blobId,
-          reason: 'referenced-since-preview',
-          references: gained,
-        });
-
-        continue;
-      }
-
+    for (const blob of recomputed.blobs) {
       // The blob file goes; nothing else does. The tombstone is appended first
       // so an interrupted prune can never leave an unrecorded removal.
       const tombstone = {
@@ -739,8 +867,9 @@ export const openEvidenceStore = async ({
       pruned: true,
       outcome: 'removed',
       reasonCode: null,
-      selector: preview.selector ?? null,
-      previewedBlobIds: preview.blobs.map((blob) => blob.blobId),
+      reason: null,
+      selector: recomputed.selector ?? null,
+      previewedBlobIds: recomputed.blobs.map((blob) => blob.blobId),
       expectedConfirmation: expected,
       removed,
       retained,
@@ -753,7 +882,7 @@ export const openEvidenceStore = async ({
       before: expected,
       after: pruningId,
       outcome: 'succeeded',
-      reason: `Removed ${removed.length} blob(s) and reclaimed ${reclaimedBytes} bytes; ${retained.length} previewed blob(s) were retained because an evaluation referenced them after the preview; envelopes, decisions, events, pruning records, and tombstones were preserved.`,
+      reason: `Removed ${removed.length} blob(s) and reclaimed ${reclaimedBytes} bytes, exactly as the preview recomputed at confirmation identified; envelopes, decisions, events, pruning records, and tombstones were preserved.`,
     });
 
     return { ...record };

@@ -12,10 +12,6 @@
  * told travels through the declared channel.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-
 import {
   describeAdapter,
   formatFeedback,
@@ -25,15 +21,21 @@ import {
 import { createBoundedExecutor } from './bounded-execution.mjs';
 import { composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
 import { gateChecksFromConfiguration } from './configuration.mjs';
-import { evaluate } from './evaluate.mjs';
+import { evaluate, evaluateWithoutSubject } from './evaluate.mjs';
 import { openEvidenceStore } from './evidence-store.mjs';
 import {
   commandOwner,
+  contractFindings,
+  createExecutionRoot,
+  observeControlSurface,
   openStore,
   pinnedRunners,
+  releaseExecutionRoot,
   resolveConfiguration,
   resolveReceipt,
+  sweepOrphanedExecutionRoots,
 } from './hook-runner.mjs';
+import { listChangedPaths } from './snapshot.mjs';
 
 const adapterIdFromArgv = (argv) => {
   const index = argv.indexOf('--adapter');
@@ -194,6 +196,13 @@ export const runPreflight = async ({
   // what the gate has already recorded rather than by a client counter.
   let openedStore = null;
 
+  // How many contract findings the returned decision produced, or `null` when
+  // the contract accepted it. Only the count is kept: what the preflight
+  // presents is submitted to an agent as its next user message, so a full dump
+  // of findings would put a wall of contract text where a short instruction
+  // belongs (`FR-ADAPT-005`).
+  let rejectedFindingCount = null;
+
   const evaluateActivated = async (request) => {
     const configuration = await resolveConfiguration(request.repository.root);
 
@@ -240,7 +249,54 @@ export const runPreflight = async ({
 
     openedStore = store.store;
 
-    const executionRoot = await mkdtemp(path.join(tmpdir(), 'gate-preflight-exec-'));
+    // The same contract the authoritative runner judges by, consulted at the
+    // earliest point this runner owns the decision. A decision that runner
+    // would refuse is not a set of check results this surface may render as
+    // though someone had produced them (`AC-EVAL-002`, `NFR-REL-003`).
+    const judged = (decision) => {
+      const findings = contractFindings(decision);
+
+      if (findings.length > 0) {
+        rejectedFindingCount = findings.length;
+      }
+
+      return decision;
+    };
+
+    const gateInputs = {
+      runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
+      providerVersions: { configuration: '1.0.0' },
+      checks,
+      policy: configuration.policy,
+      evidenceStore: store.store,
+      // The same observation the authoritative runner makes, from the same
+      // owner, so the two can never disagree about what this machine is
+      // (`SG-OWNER-001`). Under preflight the same drift presents as
+      // `unverified` and `not-authoritative`: it warns a maintainer, and it
+      // blocks nothing (`SG-SUPPORT-001`).
+      controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
+    };
+
+    // Is there a subject at all? This runner is registered on the end of every
+    // turn, so most of the turns it answers are turns where the maintainer
+    // asked a question and nothing in the worktree moved. Applicability is a
+    // function of the changed paths alone, so an empty list decides the whole
+    // evaluation before a snapshot could be read by anything — and the copy,
+    // its hashing, and its removal are simply not made (`TB-039`,
+    // `NFR-PERF-001`). Asked fresh every turn: nothing is remembered from the
+    // last one, and this narrows only when this runner does the work, never
+    // what it decides.
+    if ((await listChangedPaths(request.repository.root, request.change.kind)).length === 0) {
+      return judged(await evaluateWithoutSubject(request, gateInputs));
+    }
+
+    // The same reclamation the authoritative runner performs, from the same
+    // owner: either runner's turn collects what any interrupted run abandoned,
+    // and neither says a word about it (TB-038). A turn that materializes
+    // nothing has nothing to reclaim beside it and nothing to reclaim for.
+    await sweepOrphanedExecutionRoots();
+
+    const executionRoot = await createExecutionRoot('gate-preflight-exec-');
     const executor = createBoundedExecutor({
       totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
       resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
@@ -250,18 +306,14 @@ export const runPreflight = async ({
     });
 
     try {
-      return await evaluateSeam(request, {
+      return judged(await evaluateSeam(request, {
+        ...gateInputs,
         executionRoot,
-        runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
-        providerVersions: { configuration: '1.0.0' },
         resolvePrerequisite: () => true,
-        checks,
-        policy: configuration.policy,
         execute: executor.execute,
-        evidenceStore: store.store,
-      });
+      }));
     } finally {
-      await rm(executionRoot, { recursive: true, force: true });
+      await releaseExecutionRoot(executionRoot);
     }
   };
 
@@ -281,6 +333,20 @@ export const runPreflight = async ({
     return answer({
       adapterId: adapter.id,
       view: unverified({ adapter, family: 'capability', detail: `${adapter.id} is not a declared adapter.` }),
+    });
+  }
+
+  // A decision the contract rejects gets the answer every other unreadable
+  // result on this surface already gets. Nothing about authority changes: this
+  // narrows what the preflight is willing to say about a decision, not what it
+  // is allowed to do (`AC-ADAPT-002`, `SG-SUPPORT-001`).
+  if (rejectedFindingCount !== null) {
+    return answer({
+      adapterId: adapter.id,
+      view: unverified({
+        adapter,
+        detail: `the evaluation returned a decision that could not be read against the evaluation contract, so nothing about this working tree was verified (${rejectedFindingCount} contract finding${rejectedFindingCount === 1 ? '' : 's'})`,
+      }),
     });
   }
 

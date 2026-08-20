@@ -43,10 +43,10 @@ contract without changing it.
 
 | Field | Meaning |
 | --- | --- |
-| `storeVersion` | `change-evaluation-gate/evidence/v1` |
+| `storeVersion` | `change-evaluation-gate/evidence/v2` |
 | `evidenceId` | Content identity of the canonical envelope |
 | `evaluationId` | The evaluation this envelope records |
-| `decision` | The complete redacted decision envelope |
+| `decision` | The complete redacted decision envelope, with its run-local values elided and its own persistence stated |
 | `redaction` | Redaction version, declared Sensitive input names and sources, applied rules, and redacted byte count |
 | `retention.limits` | The effective inline, per-blob, and per-evaluation limits |
 | `retention.violations` | Every configured limit that tried to exceed a fixed ceiling |
@@ -57,6 +57,43 @@ contract without changing it.
 Identity is canonical: key order never changes an envelope's identity, and
 identical evidence addresses one envelope while the append-only log still
 records each append.
+
+## What an envelope is a function of
+
+An evaluation identity is a function of what was evaluated (`NFR-REL-001`), so
+values that describe one run on one machine are replaced by the stated constant
+`<run-local>` before anything is hashed or written:
+
+- the host-local execution root, in the field that names it and in every string
+  that quotes it, including a check's own captured output and its inline
+  excerpt;
+- the wall-clock `durationMs` of each Check attempt;
+- the store root and append instant inside the envelope's own evidence
+  reference.
+
+Two evaluations of identical content therefore address one envelope, however
+many temporary directories they were materialized into, and the append-only log
+still records one entry per append.
+
+Nothing is lost. Every elided value is a fact about one append, so it is
+recorded on that append's log entry, under `execution`: the `executionRoot` the
+snapshot was materialized into and the `durationMs` of every attempt. Log
+entries are per-append and never content-addressed. The decision the caller
+receives is untouched: a maintainer reading a runner's diagnostics still gets
+the real path and the real durations.
+
+A stored envelope states its own persistence: `decision.evidence.persisted` is
+`true` and `decision.evidence.reference.evidenceId` is the envelope's own
+identity. That is self-referential, so the identity is computed with the
+placeholder `<evidence-identity>` in that one position and the real value is
+substituted into the bytes that are written — the same technique
+`HOOK_RECEIPT_PLACEHOLDER` uses for the Activation receipt. A reader recomputes
+the identity by putting the two unhashed values back (`envelopeIdentity`), which
+answers correctly for `v1` and `v2` envelopes alike.
+
+`v1` envelopes, written before this rule, carry the host execution root, real
+durations, and `persisted: false`. They remain readable, prunable, and
+auditable exactly as written; nothing rewrites them.
 
 ## Fixed v1 ceilings
 
@@ -166,8 +203,8 @@ resolves a grant synchronously, so ledger reads and appends are synchronous.
 
 A decision reports its own evidence:
 
-- `evidence.id` — stable identity of the decision, independent of the host-local
-  execution root;
+- `evidence.id` — stable identity of the decision, independent of every
+  run-local value: the host-local execution root and the attempt durations;
 - `evidence.persisted` — whether the envelope was appended;
 - `evidence.reference` — the appended `evidenceId`, store root, append instant,
   and retained blob identities; or, when persistence did not happen, the reason

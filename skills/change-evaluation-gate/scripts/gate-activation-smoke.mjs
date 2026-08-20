@@ -36,6 +36,12 @@
  *    whose executable was removed denies as drift rather than re-resolving to
  *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003,
  *    TB-028, TB-030).
+ * 6. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
+ *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
+ *    commit, terminates under the signal, moves no HEAD, and leaves no
+ *    execution root; a root an earlier abandoned run left behind is reclaimed
+ *    by the next commit, and those commits still deny and allow exactly as they
+ *    did before (TB-038, AC-CFG-004, AC-EVAL-004, SG-SECRET-001, NFR-REL-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -52,8 +58,8 @@
  * Exit status is 0 only when every scenario holds.
  */
 
-import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +89,10 @@ import {
 } from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
+import {
+  EXECUTION_ROOT_PREFIXES,
+  EXECUTION_ROOT_RETENTION_MS,
+} from './lib/hook-runner.mjs';
 import { validateGatePolicy } from './lib/policy.mjs';
 
 const CAPABILITY = 'gate-activation-smoke';
@@ -665,6 +675,289 @@ const authoritativeCommit = async (activated) => {
   return { name: 'authoritative-commit', ok: findings.length === 0, findings };
 };
 
+/**
+ * The activated clone is graded by the configuration it activated, or it is not
+ * graded at all (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
+ *
+ * This runs on the clone `authoritativeCommit` just proved: a real hook, a real
+ * receipt, real commits. The weakening is a hand edit of the configuration file
+ * because the supported writer refuses to reconfigure an already-configured
+ * clone — which is exactly why the edit has to be noticed here: it is the one
+ * route left, it needs no unusual step, and nothing else would ever see it.
+ */
+const activatedConfigurationBinds = async (activated) => {
+  const findings = [];
+  const { root, hookPath } = activated;
+
+  await assertThrowawayRepository(root);
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const trustedConfiguration = await readFile(configurationPath, 'utf8');
+  const weakenedConfiguration = trustedConfiguration.replace(
+    `  checks: ${JSON.stringify(GATE_POLICY.checks)}`,
+    `  checks: ${JSON.stringify({ required: [], advisory: [REQUIRED_CHECK] })}`,
+  );
+
+  check(
+    findings,
+    weakenedConfiguration !== trustedConfiguration,
+    'The fixture policy could not be weakened, so nothing below proves anything.',
+  );
+  await writeFile(configurationPath, weakenedConfiguration, 'utf8');
+
+  // The staged change is the same one the clone just refused. Only the policy
+  // changed — and it changed on disk, without even being staged, which is how
+  // little it would take.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--', SOURCE]);
+
+  const denied = await commit(root, 'a change the weakened policy would allow').then(
+    () => ({ failed: false, stdout: '', stderr: '' }),
+    (error) => ({ failed: true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+  const deniedOutput = `${denied.stdout}${denied.stderr}`;
+
+  check(findings, denied.failed === true, 'A policy edited after activation graded the next commit.');
+  check(findings, deniedOutput.includes('integrity-drift'), 'The denial did not name integrity drift.');
+  check(
+    findings,
+    deniedOutput.includes('trusted-configuration'),
+    'The denial did not name the trusted configuration surface.',
+  );
+  check(findings, deniedOutput.includes('gate repair'), 'The denial did not name `gate repair`.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A commit denied for drift still moved HEAD.',
+  );
+
+  // Nothing was repaired: the weakened configuration is still exactly as its
+  // author left it, and the receipt still pins what activation pinned.
+  check(
+    findings,
+    await readFile(configurationPath, 'utf8') === weakenedConfiguration,
+    'Observing drift rewrote the configuration it disagreed with.',
+  );
+
+  // Restoring the activated policy restores enforcement, so drift is a
+  // reconciliation and never a latch.
+  await writeFile(configurationPath, trustedConfiguration, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired again\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await commit(root, 'a change the activated policy allows').then(
+    () => ({ failed: false, stderr: '' }),
+    (error) => ({ failed: true, stderr: error.stderr ?? '' }),
+  );
+
+  check(findings, allowed.failed === false, `The restored clone refused a passing change: ${allowed.stderr}.`);
+
+  // The other surface a maintainer can reach without trying: the registered
+  // hook itself. Editing the gate-owned block is drift of what activation
+  // pinned, and it is reported by name.
+  const registration = await readFile(hookPath, 'utf8');
+
+  await writeFile(hookPath, `${registration}\n# edited after activation\n`, { encoding: 'utf8', mode: 0o755 });
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired once more\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const tampered = await commit(root, 'a change under an edited registration').then(
+    () => ({ failed: false, stdout: '', stderr: '' }),
+    (error) => ({ failed: true, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+  const tamperedOutput = `${tampered.stdout}${tampered.stderr}`;
+
+  check(findings, tampered.failed === true, 'An edited hook registration still authorized a commit.');
+  check(
+    findings,
+    tamperedOutput.includes('managed-hooks'),
+    `The denial did not name the managed-hooks surface: ${tamperedOutput}`,
+  );
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')).includes('# edited after activation'),
+    'Observing an edited registration repaired it.',
+  );
+
+  return { name: 'activated-configuration-binds', ok: findings.length === 0, findings };
+};
+
+/**
+ * Whether a clone still commits exactly as it did while merely configured.
+ *
+ * `configured` is not a label the transaction gets to assert: it is observable.
+ * Git is not authoritative, so a change an activated clone would have refused
+ * becomes a commit (AC-LIFE-002, AC-EVAL-001).
+ */
+const stillCommitsAsConfigured = async (root, message) => {
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  return commit(root, message).then(() => true, () => false);
+};
+
+/**
+ * TB-035: a receipt that cannot be published never enables authoritative Git.
+ *
+ * Without this, the clone is left with a registered hook and nothing for it to
+ * honour: every commit denies `activation-receipt-missing` while the maintainer
+ * was told activation succeeded (NFR-REL-002).
+ */
+const receiptFailureLeavesNoTrace = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const refusing = {
+    ...store,
+    activationReceipt: () => ({
+      ...store.activationReceipt(),
+      write: async () => {
+        throw new Error('injected failure while publishing the activation receipt');
+      },
+    }),
+  };
+  const { preview, result } = await activateFixture(root, refusing);
+
+  check(findings, result.activated === false, 'An activation with no receipt on disk reported success.');
+  check(
+    findings,
+    result.state === 'configured',
+    `A receipt failure reported ${result.state} rather than the configured state.`,
+  );
+  check(
+    findings,
+    result.step === 'receipt' && result.reasonCode === 'receipt-write-failed',
+    `Expected a receipt failure, got ${result.step}/${result.reasonCode}.`,
+  );
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'A failed receipt write left a receipt on disk.',
+  );
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'An activation with no receipt still registered a hook.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone with no receipt still commits'),
+    'A clone whose receipt was never written was left refusing commits.',
+  );
+
+  return findings;
+};
+
+/** TB-035: an exception after a gate-owned mutation is compensated, not thrown. */
+const interruptedActivationLeavesNoTrace = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const revoked = [];
+  const { preview, result } = await activateFixture(root, store, {
+    revokeTrust: async () => revoked.push('trust'),
+    selfTestAdapter: async () => {
+      throw new Error('injected exception after trust was established');
+    },
+  });
+
+  check(findings, result.activated === false, 'An interrupted activation reported success.');
+  check(
+    findings,
+    result.state === 'configured',
+    `An interrupted activation reported ${result.state} rather than the configured state.`,
+  );
+  check(
+    findings,
+    result.reasonCode === 'activation-interrupted',
+    `An interrupted activation reported ${result.reasonCode}.`,
+  );
+  check(findings, revoked.length === 1, 'The mutation made before the exception was not compensated.');
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'An interrupted activation left a registered hook behind.',
+  );
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'An interrupted activation left a receipt on disk.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone whose activation threw still commits'),
+    'An interrupted activation left the clone refusing commits.',
+  );
+
+  return findings;
+};
+
+/**
+ * TB-035: a compensating action that fails is reported, never assumed away.
+ *
+ * The failures were always collected. What this proves is that the reported
+ * state now reflects them, and that it names what the maintainer has to deal
+ * with by hand (SG-LIFE-001, FR-LIFE-019).
+ */
+const failedCompensationReportsRecovery = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const { preview, result } = await activateFixture(root, store, {
+    revokeTrust: async () => {
+      throw new Error('the client refused to withdraw the trust it granted');
+    },
+    registerHook: async () => {
+      throw new Error('injected failure immediately before Git enablement');
+    },
+  });
+
+  check(findings, result.activated === false, 'A half-unwound activation reported success.');
+  check(
+    findings,
+    result.state === 'recovery-required',
+    `A half-unwound clone reported ${result.state}, the same state a clean unwind reports.`,
+  );
+  check(
+    findings,
+    JSON.stringify(result.rollback.failures.map((failure) => failure.action)) === JSON.stringify(['trust']),
+    `The failed compensating action was not named: ${JSON.stringify(result.rollback.failures)}.`,
+  );
+  check(
+    findings,
+    result.rollback.remains.length === 1 && result.rollback.remains[0].includes('Trust established'),
+    `The report does not say what remains on disk: ${JSON.stringify(result.rollback.remains)}.`,
+  );
+
+  // Everything that did unwind is really gone: only the named change survives.
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'A half-unwound activation left its receipt on disk.',
+  );
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'A half-unwound activation left a registered hook behind.',
+  );
+
+  const events = await store.readEvents();
+
+  check(
+    findings,
+    /requires recovery/.test(events.at(-1)?.reason ?? ''),
+    `The recorded event does not say the clone requires recovery: ${events.at(-1)?.reason}.`,
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone that needs recovery still commits'),
+    'A half-unwound activation left the clone refusing commits.',
+  );
+
+  return findings;
+};
+
 /** A failure immediately before Git enablement leaves nothing behind. */
 const rollbackLeavesNoTrace = async () => {
   const findings = [];
@@ -727,6 +1020,13 @@ const rollbackLeavesNoTrace = async () => {
   );
 
   check(findings, committed === true, 'A failed activation still blocked a commit.');
+
+  // TB-035: the same scenario at the other points a transaction can fail after
+  // it has already changed something. Each clone must be one the maintainer can
+  // either use or fix — and the transaction must say which.
+  findings.push(...await receiptFailureLeavesNoTrace());
+  findings.push(...await interruptedActivationLeavesNoTrace());
+  findings.push(...await failedCompensationReportsRecovery());
 
   return { name: 'rollback-leaves-no-trace', ok: findings.length === 0, findings };
 };
@@ -997,6 +1297,42 @@ const hookProgramSelfTest = async () => {
     'A refused activation still blocked a commit.',
   );
 
+  // TB-035, NFR-REL-003: a program that starts, throws, and dies non-zero never
+  // read the subject, so its exit status is the shell's, not a decision. It is
+  // refused as unproved, distinctly from one that answered by allowing.
+  const crashingRoot = await fixtureRepository();
+  const crashingStore = await storeFor(crashingRoot);
+
+  await writeFile(
+    path.join(crashingRoot, 'tools/crashing-runner.mjs'),
+    "throw new Error('the hook program crashed before it read anything');\n",
+    'utf8',
+  );
+
+  const crashed = await activateFixture(crashingRoot, crashingStore, {}, {
+    runtime: {
+      runnerVersion: `${CAPABILITY}/1.0.0`,
+      hookProgram: { interpreter: process.execPath, script: 'tools/crashing-runner.mjs', args: [] },
+    },
+  });
+
+  check(
+    findings,
+    crashed.result.activated === false
+      && crashed.result.errors?.[0]?.reason === 'hook-program-unproved',
+    `A crashing hook program was not refused as unproved: ${JSON.stringify(crashed.result.errors)}.`,
+  );
+  check(
+    findings,
+    (await readFile(crashed.preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'A crashing hook program was still registered.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(crashingRoot, 'a clone with an unproved program still commits'),
+    'A refused crashing program left the clone refusing commits.',
+  );
+
   return { name: 'hook-program-self-test', ok: findings.length === 0, findings };
 };
 
@@ -1227,6 +1563,208 @@ const derivedConfigurationRoundTrip = async () => {
   };
 };
 
+/**
+ * A required check that announces it started and then refuses to finish.
+ *
+ * The only way to hold a real `git commit` inside a real evaluation long enough
+ * to interrupt it from outside. The timer is a backstop: this capability kills
+ * the process group long before it elapses, and nothing may be left running if
+ * the kill never lands.
+ */
+const BLOCKING_CHECK_SCRIPT = (sentinel) => [
+  "import { writeFileSync } from 'node:fs';",
+  '',
+  `writeFileSync(${JSON.stringify(sentinel)}, 'started\\n');`,
+  'setTimeout(() => process.exit(0), 30_000);',
+  '',
+].join('\n');
+
+const sleep = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+const executionRootsUnder = async (directory) => (await readdir(directory).catch(() => []))
+  .filter((entry) => EXECUTION_ROOT_PREFIXES.some((prefix) => entry.startsWith(prefix)));
+
+const until = async (predicate, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return true;
+    }
+
+    await sleep(25);
+  }
+
+  return false;
+};
+
+/**
+ * TB-038: a real commit interrupted mid-evaluation leaves no execution root.
+ *
+ * Every other scenario here runs an evaluation to completion, which is what
+ * makes it a test — and is exactly why interruption was never observed. This
+ * one presses Ctrl-C on a real `git commit` against a real activated clone by
+ * signalling the whole process group the way a terminal does, and then requires
+ * that the next commits still decide identically while reclaiming what an
+ * earlier `SIGKILL`-style abandonment left behind (AC-CFG-004, AC-EVAL-004,
+ * SG-SECRET-001, NFR-REL-001).
+ */
+const interruptedCommitLeavesNoRoot = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const { result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+
+  if (result.activated !== true) {
+    return { name: 'interrupted-commit-leaves-no-root', ok: false, findings };
+  }
+
+  // The interrupted commit gets its own temporary directory, so what it leaves
+  // behind is observable in isolation and can never be confused with another
+  // run's live root. The hook inherits TMPDIR through `git`.
+  const temporaryRoot = await temporaryDirectory('gate-activation-smoke-tmp-');
+  const sentinel = path.join(temporaryRoot, 'check-started');
+  const abandoned = path.join(temporaryRoot, 'gate-hook-runner-exec-abandoned');
+  const stale = new Date(Date.now() - EXECUTION_ROOT_RETENTION_MS - 3_600_000);
+
+  // What a `SIGKILL` leaves: a root no signal handler could ever have removed.
+  await mkdir(path.join(abandoned, 'snapshot'), { recursive: true });
+  await writeFile(path.join(abandoned, 'snapshot', SOURCE.replace('/', '-')), 'orphan\n', 'utf8');
+  await utimes(abandoned, stale, stale);
+
+  await writeFile(path.join(root, 'tools/check.mjs'), BLOCKING_CHECK_SCRIPT(sentinel), 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nunder evaluation\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+  const interrupted = spawn('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Smoke',
+    'commit', '--quiet', '--message', 'a commit the maintainer interrupts',
+  ], {
+    cwd: root,
+    detached: true,
+    env: { ...gitEnvironment(), TMPDIR: temporaryRoot },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  interrupted.stdout.resume();
+  interrupted.stderr.resume();
+
+  const ended = new Promise((resolve) => {
+    interrupted.on('close', (exitCode, signal) => resolve({ exitCode, signal }));
+  });
+  const started = await until(
+    async () => stat(sentinel).then(() => true).catch(() => false),
+    30_000,
+  );
+
+  check(findings, started === true, 'The commit never reached the check it grades with, so nothing was interrupted.');
+
+  const live = await executionRootsUnder(temporaryRoot);
+
+  check(
+    findings,
+    live.length === 1 && live[0] !== path.basename(abandoned),
+    `The interrupted commit had no live execution root to observe: ${JSON.stringify(live)}.`,
+  );
+  // The commit now under way already reclaimed what the earlier abandoned run
+  // left, before it materialized anything of its own.
+  check(
+    findings,
+    await stat(abandoned).then(() => false).catch(() => true),
+    'A commit did not reclaim the root an earlier abandoned run left behind.',
+  );
+
+  try {
+    // The whole process group, which is what a terminal signals on Ctrl-C: the
+    // hook and the check it spawned both receive it, exactly as they would.
+    process.kill(-interrupted.pid, 'SIGINT');
+  } catch {
+    check(findings, false, 'The interrupted commit could not be signalled.');
+  }
+
+  const outcome = await ended;
+
+  check(
+    findings,
+    outcome.signal === 'SIGINT' || outcome.exitCode !== 0,
+    `The interrupted commit was not terminated by the signal: ${JSON.stringify(outcome)}.`,
+  );
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'An interrupted commit still moved HEAD.',
+  );
+
+  // The runner's own root goes with the signal. Polled rather than read once,
+  // because `git` dies from the same signal and may report first.
+  const reclaimed = await until(
+    async () => (await executionRootsUnder(temporaryRoot)).length === 0,
+    10_000,
+  );
+
+  check(
+    findings,
+    reclaimed === true,
+    `An interrupted commit left its execution root behind: ${JSON.stringify(await executionRootsUnder(temporaryRoot))}.`,
+  );
+
+  // A second abandonment, so the reclamation is proved on a later run too and
+  // not only on the one that happened to be interrupted.
+  const abandonedAgain = path.join(temporaryRoot, 'gate-preflight-exec-abandoned');
+
+  await mkdir(path.join(abandonedAgain, 'snapshot'), { recursive: true });
+  await utimes(abandonedAgain, stale, stale);
+
+  // And the same clone decides the next commits exactly as it did before,
+  // reclaiming what the earlier abandonment left while it does.
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const commitIn = (message) => runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Smoke',
+    'commit', '--quiet', '--message', message,
+  ], { cwd: root, env: { ...gitEnvironment(), TMPDIR: temporaryRoot } }).then(
+    () => ({ failed: false, output: '' }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  const blocked = await commitIn('a change the gate must still refuse');
+
+  check(findings, blocked.failed === true, 'The clone stopped blocking after an interrupted commit.');
+  check(
+    findings,
+    blocked.output.includes(REQUIRED_CHECK),
+    `The denial after an interruption does not name the failing check: ${blocked.output}.`,
+  );
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await commitIn('a change the gate must still allow');
+
+  check(findings, allowed.failed === false, `The clone stopped allowing after an interrupted commit: ${allowed.output}.`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'The allowed commit after an interruption did not move HEAD.',
+  );
+  check(
+    findings,
+    (await executionRootsUnder(temporaryRoot)).length === 0,
+    `A later run did not reclaim the abandoned root: ${JSON.stringify(await executionRootsUnder(temporaryRoot))}.`,
+  );
+
+  return { name: 'interrupted-commit-leaves-no-root', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1243,10 +1781,18 @@ const main = async () => {
           ok: false,
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
+      activated.ok
+        ? await activatedConfigurationBinds(activated)
+        : {
+          name: 'activated-configuration-binds',
+          ok: false,
+          findings: ['Skipped: the packaged activation did not succeed.'],
+        },
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),
       await derivedConfigurationRoundTrip(),
+      await interruptedCommitLeavesNoRoot(),
     ];
   } finally {
     for (const root of temporaryRoots) {

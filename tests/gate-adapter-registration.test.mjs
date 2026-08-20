@@ -377,3 +377,110 @@ test('SG-HOOK-001: a container the Gate had to create is taken back with the ent
   // hooks container left behind to imply a registration that is not there.
   assert.equal(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'), pristine);
 });
+
+test('TB-036 AC-ADAPT-003, SG-HOOK-001: a container whose shape is not the declared one is unverified and left unchanged', async (t) => {
+  const root = await workspace(t);
+
+  // A real file whose `hooks` key is not a mapping. The Gate has no idea what
+  // this client means by it, which is exactly when it must not write.
+  await writeJson(root, '.claude/settings.local.json', {
+    permissions: { allow: ['Bash(ls:*)'], deny: [] },
+    hooks: 'managed-elsewhere',
+  });
+
+  const before = await readFile(path.join(root, '.claude/settings.local.json'), 'utf8');
+  const result = await registerAdapterSurface({
+    adapterId: 'claude-code-desktop',
+    repositoryRoot: root,
+    command: gateCommand(root),
+  });
+
+  assert.equal(result.registered, false);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.state, 'unverified');
+  assert.equal(result.reason, 'surface-shape-incompatible');
+  assert.equal(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'), before);
+});
+
+test('TB-036 AC-ADAPT-003, SG-HOOK-001: an event key holding a shape the declaration does not expect is unverified and left unchanged', async (t) => {
+  const root = await workspace(t);
+
+  await writeJson(root, '.cursor/hooks.json', {
+    version: 1,
+    hooks: { stop: { command: 'somebody-elses-hook' } },
+  });
+
+  const before = await readFile(path.join(root, '.cursor/hooks.json'), 'utf8');
+  const result = await registerAdapterSurface({
+    adapterId: 'cursor',
+    repositoryRoot: root,
+    command: gateCommand(root),
+  });
+
+  assert.equal(result.registered, false);
+  assert.equal(result.state, 'unverified');
+  assert.equal(result.reason, 'surface-shape-incompatible');
+  assert.equal(await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'), before);
+});
+
+test('TB-036 AC-ADAPT-003: a client file edited between read and write is refused rather than overwritten', async (t) => {
+  const root = await workspace(t);
+
+  await seedClientFiles(root);
+
+  const target = path.join(root, '.claude/settings.local.json');
+  const concurrent = `${JSON.stringify({
+    permissions: { allow: ['Bash(ls:*)', 'Bash(git:*)'], deny: [] },
+    hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'somebody-elses-hook' }] }] },
+  }, null, 2)}\n`;
+
+  const result = await registerAdapterSurface({
+    adapterId: 'claude-code-desktop',
+    repositoryRoot: root,
+    command: gateCommand(root),
+    // The seam the fixture uses to be the concurrent editor: it writes between
+    // the read the plan was built from and the write that publishes it.
+    beforePublish: async () => {
+      await writeFile(target, concurrent, 'utf8');
+    },
+  });
+
+  assert.equal(result.registered, false);
+  assert.equal(result.state, 'unverified');
+  assert.equal(result.reason, 'surface-changed-since-read');
+
+  // The concurrent editor's bytes survive, byte for byte.
+  assert.equal(await readFile(target, 'utf8'), concurrent);
+});
+
+test('TB-036 SG-HOOK-001: a withdrawal whose file was edited between read and write is refused rather than overwritten', async (t) => {
+  const root = await workspace(t);
+
+  await seedClientFiles(root);
+
+  const command = gateCommand(root);
+  const registration = await registerAdapterSurface({
+    adapterId: 'cursor',
+    repositoryRoot: root,
+    command,
+  });
+
+  assert.equal(registration.registered, true);
+
+  const target = path.join(root, '.cursor/hooks.json');
+  const registered = await readFile(target, 'utf8');
+  const concurrent = registered.replace('"version": 1', '"version": 2');
+
+  const result = await withdrawAdapterRegistration({
+    adapterId: 'cursor',
+    repositoryRoot: root,
+    registration,
+    beforePublish: async () => {
+      await writeFile(target, concurrent, 'utf8');
+    },
+  });
+
+  assert.equal(result.removed, false);
+  assert.equal(result.reason, 'surface-changed-since-read');
+  assert.equal(await readFile(target, 'utf8'), concurrent);
+});

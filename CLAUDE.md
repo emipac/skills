@@ -70,3 +70,5 @@ synchronization requires an explicit owning artifact and decision gate.
 Do not automatically commit or push changes. Preserve upstream attribution in
 `UPSTREAM.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE`, and the upstream changelog
 history.
+
+When reporting information to me, be very concise and sacrifice grammar for the sake of concision.
