@@ -208,6 +208,31 @@ const dependencies = (overrides = {}) => ({
 });
 
 /**
+ * The fixture hook program, which answers the activation self-test.
+ *
+ * An unconditional `process.exitCode = 1` used to pass the self-test without
+ * reading anything — fail-closed, but for the wrong reason. Activation now
+ * requires the program to name the subject it judged, so this fixture reads it
+ * and repeats its per-run id back (TB-035, NFR-REL-003).
+ */
+const FIXTURE_HOOK_PROGRAM = [
+  "import { readFileSync } from 'node:fs';",
+  '',
+  'const subjectPath = process.env.CHANGE_EVALUATION_GATE_SELF_TEST ?? null;',
+  '',
+  'if (subjectPath === null) {',
+  '  process.exitCode = 1;',
+  '} else {',
+  "  const subject = JSON.parse(readFileSync(subjectPath, 'utf8'));",
+  "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
+  '',
+  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test ${subject.selfTestId}\\n`);',
+  '  process.exitCode = denied ? 1 : 0;',
+  '}',
+  '',
+].join('\n');
+
+/**
  * A throwaway clone that already has everything removal must not touch: its own
  * pre-commit chain, an unrelated hook, a shared configuration file, a
  * project-installed asset, historical Evidence, and a global asset outside it.
@@ -218,7 +243,7 @@ const fixtureClone = async () => {
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await mkdir(path.join(root, '.claude', 'skills'), { recursive: true });
-  await writeFile(path.join(root, 'tools/gate-runner.mjs'), 'process.exitCode = 1;\n', 'utf8');
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), FIXTURE_HOOK_PROGRAM, 'utf8');
   await writeFile(path.join(root, 'tools/check.mjs'), 'process.exitCode = 0;\n', 'utf8');
   await writeFile(path.join(root, '.agent-framework.yaml'), SHARED_CONFIGURATION, 'utf8');
   await writeFile(path.join(root, '.claude/skills/gate.md'), '# project asset\n', 'utf8');

@@ -161,8 +161,13 @@ const activationDependencies = (overrides = {}) => ({
  * evaluating the directory it happens to be started in.
  */
 const SELF_TEST_GUARD = [
+  "import { readFileSync } from 'node:fs';",
+  '',
   'if (process.env.CHANGE_EVALUATION_GATE_SELF_TEST) {',
-  '  process.stdout.write("change-evaluation-gate: denied\\n");',
+  // A denial is only proof when the program answered *this* subject, so the
+  // subject's own per-run id is read and repeated back (NFR-REL-003).
+  "  const subject = JSON.parse(readFileSync(process.env.CHANGE_EVALUATION_GATE_SELF_TEST, 'utf8'));",
+  '  process.stdout.write(`change-evaluation-gate: denied / self-test ${subject.selfTestId}\\n`);',
   '  process.exit(1);',
   '}',
   '',

@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import {
   ACTIVATION_RECEIPT_VERSION,
+  ACTIVATION_STATES,
   ACTIVATION_STEPS,
   activate,
   configurationIdentity,
@@ -98,11 +99,23 @@ const DENYING_RUNNER = [
   "  const subject = JSON.parse(await readFile(subjectPath, 'utf8'));",
   "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
   '',
-  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"}\\n`);',
+  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test ${subject.selfTestId}\\n`);',
   '  process.exitCode = denied ? 1 : 0;',
   '}',
   '',
 ].join('\n');
+
+/**
+ * Install the hook program activation proves before it registers anything.
+ *
+ * Every fixture that expects to reach a step after `self-test` needs one: a
+ * clone whose pinned program is not there at all crashes on start, and a crash
+ * is not a denial (TB-035, NFR-REL-003).
+ */
+const installHookProgram = async (root, program = DENYING_RUNNER) => {
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), program, 'utf8');
+};
 
 const gatePolicy = () => ({
   checks: { required: ['broad_test'], advisory: [] },
@@ -263,6 +276,8 @@ test('activation preview refuses invalid Gate policy before consent is possible'
 
 test('failure immediately before Git enablement leaves the clone configured with no receipt and no registration', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const store = await storeFor(root);
   const revoked = [];
   const attempted = [];
@@ -458,16 +473,23 @@ test('successful activation records the previewed identities and enables Git las
   assert.deepEqual(receipt.runtimeInputs, ['APP_TOKEN']);
   assert.equal(JSON.stringify(receipt).includes(RUNTIME_INPUT_CANARY), false);
 
-  // ... and the self-test results.
-  assert.deepEqual(receipt.selfTests, [
-    { name: 'evaluation-process', ok: true, detail: 'evaluation process reached a decision' },
-    {
-      name: 'hook-program',
-      ok: true,
-      detail: 'The registered hook program denied the self-test subject with exit 1.',
-    },
-    { name: 'adapter:git', ok: true, detail: 'git responded' },
-  ]);
+  // ... and the self-test results. The hook-program detail names the exact
+  // subject the program answered, which is what makes its denial a decision
+  // rather than an exit status (TB-035, NFR-REL-003).
+  assert.deepEqual(
+    receipt.selfTests.map((entry) => ({ name: entry.name, ok: entry.ok })),
+    [
+      { name: 'evaluation-process', ok: true },
+      { name: 'hook-program', ok: true },
+      { name: 'adapter:git', ok: true },
+    ],
+  );
+  assert.equal(receipt.selfTests[0].detail, 'evaluation process reached a decision');
+  assert.match(
+    receipt.selfTests[1].detail,
+    /^The registered hook program denied the self-test subject [0-9a-f-]{36} with exit 1\.$/,
+  );
+  assert.equal(receipt.selfTests[2].detail, 'git responded');
 
   // The published receipt is exactly what the transaction returned.
   assert.deepEqual(await store.activationReceipt().read(), receipt);
@@ -721,6 +743,8 @@ test('rollback removes only unchanged gate-owned content and never repairs forei
 
 test('a failing adapter self-test leaves no partial adapter set active and never enables Git', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const store = await storeFor(root);
   const active = [];
   const registered = [];
@@ -864,6 +888,8 @@ test('activation refuses every prohibited entry point and writes nothing', async
 
 test('failure at an early step rolls back and leaves the clone configured', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const request = activationRequest(root);
   const preview = await previewActivation(request, dependencies());
   const consent = consentFor(preview);
@@ -967,6 +993,8 @@ const seedClientConfigurations = async (root) => {
 
 test('AC-ADAPT-003: activation registers two differently declared desktop surfaces without branching on a client name', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const store = await storeFor(root);
 
   await seedClientConfigurations(root);
@@ -1047,6 +1075,8 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
 
 test('SG-HOOK-001: an activation that fails after registering desktop surfaces leaves every client configuration file exactly as it was', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const store = await storeFor(root);
 
   await seedClientConfigurations(root);
@@ -1091,6 +1121,8 @@ test('SG-HOOK-001: an activation that fails after registering desktop surfaces l
 
 test('AC-ADAPT-003: a declared registration surface that cannot be confirmed is unverified and never counted as registered', async (t) => {
   const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
   const store = await storeFor(root);
 
   await seedClientConfigurations(root);
@@ -1236,4 +1268,344 @@ test('activation refuses a hook program that cannot start, and never mistakes a 
   assert.equal(result.receipt, null);
   assert.equal(await store.activationReceipt().read(), null);
   assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+});
+
+/**
+ * TB-035 — an activation that fails leaves a clone the maintainer can recover.
+ *
+ * Every fixture below drives the real transaction and observes what it reports
+ * about the clone, because the defect was never in what the transaction did: it
+ * was in what it claimed while the clone was in another state.
+ */
+
+/**
+ * A hook program that starts, crashes, and dies non-zero without ever reading
+ * the self-test subject.
+ *
+ * This is the shape `TB-020` admitted it could not tell apart from enforcement:
+ * fail-closed, but for the wrong reason. A clone registered with this program
+ * denies every real commit too.
+ */
+const CRASHING_RUNNER = "throw new Error('the hook program crashed before it read anything');\n";
+
+test('TB-035 NFR-REL-002: an activation whose receipt cannot be published never enables Git', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+  const registered = [];
+
+  // No evidence store at all: the transaction has nowhere to publish the one
+  // artifact the registered hook reads to know what was activated.
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    registerHook: async (registration) => registered.push(registration.path),
+  }));
+
+  assert.notEqual(
+    result.state,
+    'activated',
+    'a clone with no receipt on disk is not an activated clone.',
+  );
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'receipt');
+  assert.equal(result.reasonCode, 'receipt-store-missing');
+  assert.equal(result.receipt, null);
+
+  // Nothing was registered, so the clone commits exactly as it did while
+  // configured rather than denying `activation-receipt-missing` forever.
+  assert.deepEqual(registered, []);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+  assert.equal(await store.activationReceipt().read(), null);
+
+  await writeFile(path.join(root, 'source.txt'), 'proposed\n', 'utf8');
+  await runGit(root, ['add', '--all']);
+  await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Fixture',
+    'commit', '--quiet', '--message', 'a clone with no receipt still commits',
+  ], { cwd: root, env: isolatedGitEnvironment() });
+
+  assert.equal((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim(), '1');
+});
+
+test('TB-035 AC-LIFE-002: a receipt write that fails reports a non-activated state and leaves no registered hook', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+  const registered = [];
+  const revoked = [];
+  const refusingStore = {
+    ...store,
+    activationReceipt: () => ({
+      ...store.activationReceipt(),
+      write: async () => {
+        throw new Error('injected failure while publishing the activation receipt');
+      },
+    }),
+  };
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: refusingStore,
+    revokeTrust: async () => revoked.push('trust'),
+    registerHook: async (registration) => registered.push(registration.path),
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'receipt');
+  assert.equal(result.reasonCode, 'receipt-write-failed');
+  assert.deepEqual(registered, []);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(result.rollback.actions, ['trust']);
+  assert.deepEqual(result.rollback.failures, []);
+  assert.deepEqual(revoked, ['trust']);
+});
+
+test('TB-035 NFR-REL-002: a receipt that cannot be read back as it was written is not an activation', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+  const registered = [];
+  const removed = [];
+  // A store whose write reports success and whose bytes never land. Nothing
+  // downstream can tell the difference without reading the receipt back.
+  const silentStore = {
+    ...store,
+    activationReceipt: () => ({
+      ...store.activationReceipt(),
+      write: async (receipt) => receipt,
+      read: async () => null,
+      remove: async () => {
+        removed.push('receipt');
+
+        return store.activationReceipt().remove();
+      },
+    }),
+  };
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: silentStore,
+    registerHook: async (registration) => registered.push(registration.path),
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'receipt');
+  assert.equal(result.reasonCode, 'receipt-not-confirmed');
+  assert.equal(result.receipt, null);
+
+  // Git was never made authoritative, and the receipt's own compensating
+  // action was journalled before the confirmation, so it still ran.
+  assert.deepEqual(registered, []);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+  assert.deepEqual(result.rollback.actions, ['receipt', 'trust']);
+  assert.deepEqual(removed, ['receipt']);
+  assert.equal(await store.activationReceipt().read(), null);
+});
+
+test('TB-035 SG-LIFE-001: a rollback whose compensating action fails reports recovery-required and names what remains', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+    // The trust this transaction established really cannot be taken back.
+    revokeTrust: async () => {
+      throw new Error('the client refused to withdraw the trust it granted');
+    },
+    registerHook: async () => {
+      throw new Error('injected failure immediately before Git enablement');
+    },
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(
+    result.state,
+    'recovery-required',
+    'a half-unwound clone must not report the same state as one that unwound cleanly.',
+  );
+  assert.equal(result.step, 'git-enablement');
+  assert.equal(result.reasonCode, 'hook-registration-failed');
+
+  // Every failed compensating action is named, with what it left behind.
+  assert.deepEqual(result.rollback.actions, ['receipt', 'trust']);
+  assert.deepEqual(result.rollback.failures.map((failure) => failure.action), ['trust']);
+  assert.match(result.rollback.failures[0].message, /refused to withdraw/);
+  assert.match(result.rollback.failures[0].remains, /Trust established for claude-code/);
+  assert.deepEqual(result.rollback.remains, [result.rollback.failures[0].remains]);
+
+  // What did unwind is really gone: only the named change survives.
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+
+  // And the recorded lifecycle event says recovery, not a clean unwind.
+  const events = await store.readEvents();
+
+  assert.equal(events.at(-1).outcome, 'failed');
+  assert.match(events.at(-1).reason, /requires recovery/);
+  assert.equal(
+    /remains configured/.test(events.at(-1).reason),
+    false,
+    'a clone that still carries established trust must not be reported as merely configured.',
+  );
+});
+
+test('TB-035 NFR-REL-003: a hook program that crashes without answering the subject is unproved, not a denial', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), CRASHING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'self-test');
+  assert.equal(result.reasonCode, 'hook-program-self-test-failed');
+  assert.equal(
+    result.errors[0].reason,
+    'hook-program-unproved',
+    'a non-zero exit the shell produced is not a decision the program made.',
+  );
+  assert.notEqual(
+    result.errors[0].reason,
+    'hook-program-allowed-denied-change',
+    'and it is distinct from a program that answered by allowing.',
+  );
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+  assert.equal(await store.activationReceipt().read(), null);
+});
+
+test('TB-035 NFR-REL-003: a program that answers by denying still passes, and its proof names the subject', async (t) => {
+  const root = await throwawayRepository(t);
+  const store = await storeFor(root);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+  }));
+
+  assert.equal(result.activated, true, `Activation refused: ${result.reasonCode}.`);
+
+  const proof = result.receipt.selfTests.find((entry) => entry.name === 'hook-program');
+
+  assert.equal(proof.ok, true);
+  assert.match(
+    proof.detail,
+    /denied the self-test subject [0-9a-f-]{36} with exit 1/,
+    'the recorded proof must name the subject the program answered.',
+  );
+});
+
+test('TB-035 SG-LIFE-001: an exception thrown after a gate-owned mutation is compensated, not propagated', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
+  const store = await storeFor(root);
+  const revoked = [];
+  const request = activationRequest(root);
+  const preview = await previewActivation(request, dependencies());
+
+  // A throw, not a refusal, after trust has already been established.
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+    revokeTrust: async () => revoked.push('trust'),
+    selfTestAdapter: async () => {
+      throw new Error('the adapter self-test threw after trust was established');
+    },
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'self-test');
+  assert.equal(result.reasonCode, 'activation-interrupted');
+  assert.match(result.errors[0].message, /threw after trust was established/);
+
+  // The mutation that had already happened was compensated.
+  assert.deepEqual(result.rollback.actions, ['trust']);
+  assert.deepEqual(result.rollback.failures, []);
+  assert.deepEqual(revoked, ['trust']);
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+
+  // The failure is auditable rather than lost with the exception.
+  const events = await store.readEvents();
+
+  assert.equal(events.at(-1).outcome, 'failed');
+  assert.match(events.at(-1).reason, /activation-interrupted/);
+});
+
+test('TB-035: every state the transaction can report is reachable in a fixture', async (t) => {
+  const seen = new Set();
+
+  const run = async (overrides, mutate = () => {}) => {
+    const root = await throwawayRepository(t);
+    const store = await storeFor(root);
+
+    await mkdir(path.join(root, 'tools'), { recursive: true });
+    await writeFile(path.join(root, 'tools/gate-runner.mjs'), DENYING_RUNNER, 'utf8');
+
+    const request = activationRequest(root);
+    const preview = await previewActivation(request, dependencies());
+    const result = await activateFixture(
+      root,
+      { ...request, consent: consentFor(preview) },
+      dependencies({ evidenceStore: store, ...overrides }),
+    );
+
+    mutate(result);
+    seen.add(result.state);
+
+    return result;
+  };
+
+  // activated: the ordinary path, unchanged.
+  await run({});
+
+  // configured: a clean unwind the maintainer may simply retry.
+  await run({ registerHook: async () => { throw new Error('injected'); } });
+
+  // paused: a trust prompt the operator has not answered yet.
+  await run({ establishTrust: async () => ({ established: false, pending: true, reason: 'prompt' }) });
+
+  // recovery-required: an unwind that could not put the clone back.
+  await run({
+    registerHook: async () => { throw new Error('injected'); },
+    revokeTrust: async () => { throw new Error('the trust could not be withdrawn'); },
+  });
+
+  assert.deepEqual([...ACTIVATION_STATES].sort(), [...seen].sort());
 });

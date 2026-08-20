@@ -160,7 +160,7 @@ const runnerScript = () => [
   "  const subject = JSON.parse(await readFile(selfTestSubject, 'utf8'));",
   "  const denied = subject.checks.some((check) => check.required && check.outcome === 'failed');",
   '',
-  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test\\n`);',
+  '  process.stdout.write(`change-evaluation-gate: ${denied ? "denied" : "allowed"} / self-test ${subject.selfTestId}\\n`);',
   '  process.exit(denied ? 1 : 0);',
   '}',
   '',

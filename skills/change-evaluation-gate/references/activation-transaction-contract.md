@@ -3,7 +3,9 @@
 Activation is the explicit, clone-local, repository-bound transaction that turns
 a **configured** repository into an **activated** one. It previews exactly what
 it will do, obtains consent bound to that preview, proves every dependency, and
-enables authoritative Git **last**. Any failure leaves the clone configured.
+enables authoritative Git **last**. Any failure leaves the clone configured — or,
+when a compensating action could not be carried out, says so explicitly rather
+than claiming it.
 
 Installing assets, running setup, opening a client, or updating a plugin never
 activates anything. There is no global activation in v1.
@@ -54,6 +56,22 @@ It pins:
 | `runtimeInputs[]` | Runtime input **names** only — never a value |
 | `selfTests[]` | Every self-test that had to pass first |
 
+The receipt is the only thing the registered hook reads to know what was
+activated, so it is not optional to the outcome: a transaction with nowhere to
+publish one refuses at `receipt` with `receipt-store-missing`, and one whose
+write cannot be **read back** as it was written refuses with
+`receipt-not-confirmed`. Both refuse before `git-enablement`, so a clone never
+ends up with a registered hook and nothing for it to honour (`NFR-REL-002`).
+
+## Reported states
+
+| State | The clone |
+| --- | --- |
+| `activated` | Every step passed, the receipt is on disk and confirmed, and authoritative Git is enabled |
+| `configured` | Nothing gate-owned survives; the activation may simply be retried |
+| `paused` | Suspended at a trust prompt with nothing active, resumable only against the identities it recorded |
+| `recovery-required` | At least one compensating action failed. The report names each failed action and what it left behind; recovery stays a confirmed operator action (`FR-LIFE-019`) |
+
 ## Proving the hook program
 
 The registered hook program is runtime, and `FR-LIFE-004` requires runtime to be
@@ -62,7 +80,8 @@ a pure library prints nothing and exits `0`, so activation would install a hook
 that allows every commit and still report a healthy activated clone.
 
 So `self-test` **executes** the program it is about to register, against a change
-it must deny, and requires a non-zero exit:
+it must deny, and requires both a non-zero exit **and** evidence that the program
+read the subject:
 
 - the subject is a throwaway directory the transaction creates and removes. The
   maintainer's own work is never the subject, and nothing is left behind;
@@ -76,10 +95,16 @@ it must deny, and requires a non-zero exit:
 
 | Outcome | Result |
 | --- | --- |
-| Exits non-zero | Proved. The self-test is recorded in the receipt as `hook-program` |
+| Exits non-zero **and** names the subject's `selfTestId` in its output | Proved. The self-test is recorded in the receipt as `hook-program` |
 | Exits `0` | `hook-program-allowed-denied-change` — it enforces nothing |
 | Never starts | `hook-program-cannot-start` — its non-zero result is the shell, not a decision |
 | Never decides | `hook-program-unproved` — killed or timed out before it answered |
+| Exits non-zero without ever naming the subject | `hook-program-unproved` — a program that started and crashed is fail-closed for the wrong reason, and would refuse every real commit too |
+
+Naming the `selfTestId` is the whole check: the subject carries a per-run id no
+program can know without reading it, so repeating it back is the cheapest
+available proof that the exit status is a decision this program made about *this*
+subject rather than one the shell produced (`NFR-REL-003`).
 
 Every refusal fails the step with `hook-program-self-test-failed`, so the
 transaction unwinds and the clone is left configured with no receipt and no
@@ -98,6 +123,18 @@ Every gate-owned change is journalled with its compensating action and unwound
 last-in-first-out on any failure: hook registration, then the receipt, then each
 registered adapter in reverse, then trust. The result reports the step, a reason
 code, and the actions it unwound.
+
+The reported state is **derived** from that unwind, never assumed. A rollback in
+which every compensating action succeeded reports `configured`; one in which any
+failed reports `recovery-required` and carries `rollback.failures` (each failed
+action, why it failed, and what it left behind) and `rollback.remains` (what the
+maintainer still has to deal with by hand). No compensation is retried and none
+is invented.
+
+An exception thrown after a gate-owned mutation is caught rather than
+propagated: the journal is unwound exactly as a refusal would unwind it and the
+transaction reports `activation-interrupted` at the step it had reached
+(`SG-LIFE-001`).
 
 Rollback removes only unchanged gate-owned content. If a registered hook no
 longer matches what the transaction wrote, somebody else owns that file now:
@@ -201,8 +238,9 @@ required separately: a flag never implies it.
 | `trust` | `trust-not-established`, `trust-pending` (a **pause**, not a failure) |
 | `hook-chain-validation` | `hooks-path-shared`, `hook-manager-manual-registration`, `hook-marker-drift`, `hook-exists`, `hook-confirmation-mismatch`, `hook-chain-uncomposable` |
 | `self-test` | `self-test-failed`, `hook-program-self-test-failed`, `adapter-self-test-failed` |
-| `receipt` | `receipt-write-failed` |
+| `receipt` | `receipt-store-missing`, `receipt-write-failed`, `receipt-not-confirmed` |
 | `git-enablement` | `hook-registration-failed`, `activation-record-failed` |
+| any step | `activation-interrupted` — an exception escaped the pipeline; the journal was unwound and the clone's real state reported |
 
 ## The packaged runner
 

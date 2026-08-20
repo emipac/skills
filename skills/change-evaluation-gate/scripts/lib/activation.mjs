@@ -144,6 +144,33 @@ export const activationTransactionIdentity = ({
   previewId = null,
 }) => contentIdentity({ repository, configuration, adapters, previewId });
 
+/**
+ * Every state one Activation transaction can report about a clone.
+ *
+ * `configured` and `recovery-required` are both non-activated, but they are not
+ * the same clone: the first was fully unwound and may simply be retried, the
+ * second still carries something this transaction established and could not
+ * take back. Telling a maintainer the first when the truth is the second sends
+ * them down the wrong recovery path, which is the whole defect TB-035 fixes.
+ */
+export const ACTIVATION_STATES = Object.freeze([
+  'activated',
+  'configured',
+  'paused',
+  'recovery-required',
+]);
+
+/**
+ * The state a refusal may claim, derived from what its rollback achieved.
+ *
+ * The failures were always collected; nothing read them. A compensating action
+ * that failed means a gate-owned change survived the transaction, so the clone
+ * is not merely configured and must not say that it is (SG-LIFE-001).
+ */
+const stateAfterRollback = (rollback) => (
+  rollback.failures.length > 0 ? 'recovery-required' : 'configured'
+);
+
 const refusal = (step, reasonCode, errors = []) => ({
   activated: false,
   state: 'configured',
@@ -152,7 +179,7 @@ const refusal = (step, reasonCode, errors = []) => ({
   errors,
   receipt: null,
   order: [],
-  rollback: { performed: false, actions: [], failures: [] },
+  rollback: { performed: false, actions: [], failures: [], remains: [] },
   resumption: null,
 });
 
@@ -476,10 +503,12 @@ const runProgram = ({ interpreter, argv, cwd, env, timeoutMs }) => new Promise((
  * activated clone (FR-LIFE-004, NFR-REL-003).
  *
  * So the program is run against a throwaway subject that must be denied — never
- * the maintainer's own work, and nothing is left behind — and it must exit
- * non-zero. A program that cannot start, that is killed before it decides, or
- * that allows the subject is unproved and refused. Repairing it is not this
- * transaction's business.
+ * the maintainer's own work, and nothing is left behind — and it must both exit
+ * non-zero *and* show that it read the subject, by naming the subject's own
+ * per-run `selfTestId` in its output. A program that cannot start, that is
+ * killed before it decides, that allows the subject, or that exits non-zero
+ * without ever answering it is unproved and refused (NFR-REL-003). Repairing it
+ * is not this transaction's business.
  */
 export const selfTestHookProgramDenial = async ({
   program,
@@ -536,6 +565,12 @@ export const selfTestHookProgramDenial = async ({
       };
     }
 
+    // A program that answered names the subject it answered. The subject
+    // carries a per-run `selfTestId` no program can know without reading it, so
+    // repeating it is the cheapest available proof that this run reached a
+    // decision about *this* subject rather than about nothing at all.
+    const answered = `${outcome.stdout}${outcome.stderr}`.includes(selfTestId);
+
     if (outcome.exitCode === 0) {
       return {
         ok: false,
@@ -545,10 +580,22 @@ export const selfTestHookProgramDenial = async ({
       };
     }
 
+    // A non-zero exit alone is an exit status, not a decision. A program that
+    // started, threw, and died `1` without ever naming the subject proves only
+    // that it is broken — fail-closed, but for the wrong reason (NFR-REL-003).
+    if (!answered) {
+      return {
+        ok: false,
+        reason: 'hook-program-unproved',
+        detail: `The registered hook program exited ${outcome.exitCode} without naming the self-test subject ${selfTestId}; a program that merely fails to run is not a program that denies.`,
+        exitCode: outcome.exitCode,
+      };
+    }
+
     return {
       ok: true,
       reason: null,
-      detail: `The registered hook program denied the self-test subject with exit ${outcome.exitCode}.`,
+      detail: `The registered hook program denied the self-test subject ${selfTestId} with exit ${outcome.exitCode}.`,
       exitCode: outcome.exitCode,
     };
   } finally {
@@ -1305,34 +1352,15 @@ const pinnedRegistration = (result) => (
 );
 
 /**
- * Run one Activation transaction.
+ * The bookkeeping one Activation transaction reports itself through.
  *
- * Every seam that touches the machine is injected, so a fixture can inject a
- * genuine failure at any step and observe the rollback rather than simulate it.
+ * It owns the journal, the step order, the compensating unwind, and the two
+ * ways a transaction can end without activating. It is a separate object only
+ * so the pipeline can be wrapped: an exception thrown after a gate-owned
+ * mutation has to reach the same unwind and the same report as a refusal, and
+ * it cannot do that from inside the pipeline that threw (SG-LIFE-001).
  */
-export const activate = async (request, dependencies = {}) => {
-  const {
-    establishTrust,
-    revokeTrust = null,
-    selfTestEvaluation,
-    selfTestAdapter,
-    // The registered hook program is runtime, and FR-LIFE-004 requires runtime
-    // to be self-tested before Git is enabled. The default really executes it.
-    selfTestHookProgram = selfTestHookProgramDenial,
-    // Desktop adapter registration goes through the adapter's own declared
-    // surface. The seam stays injectable so a fixture can fail it on purpose,
-    // but the default is the real declaration-driven write: activation carries
-    // no knowledge of any client (FR-ADAPT-008, SG-OWNER-001).
-    registerAdapter = registerDeclaredSurface,
-    unregisterAdapter = withdrawDeclaredSurface,
-    registerHook = registerOwnedHook,
-    unregisterHook = removeOwnedHook,
-    composeHook = registerManagedBlock,
-    decomposeHook = removeManagedBlock,
-    evidenceStore = null,
-    clock = () => new Date(),
-  } = dependencies;
-
+const activationTransaction = ({ evidenceStore }) => {
   // Compensating actions, unwound last-in-first-out.
   const journal = [];
   const order = [];
@@ -1356,6 +1384,13 @@ export const activate = async (request, dependencies = {}) => {
       return `Activation paused at ${result.step} (${result.reasonCode}); no gate integration is active and it may be resumed only with the identities it recorded.`;
     }
 
+    // A clone that still carries something this transaction established is not
+    // a clone that "remains configured", and saying so would send the
+    // maintainer to the wrong recovery path (FR-LIFE-019).
+    if (result.state === 'recovery-required') {
+      return `Activation failed at ${result.step} (${result.reasonCode}) and could not be fully rolled back; the clone requires recovery: ${result.rollback.remains.join(' ')}`;
+    }
+
     return `Activation failed at ${result.step} (${result.reasonCode}); every gate-owned change was rolled back and the clone remains configured.`;
   };
 
@@ -1376,6 +1411,7 @@ export const activate = async (request, dependencies = {}) => {
   const rollback = async () => {
     const actions = [];
     const failures = [];
+    const remains = [];
 
     for (const entry of [...journal].reverse()) {
       actions.push(entry.name);
@@ -1383,15 +1419,28 @@ export const activate = async (request, dependencies = {}) => {
       try {
         await entry.undo();
       } catch (error) {
-        failures.push({ action: entry.name, message: error.message });
+        // What the failed compensation left behind, stated by the journal entry
+        // that established it. Nothing is retried and nothing is invented; the
+        // maintainer is told exactly which change survived and where it is.
+        const surviving = entry.remains
+          ?? `The gate-owned change "${entry.name}" could not be taken back.`;
+
+        failures.push({ action: entry.name, message: error.message, remains: surviving });
+        remains.push(surviving);
       }
     }
 
-    return { performed: journal.length > 0, actions, failures };
+    return { performed: journal.length > 0, actions, failures, remains };
   };
 
   const fail = async (step, reasonCode, errors = []) => {
-    const result = { ...refusal(step, reasonCode, errors), order, rollback: await rollback() };
+    const unwound = await rollback();
+    const result = {
+      ...refusal(step, reasonCode, errors),
+      state: stateAfterRollback(unwound),
+      order,
+      rollback: unwound,
+    };
 
     // A store that cannot record the refusal must not mask the refusal itself.
     return record(result).catch(() => result);
@@ -1405,16 +1454,75 @@ export const activate = async (request, dependencies = {}) => {
    * resumed against, and nothing else (FR-LIFE-016, SG-HOOK-001).
    */
   const suspend = async (step, reasonCode, errors, resumption) => {
+    const unwound = await rollback();
+    const recovering = stateAfterRollback(unwound) === 'recovery-required';
     const result = {
       ...refusal(step, reasonCode, errors),
-      state: 'paused',
+      // A pause that could not put the clone back is not a pause: something the
+      // transaction established is still there, and it is reported as such.
+      state: recovering ? 'recovery-required' : 'paused',
       order,
-      rollback: await rollback(),
-      resumption,
+      rollback: unwound,
+      resumption: recovering ? null : resumption,
     };
 
     return record(result).catch(() => result);
   };
+
+  /** The step the transaction had reached, for a failure that named none. */
+  const currentStep = () => order.at(-1) ?? ACTIVATION_STEPS[0];
+
+  return { journal, order, record, rollback, fail, suspend, currentStep };
+};
+
+/**
+ * Run one Activation transaction.
+ *
+ * Every seam that touches the machine is injected, so a fixture can inject a
+ * genuine failure at any step and observe the rollback rather than simulate it.
+ *
+ * An exception escaping the pipeline is not allowed to escape the transaction:
+ * it is caught here, the journal is unwound exactly as a refusal would unwind
+ * it, and the clone's real state is reported rather than thrown at the caller
+ * with a half-finished activation behind it (SG-LIFE-001).
+ */
+export const activate = async (request, dependencies = {}) => {
+  const transaction = activationTransaction({ evidenceStore: dependencies.evidenceStore ?? null });
+
+  try {
+    return await runActivation(request, dependencies, transaction);
+  } catch (error) {
+    return transaction.fail(
+      transaction.currentStep(),
+      'activation-interrupted',
+      [{ message: error.message }],
+    );
+  }
+};
+
+const runActivation = async (request, dependencies, transaction) => {
+  const { journal, order, fail, suspend, record } = transaction;
+  const {
+    establishTrust,
+    revokeTrust = null,
+    selfTestEvaluation,
+    selfTestAdapter,
+    // The registered hook program is runtime, and FR-LIFE-004 requires runtime
+    // to be self-tested before Git is enabled. The default really executes it.
+    selfTestHookProgram = selfTestHookProgramDenial,
+    // Desktop adapter registration goes through the adapter's own declared
+    // surface. The seam stays injectable so a fixture can fail it on purpose,
+    // but the default is the real declaration-driven write: activation carries
+    // no knowledge of any client (FR-ADAPT-008, SG-OWNER-001).
+    registerAdapter = registerDeclaredSurface,
+    unregisterAdapter = withdrawDeclaredSurface,
+    registerHook = registerOwnedHook,
+    unregisterHook = removeOwnedHook,
+    composeHook = registerManagedBlock,
+    decomposeHook = removeManagedBlock,
+    evidenceStore = null,
+    clock = () => new Date(),
+  } = dependencies;
 
   // 1. Repository identity, and the entry points that may never reach it.
   order.push('repository-identity');
@@ -1587,6 +1695,7 @@ export const activate = async (request, dependencies = {}) => {
 
   journal.push({
     name: 'trust',
+    remains: `Trust established for ${request.client?.id ?? 'the client'} in ${described.repository.root} was not withdrawn.`,
     undo: async () => {
       if (revokeTrust) {
         await revokeTrust({ client: request.client, repository: described.repository, trust });
@@ -1712,6 +1821,7 @@ export const activate = async (request, dependencies = {}) => {
     if (registration !== null && (pinned === null || pinned.registered === true)) {
       journal.push({
         name: `adapter:${adapter.id}`,
+        remains: `The ${adapter.id} adapter registration ${pinned?.path === undefined || pinned?.path === null ? 'on its declared surface' : `in ${pinned.path}`} is still in place.`,
         undo: async () => {
           if (unregisterAdapter) {
             await unregisterAdapter(adapter, { repository: described.repository, registration: pinned });
@@ -1805,17 +1915,50 @@ export const activate = async (request, dependencies = {}) => {
   };
   const receipt = { ...body, receiptId: contentIdentity(body) };
 
-  if (evidenceStore) {
-    try {
-      await evidenceStore.activationReceipt().write(receipt);
-    } catch (error) {
-      return fail('receipt', 'receipt-write-failed', [{ message: error.message }]);
-    }
+  // The receipt is the only thing the registered hook reads to know what was
+  // activated. A transaction with nowhere to put one cannot enable
+  // authoritative Git: it would leave a clone with a registered hook and
+  // nothing for it to honour, while reporting a healthy activation
+  // (NFR-REL-002, AC-LIFE-002).
+  if (!evidenceStore) {
+    return fail('receipt', 'receipt-store-missing', [{
+      message: 'Activation has no evidence store, so the receipt the registered hook reads could not be published.',
+    }]);
+  }
 
-    journal.push({
-      name: 'receipt',
-      undo: () => evidenceStore.activationReceipt().remove(),
-    });
+  const receiptFile = evidenceStore.activationReceipt();
+
+  try {
+    await receiptFile.write(receipt);
+  } catch (error) {
+    return fail('receipt', 'receipt-write-failed', [{ message: error.message }]);
+  }
+
+  journal.push({
+    name: 'receipt',
+    remains: `The activation receipt at ${receiptFile.path ?? 'the evidence store'} is still on disk.`,
+    undo: () => receiptFile.remove(),
+  });
+
+  // The write is published by one atomic rename, so what is read back is either
+  // the whole receipt or nothing. Confirming it here — before `git-enablement`,
+  // and while the receipt's own compensating action is already journalled —
+  // is what makes "activated implies a receipt on disk" true rather than
+  // assumed (NFR-REL-002).
+  let persisted = null;
+
+  try {
+    persisted = await receiptFile.read();
+  } catch (error) {
+    return fail('receipt', 'receipt-not-confirmed', [{ message: error.message }]);
+  }
+
+  if (persisted?.receiptId !== receipt.receiptId) {
+    return fail('receipt', 'receipt-not-confirmed', [{
+      expected: receipt.receiptId,
+      actual: persisted?.receiptId ?? null,
+      message: 'The activation receipt could not be read back as it was written; authoritative Git was never enabled.',
+    }]);
   }
 
   // 9. Authoritative Git, last.
@@ -1846,6 +1989,7 @@ export const activate = async (request, dependencies = {}) => {
 
   journal.push({
     name: 'git-enablement',
+    remains: `The gate-owned ${AUTHORITATIVE_HOOK} registration at ${described.hook.path} is still in place and Git is still authoritative.`,
     undo: () => (composing ? decomposeHook : unregisterHook)({
       path: described.hook.path,
       directory: described.hook.directory,
@@ -1861,7 +2005,7 @@ export const activate = async (request, dependencies = {}) => {
     errors: [],
     receipt,
     order,
-    rollback: { performed: false, actions: [], failures: [] },
+    rollback: { performed: false, actions: [], failures: [], remains: [] },
     resumption: null,
   };
 

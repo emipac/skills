@@ -773,6 +773,181 @@ const activatedConfigurationBinds = async (activated) => {
   return { name: 'activated-configuration-binds', ok: findings.length === 0, findings };
 };
 
+/**
+ * Whether a clone still commits exactly as it did while merely configured.
+ *
+ * `configured` is not a label the transaction gets to assert: it is observable.
+ * Git is not authoritative, so a change an activated clone would have refused
+ * becomes a commit (AC-LIFE-002, AC-EVAL-001).
+ */
+const stillCommitsAsConfigured = async (root, message) => {
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  return commit(root, message).then(() => true, () => false);
+};
+
+/**
+ * TB-035: a receipt that cannot be published never enables authoritative Git.
+ *
+ * Without this, the clone is left with a registered hook and nothing for it to
+ * honour: every commit denies `activation-receipt-missing` while the maintainer
+ * was told activation succeeded (NFR-REL-002).
+ */
+const receiptFailureLeavesNoTrace = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const refusing = {
+    ...store,
+    activationReceipt: () => ({
+      ...store.activationReceipt(),
+      write: async () => {
+        throw new Error('injected failure while publishing the activation receipt');
+      },
+    }),
+  };
+  const { preview, result } = await activateFixture(root, refusing);
+
+  check(findings, result.activated === false, 'An activation with no receipt on disk reported success.');
+  check(
+    findings,
+    result.state === 'configured',
+    `A receipt failure reported ${result.state} rather than the configured state.`,
+  );
+  check(
+    findings,
+    result.step === 'receipt' && result.reasonCode === 'receipt-write-failed',
+    `Expected a receipt failure, got ${result.step}/${result.reasonCode}.`,
+  );
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'A failed receipt write left a receipt on disk.',
+  );
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'An activation with no receipt still registered a hook.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone with no receipt still commits'),
+    'A clone whose receipt was never written was left refusing commits.',
+  );
+
+  return findings;
+};
+
+/** TB-035: an exception after a gate-owned mutation is compensated, not thrown. */
+const interruptedActivationLeavesNoTrace = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const revoked = [];
+  const { preview, result } = await activateFixture(root, store, {
+    revokeTrust: async () => revoked.push('trust'),
+    selfTestAdapter: async () => {
+      throw new Error('injected exception after trust was established');
+    },
+  });
+
+  check(findings, result.activated === false, 'An interrupted activation reported success.');
+  check(
+    findings,
+    result.state === 'configured',
+    `An interrupted activation reported ${result.state} rather than the configured state.`,
+  );
+  check(
+    findings,
+    result.reasonCode === 'activation-interrupted',
+    `An interrupted activation reported ${result.reasonCode}.`,
+  );
+  check(findings, revoked.length === 1, 'The mutation made before the exception was not compensated.');
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'An interrupted activation left a registered hook behind.',
+  );
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'An interrupted activation left a receipt on disk.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone whose activation threw still commits'),
+    'An interrupted activation left the clone refusing commits.',
+  );
+
+  return findings;
+};
+
+/**
+ * TB-035: a compensating action that fails is reported, never assumed away.
+ *
+ * The failures were always collected. What this proves is that the reported
+ * state now reflects them, and that it names what the maintainer has to deal
+ * with by hand (SG-LIFE-001, FR-LIFE-019).
+ */
+const failedCompensationReportsRecovery = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const { preview, result } = await activateFixture(root, store, {
+    revokeTrust: async () => {
+      throw new Error('the client refused to withdraw the trust it granted');
+    },
+    registerHook: async () => {
+      throw new Error('injected failure immediately before Git enablement');
+    },
+  });
+
+  check(findings, result.activated === false, 'A half-unwound activation reported success.');
+  check(
+    findings,
+    result.state === 'recovery-required',
+    `A half-unwound clone reported ${result.state}, the same state a clean unwind reports.`,
+  );
+  check(
+    findings,
+    JSON.stringify(result.rollback.failures.map((failure) => failure.action)) === JSON.stringify(['trust']),
+    `The failed compensating action was not named: ${JSON.stringify(result.rollback.failures)}.`,
+  );
+  check(
+    findings,
+    result.rollback.remains.length === 1 && result.rollback.remains[0].includes('Trust established'),
+    `The report does not say what remains on disk: ${JSON.stringify(result.rollback.remains)}.`,
+  );
+
+  // Everything that did unwind is really gone: only the named change survives.
+  check(
+    findings,
+    (await store.activationReceipt().read()) === null,
+    'A half-unwound activation left its receipt on disk.',
+  );
+  check(
+    findings,
+    (await readFile(preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'A half-unwound activation left a registered hook behind.',
+  );
+
+  const events = await store.readEvents();
+
+  check(
+    findings,
+    /requires recovery/.test(events.at(-1)?.reason ?? ''),
+    `The recorded event does not say the clone requires recovery: ${events.at(-1)?.reason}.`,
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(root, 'a clone that needs recovery still commits'),
+    'A half-unwound activation left the clone refusing commits.',
+  );
+
+  return findings;
+};
+
 /** A failure immediately before Git enablement leaves nothing behind. */
 const rollbackLeavesNoTrace = async () => {
   const findings = [];
@@ -835,6 +1010,13 @@ const rollbackLeavesNoTrace = async () => {
   );
 
   check(findings, committed === true, 'A failed activation still blocked a commit.');
+
+  // TB-035: the same scenario at the other points a transaction can fail after
+  // it has already changed something. Each clone must be one the maintainer can
+  // either use or fix — and the transaction must say which.
+  findings.push(...await receiptFailureLeavesNoTrace());
+  findings.push(...await interruptedActivationLeavesNoTrace());
+  findings.push(...await failedCompensationReportsRecovery());
 
   return { name: 'rollback-leaves-no-trace', ok: findings.length === 0, findings };
 };
@@ -1103,6 +1285,42 @@ const hookProgramSelfTest = async () => {
     findings,
     await commit(root, 'a configured clone still commits').then(() => true, () => false),
     'A refused activation still blocked a commit.',
+  );
+
+  // TB-035, NFR-REL-003: a program that starts, throws, and dies non-zero never
+  // read the subject, so its exit status is the shell's, not a decision. It is
+  // refused as unproved, distinctly from one that answered by allowing.
+  const crashingRoot = await fixtureRepository();
+  const crashingStore = await storeFor(crashingRoot);
+
+  await writeFile(
+    path.join(crashingRoot, 'tools/crashing-runner.mjs'),
+    "throw new Error('the hook program crashed before it read anything');\n",
+    'utf8',
+  );
+
+  const crashed = await activateFixture(crashingRoot, crashingStore, {}, {
+    runtime: {
+      runnerVersion: `${CAPABILITY}/1.0.0`,
+      hookProgram: { interpreter: process.execPath, script: 'tools/crashing-runner.mjs', args: [] },
+    },
+  });
+
+  check(
+    findings,
+    crashed.result.activated === false
+      && crashed.result.errors?.[0]?.reason === 'hook-program-unproved',
+    `A crashing hook program was not refused as unproved: ${JSON.stringify(crashed.result.errors)}.`,
+  );
+  check(
+    findings,
+    (await readFile(crashed.preview.hooks[0].path, 'utf8').catch(() => null)) === null,
+    'A crashing hook program was still registered.',
+  );
+  check(
+    findings,
+    await stillCommitsAsConfigured(crashingRoot, 'a clone with an unproved program still commits'),
+    'A refused crashing program left the clone refusing commits.',
   );
 
   return { name: 'hook-program-self-test', ok: findings.length === 0, findings };
