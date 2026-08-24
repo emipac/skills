@@ -5,24 +5,34 @@
  * `gate-precommit.mjs` and `gate-preflight.mjs` deliberately deferred this
  * shape — "a `gate` CLI whose only subcommand was this one would be that
  * surface, half-built and already committed to a shape its own contract has not
- * settled". The contract has settled it: the lifecycle command contract already
- * names `gate status`, `gate locks`, and `gate prune`, and this is where they
- * are reached. Neither packaged runner changes, and neither is a subcommand of
- * this one: an activated clone's registered shim still points where it always
+ * settled". The contract has settled it: the lifecycle command contract names
+ * every operation an activated clone exposes, and this is where they are
+ * reached. Neither packaged runner changes, and neither is a subcommand of this
+ * one: an activated clone's registered shim still points where it always
  * pointed.
  *
- * This slice ships the three operations that write nothing. The confirmed half
- * of the lifecycle is a separate contract and is refused here by name.
+ * `TB-040` shipped the operations that write nothing; `TB-041` added the ones
+ * that do. Every command here previews by default and performs only when a
+ * separate later invocation names the token of a preview that still describes
+ * this clone — there is no flag that does both, and no token that anything
+ * bypasses. `gate activate` and `gate fix` remain separate contracts and are
+ * refused here by name.
  *
  * Usage:
- *   node skills/change-evaluation-gate/scripts/gate.mjs status [--json]
- *   node skills/change-evaluation-gate/scripts/gate.mjs locks  [--json]
- *   node skills/change-evaluation-gate/scripts/gate.mjs prune  [selector] [--json]
+ *   node .../gate.mjs status     [--json]
+ *   node .../gate.mjs locks      [--recover <token>] [--json]
+ *   node .../gate.mjs prune      [selector] [--confirm <token>] [--json]
+ *   node .../gate.mjs repair     [--hook-script <path>] [--confirm <token>] [--json]
+ *   node .../gate.mjs update     [--confirm <token>] [--json]
+ *   node .../gate.mjs deactivate [--confirm <token>] [--json]
+ *   node .../gate.mjs uninstall  --asset <path> [--confirm <token>] [--json]
+ *   node .../gate.mjs cleanup    [--confirm <token>] [--json]
  *
- * Exit status is `0` when the command ran and found nothing wrong, `1` when it
- * ran and the clone needs attention, and `2` when it could not run at all. A
- * `broken` clone is not a failed invocation, and an agent branches on that
- * difference without reading a word of output.
+ * Exit status is `0` when the command ran and found nothing wrong or performed
+ * what was confirmed, `1` when it ran and the clone needs attention — including
+ * a confirmation this clone refused — and `2` when it could not run at all. A
+ * `broken` clone and a refused confirmation are not failed invocations, and an
+ * agent branches on that difference without reading a word of output.
  *
  * It claims no protection beyond a cooperative local process (`SG-TRUST-001`).
  */
@@ -40,9 +50,9 @@ const main = async () => {
     });
   } catch (error) {
     // Nothing reaches the shell as a bare crash: a surface that produced no
-    // observation says so, and says it as "could not run" rather than as a
-    // healthy clone.
-    process.stderr.write(`change-evaluation-gate: the observation failed before it could report (${error.message}); nothing was observed.\n`);
+    // document says so, and says it as "could not run" rather than as a healthy
+    // clone or a completed operation.
+    process.stderr.write(`change-evaluation-gate: the command failed before it could report (${error.message}); nothing was observed and nothing was performed.\n`);
     process.exitCode = EXIT_UNRUNNABLE;
 
     return;

@@ -50,7 +50,7 @@ their own: they delegate to `store.previewPrune`/`store.confirmPrune` and to
 lock inspection are reached the same way every other lifecycle operation is —
 preview first, confirm against that exact preview, never implicitly.
 
-## The operator surface (`TB-040`)
+## The operator surface (`TB-040`, `TB-041`)
 
 The commands above are reached through one packaged program,
 [`scripts/gate.mjs`](../scripts/gate.mjs), implemented in
@@ -62,38 +62,89 @@ helpers the authoritative runner resolves them with (`resolveRepositoryRoot`,
 [`hook-runner.mjs`](../scripts/lib/hook-runner.mjs)), calls the lifecycle seams
 unchanged, and renders what they returned. It grades nothing itself.
 
-This slice ships the three operations that write nothing:
+Every lifecycle operation is reached here:
 
 ```
-gate status [--json]
-gate locks  [--json]
-gate prune  [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--json]
+gate status     [--json]
+gate locks      [--recover <token>] [--json]
+gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
+gate repair     [--hook-script <path>] [--confirm <token>] [--json]
+gate update     [--confirm <token>] [--json]
+gate deactivate [--confirm <token>] [--json]
+gate uninstall  --asset <path> ... [--confirm <token>] [--json]
+gate cleanup    [--confirm <token>] [--json]
 ```
 
-**One document, two readers.** Every invocation builds exactly one observation
-document and renders it once — as `--json` for an agent, or as a summary for a
-person. The two cannot disagree, because there is only one thing to disagree
-about (`NFR-OPER-001`). `--json` is recognized the way every other capability in
-this skill recognizes it, and no dependency is added to parse three flags.
+**Two invocations, never one.** Every command previews by default and writes
+nothing. It performs only when a *separate later* invocation names the token the
+preview printed. There is no flag that does both: `--confirm` with no token, and
+`--preview` given alongside a confirmation, are both refused as
+`preview-and-confirm-refused` and say why. That does not stop a caller running
+both commands back to back, and it is not meant to — it means no single command
+destroys anything. `status` has no confirmed form at all.
+
+**The preview is re-derived, never carried.** Every invocation rebuilds the
+preview from the filesystem as it is right now, and the operator's token is
+checked against *that*. This is `TB-036`'s rule applied at the command boundary:
+nothing the caller holds decides what happens, so a confirmation naming a
+preview the clone no longer matches writes nothing and returns a stated refusal
+(`NFR-REL-002`).
+
+**What refuses is what records.** Where a seam takes the confirmation itself —
+`confirmRepair`, `updateGate`, `confirmConfigurationCleanup`,
+`confirmEvidencePrune`, `recoverStale` — the token is handed straight to it and
+the seam does the refusing and appends its own Lifecycle event. Only
+`deactivateGate` and `uninstallGate` take no confirmation, so the surface
+compares the token for those two and records the refusal through one helper, as
+the same `removal` event their own `record` would have appended, in the same
+store (`NFR-AUD-001`). No new event type, no new store, no parallel log.
+
+**One document, two readers.** Every invocation builds exactly one document and
+renders it once — as `--json` for an agent, or as a summary for a person. The
+document carries `observation` (what this invocation would do) and `mutation`
+(what it did). `mutation` is `null` on every preview, which makes "this run
+wrote nothing" a field rather than a promise in prose (`NFR-OPER-001`).
 
 **Exit status, in the `diff`/`grep` shape:**
 
 | Status | Meaning |
 | --- | --- |
-| `0` | the command ran and found nothing wrong |
-| `1` | the command ran and the clone needs attention — `degraded`, `broken`, or a stale lock |
+| `0` | the command ran and found nothing wrong, or performed what was confirmed |
+| `1` | the clone needs attention — `degraded`, `broken`, a stale lock, or a confirmation this clone refused |
 | `2` | the command could not run |
 
-A `broken` clone is not a failed invocation. An agent branches on that
-difference without reading a word of output, and `document.failure` is `null`
-for every clone that was actually observed.
+A `broken` clone and a refused confirmation are not failed invocations. An agent
+branches on that difference without reading a word of output, and
+`document.failure` is `null` for every invocation that actually reached an
+operation.
 
-**No mutation, and no back door to one.** `--recover`, `--confirm`, `--force`, a
-bare confirmation token, and every mutating command name are refused with exit
-`2`, and the refusal names the confirmed operation that owns the selector.
-`gate prune` returns a confirmation token and accepts none. There is no
-interactive prompt anywhere: a prompt is exactly what would lock an agent out of
-a surface both callers must reach.
+**No back door.** `--force`, `--yes`, `--no-confirm`, and a bare positional token
+are refused with exit `2`. `gate activate` and `gate fix` remain separate
+contracts and are refused by name. There is no interactive prompt anywhere: a
+prompt is exactly what would lock an agent out of a surface both callers must
+reach.
+
+**An agent may run all of it, and the surface says what that means.** The threat
+is real and accepted deliberately: an agent blocked by a failing check could
+deactivate the Gate and commit. It is accepted because the Gate is already
+cooperative — `SG-TRUST-001`, and `--no-verify` has always been one flag away —
+and because an operation run here is *recorded*, where a hand-rolled script is
+not. Every document carries the trust boundary rather than implying enforcement
+the Gate does not have.
+
+**Where each operation's arguments come from.** The surface resolves what it can
+and states what it cannot:
+
+| Operation | Input the clone does not record | How it is resolved |
+| --- | --- | --- |
+| `repair` | the hook program (the receipt pins the registration's identity, not the program that produced it) | the packaged `gate-precommit.mjs` beside this module, overridable with `--hook-script`. A wrong program cannot write anything: the planned bytes fail to reproduce the pinned identity and `restoreHookRegistration` refuses with `registration-not-reproducible`. |
+| `update` | the candidate release (the receipt records what the caller that ran activation declared) | the nearest package manifest above this module — the distribution an ordinary install or plugin update actually bumps — with `PROTOCOL_VERSION` as the protocol the installed gate speaks. A protocol or id mismatch is refused at `compatibility`. |
+| `uninstall` | the project-installed asset manifest (activation records none) | named by the operator with repeatable `--asset`, described from disk at preview time. `uninstallGate` still refuses anything outside the project, the shared configuration, historical Evidence, or a modified asset. |
+
+`gate update` runs no self-test of its own: `updateGate`'s self-test seams keep
+their library defaults, and the document says so in `selfTestsRerun: false`
+rather than reporting an injected pass as a proof the clone cannot support.
+`gate status` is what reconciles the clone afterwards.
 
 **Adapter observation.** An adapter the receipt pinned that the installed gate
 no longer declares (`describeAdapter`) is not observed as present, which is the
@@ -101,11 +152,14 @@ loss `statusGate` already grades by the authority the receipt recorded. The
 surface passes no `controlSurface` observation, so independent control-surface
 drift is not yet part of what `gate status` reports.
 
-**One residual write, inside the seam.** `inspectCoordination` opens the lock
-through `openCoordinationLock`, which ensures the coordination directory exists
-before it reads. On a clone that never acquired a lock, the first `gate locks`
-therefore creates one empty directory. No file is written, no lock is acquired,
-and nothing is recovered.
+**Observation creates nothing** (`TB-041`). `openCoordinationLock` used to ensure
+its own directory existed before it read anything, so the first `gate locks` on a
+clone that had never taken a lock created an empty
+`change-evaluation-gate/coordination/`. Directory creation moved to the two paths
+that write — acquisition and stale recovery — and inspection now creates nothing
+at all. A clone that was never activated is likewise never given an Evidence
+store by being looked at: a store is opened only when the receipt exists or when
+a confirmation needs somewhere to record what it did.
 
 ## `gate update`
 
@@ -261,8 +315,22 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   inspection, a prune preview and its token, the two renderings agreeing from
   one invocation, mutation refusal by name, the exit status separating an
   unhealthy clone from a failed invocation, and a whole-clone snapshot —
-  directories included — proving every observation writes nothing.
+  directories included — proving every observation writes nothing. For the half
+  that writes: a confirmation naming a preview the clone no longer matches,
+  proved for all seven confirmable operations against a genuinely changed clone;
+  the single-invocation refusal; a clobbered managed block restored by a
+  confirmed repair and left alone by every other command; a repair that cannot
+  reproduce the pinned registration; deactivation, uninstall, and cleanup
+  preserving shared, global, and historical state; a distribution bump that
+  changes nothing until confirmed and a failed update that preserves the prior
+  release; a confirmed prune and its tombstones; stale-lock recovery against its
+  own token and never against a live holder; and every operation and refusal
+  recorded while `status` records none.
+- `tests/gate-coordination.test.mjs` — that opening and inspecting the
+  coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle
   against throwaway Git repositories, real registered hooks, and real
-  `git commit` invocations, plus `packaged-observation`, which drives
-  `gate.mjs` as a real child process against a real activated clone.
+  `git commit` invocations, plus `packaged-observation` and `packaged-repair`,
+  which drive `gate.mjs` as a real child process against a real activated clone
+  that really blocks a commit, has its block clobbered, stops blocking, and is
+  repaired back to exactly what its receipt authorizes.

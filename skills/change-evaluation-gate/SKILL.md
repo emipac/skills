@@ -96,15 +96,23 @@ state or historical Evidence — belongs to the
 update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
-The read-only half of that lifecycle is reachable as a command. Run
-`change-evaluation-gate status`, `... locks`, or `... prune` — or
-`node skills/change-evaluation-gate/scripts/gate.mjs <command>` — to report a
-clone's health, inspect its coordination lock, or preview what a prune would
-remove. Add `--json` for the same document a person is shown. Exit status is `0`
-when nothing is wrong, `1` when the clone needs attention, and `2` when the
-command could not run. That surface writes nothing and refuses every mutating
-selector, including `--recover`, `--confirm`, and `--force`; use it to diagnose
-a clone instead of importing the lifecycle library.
+All of that lifecycle is reachable as one command. Run
+`change-evaluation-gate <command>` — or
+`node skills/change-evaluation-gate/scripts/gate.mjs <command>` — where the
+command is `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
+`uninstall`, or `cleanup`. Add `--json` for the same document a person is shown.
+Exit status is `0` when nothing is wrong or the confirmed operation was
+performed, `1` when the clone needs attention — including a confirmation it
+refused — and `2` when the command could not run.
+
+**Every command previews and writes nothing.** To perform one, run it again
+naming the token the preview printed: `gate repair --confirm <token>`,
+`gate locks --recover <token>`, and so on. No flag previews and confirms in one
+invocation, no `--yes` or `--force` exists, and a confirmation naming a preview
+the clone no longer matches performs nothing and says so. Use this surface to
+diagnose *and* to recover a clone, instead of importing the lifecycle library or
+re-activating. `gate activate` and `gate fix` are separate contracts and are
+refused here by name.
 
 Report the repository as `configured`, never `activated`, and name activation
 as a separate future action.

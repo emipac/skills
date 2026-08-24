@@ -27,6 +27,14 @@
  *    distinguishes a broken clone from a failed invocation by exit status
  *    alone, and leaves the clone and its Evidence store unchanged
  *    (AC-LIFE-004, AC-EVID-002, NFR-OPER-001, SG-LIFE-001).
+ * 5. `packaged-repair` — the recovery the contract exists for, through the same
+ *    packaged command: a real activated clone that really blocks a commit has
+ *    its gate-owned block clobbered, stops blocking, reports `broken`, refuses
+ *    a confirmation naming a preview it no longer matches, and is then restored
+ *    by a confirmed repair to exactly the registration the Activation receipt
+ *    authorizes — blocking again, with the repository's own prior chain intact
+ *    and a Lifecycle event for each attempt (AC-LIFE-010, FR-LIFE-019,
+ *    SG-HOOK-001, NFR-AUD-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -719,21 +727,30 @@ const packagedObservation = async () => {
     `The prune preview named ${prune.observation?.blobs?.length} blobs of ${blobsBefore}.`,
   );
 
-  // Refusal, by name, of the confirmed half of the lifecycle.
+  // Refusal, by name, of the operations a separate contract owns and of every
+  // invocation that would preview and confirm in one run (`TB-041`).
   for (const [args, owner] of [
-    [['locks', '--recover'], 'gate locks --recover'],
-    [['prune', '--confirm', prune.observation?.confirmationToken ?? 'x'], 'gate prune --confirm'],
-    [['repair'], 'gate repair'],
-    [['deactivate'], 'gate deactivate'],
+    [['activate'], 'gate activate'],
+    [['fix'], 'gate fix'],
+    [['status', '--repair'], 'gate repair'],
+    [['locks', '--recover'], 'gate locks --recover <token>'],
+    [['prune', '--confirm'], 'gate prune --confirm <token>'],
+    [['repair', '--preview', '--confirm', prune.observation?.confirmationToken ?? 'x'], 'gate repair --confirm <token>'],
+    [['deactivate', '--confirm', 'not-a-token'], null],
+    [['prune', '--force'], null],
+    [['status', '--yes'], null],
   ]) {
     const refused = await gate(args);
 
     check(findings, refused.code === 2, `gate ${args.join(' ')} exited ${refused.code ?? 0} instead of refusing.`);
-    check(
-      findings,
-      (refused.stderr ?? '').includes(owner),
-      `gate ${args.join(' ')} did not name ${owner} as the operation that owns it.`,
-    );
+
+    if (owner !== null) {
+      check(
+        findings,
+        (refused.stderr ?? '').includes(owner),
+        `gate ${args.join(' ')} did not name ${owner} as the operation that owns it.`,
+      );
+    }
   }
 
   // A broken clone is not a failed invocation, and the difference is readable
@@ -776,6 +793,155 @@ const packagedObservation = async () => {
   return { name: 'packaged-observation', ok: findings.length === 0, findings };
 };
 
+/**
+ * The recovery this whole contract exists for, through the PACKAGED command.
+ *
+ * A real activated clone, really enforcing, whose gate-owned block is really
+ * clobbered: `git commit` stops being gated, `gate status` says `broken`, and
+ * the only recovery available before `TB-041` was to re-activate — a heavier
+ * operation than the situation needs. Here a maintainer previews a repair,
+ * confirms exactly that preview, and the clone commits exactly as it did
+ * before, with a Lifecycle event to show for it (`AC-LIFE-010`, `FR-LIFE-019`,
+ * `NFR-AUD-001`).
+ */
+const packagedRepair = async () => {
+  const findings = [];
+  const { root, store, hooksDirectory } = await fixtureClone();
+  const activated = await activateFixture(root, store, {
+    adapters: [{ id: 'git', version: '1.0.0', authoritative: true }],
+  });
+
+  check(findings, activated.activated === true, `The fixture failed to activate: ${activated.reasonCode}.`);
+
+  if (!activated.activated) {
+    return { name: 'packaged-repair', ok: false, findings };
+  }
+
+  const gate = (args) => runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).catch((error) => error);
+
+  const hookPath = path.join(hooksDirectory, 'pre-commit');
+  const registered = await readFile(hookPath, 'utf8');
+  const eventsBefore = (await store.readEvents()).length;
+
+  // The gate is really authoritative: this commit is really blocked. The
+  // fixture's registered hook program denies every real commit — it answers
+  // the activation self-test and nothing else — so "blocked" here means the
+  // registration really ran, which is exactly what this scenario is about.
+  await writeFile(path.join(root, 'source.txt'), 'changed while activated\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await commit(root, 'an activated clone refuses').then(() => false, () => true);
+
+  check(findings, blocked === true, 'The activated clone did not block a refused commit.');
+
+  // Somebody clobbers the gate-owned block, leaving the markers in place. The
+  // gate now enforces nothing it claims to enforce.
+  await writeFile(hookPath, registered.replace(/\|\| exit \$\?/, '|| true'), 'utf8');
+
+  const clobbered = await readFile(hookPath, 'utf8');
+  const broken = await gate(['status', '--json']);
+
+  check(
+    findings,
+    JSON.parse(broken.stdout || '{}').observation?.health === 'broken',
+    'A clobbered managed block did not report broken.',
+  );
+  check(
+    findings,
+    await commit(root, 'a clobbered clone no longer refuses').then(() => true, () => false),
+    'The clobbered clone still blocked a commit, so the fixture proved nothing.',
+  );
+
+  // The maintainer reads a preview. It repairs nothing.
+  const preview = JSON.parse((await gate([
+    'repair', '--hook-script', 'tools/gate-runner.mjs', '--json',
+  ])).stdout || '{}');
+  const token = preview.observation?.confirmationToken ?? null;
+
+  check(
+    findings,
+    (preview.observation?.actions ?? []).map((action) => action.code).join(',') === 'hook-block-tampered',
+    `The repair preview named ${JSON.stringify((preview.observation?.actions ?? []).map((action) => action.code))}.`,
+  );
+  check(findings, preview.mutation === null, 'A repair preview reported a mutation.');
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')) === clobbered,
+    'Previewing a repair repaired something.',
+  );
+
+  // A confirmation naming a preview this clone does not match repairs nothing.
+  const mismatched = await gate([
+    'repair', '--hook-script', 'tools/gate-runner.mjs', '--confirm', `sha256:${'e'.repeat(64)}`, '--json',
+  ]);
+
+  check(findings, mismatched.code === 1, `A refused repair exited ${mismatched.code ?? 0} rather than 1.`);
+  check(
+    findings,
+    JSON.parse(mismatched.stdout || '{}').mutation?.performed === false,
+    'A mismatched confirmation reported a performed repair.',
+  );
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')) === clobbered,
+    'A mismatched confirmation repaired the clone anyway.',
+  );
+
+  // And then the real one.
+  const repaired = await gate([
+    'repair', '--hook-script', 'tools/gate-runner.mjs', '--confirm', token ?? 'x', '--json',
+  ]);
+  const document = JSON.parse(repaired.stdout || '{}');
+
+  check(findings, (repaired.code ?? 0) === 0, `A confirmed repair exited ${repaired.code}.`);
+  check(findings, document.mutation?.performed === true, `The confirmed repair did not perform: ${document.mutation?.reasonCode}.`);
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')) === registered,
+    'The repair did not restore exactly the registration the Activation receipt authorizes.',
+  );
+  check(
+    findings,
+    JSON.parse((await gate(['status', '--json'])).stdout || '{}').observation?.health === 'healthy',
+    'The repaired clone did not reconcile as healthy.',
+  );
+
+  // The clone commits exactly as it did before: the gate is authoritative
+  // again, and the repository's own prior chain is still composed into the hook
+  // byte for byte — the repair restored the Gate's own block and rewrote no
+  // part of a file the Gate does not own (`SG-HOOK-001`).
+  await writeFile(path.join(root, 'source.txt'), 'changed after the repair\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blockedAgain = await commit(root, 'a repaired clone refuses again').then(() => false, () => true);
+
+  check(findings, blockedAgain === true, 'The repaired clone did not block a refused commit.');
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8')).includes('echo "prior chain ran" > prior-ran'),
+    'The repair did not preserve the repository\'s own prior hook chain.',
+  );
+
+  // Both attempts are recorded, and the refusal is recorded as a refusal.
+  const repairs = (await store.readEvents()).filter((event) => event.type === 'repair');
+
+  check(
+    findings,
+    repairs.map((event) => event.outcome).join(',') === 'refused,succeeded',
+    `The repair attempts were recorded as ${JSON.stringify(repairs.map((event) => event.outcome))}.`,
+  );
+  check(
+    findings,
+    (await store.readEvents()).length > eventsBefore,
+    'The repair left no Lifecycle event at all.',
+  );
+
+  return { name: 'packaged-repair', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -786,6 +952,7 @@ const main = async () => {
       await packagedRemoval(),
       await observationMutatesNothing(),
       await packagedObservation(),
+      await packagedRepair(),
     ];
   } finally {
     for (const root of temporaryRoots) {

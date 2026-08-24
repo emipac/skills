@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -513,6 +513,83 @@ test('FR-COORD-005: a live holder is never stale, and an expired heartbeat is', 
 
   assert.equal(expired.stale, true);
   assert.deepEqual(expired.staleReasons, ['heartbeat-expired']);
+});
+
+/**
+ * Every file AND every directory under one root, by relative path.
+ *
+ * Directories are included deliberately. `SG-LIFE-001`'s existing proofs are
+ * file-only and structurally cannot observe a command that creates an empty
+ * directory, which is exactly the residue this test exists to forbid.
+ */
+const treeSnapshot = async (root) => {
+  const entries = [];
+  const walk = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      const absolute = path.join(directory, entry.name);
+
+      if (entry.isDirectory()) {
+        entries.push([path.relative(root, absolute), '<directory>']);
+        await walk(absolute);
+      } else if (entry.isFile()) {
+        entries.push([
+          path.relative(root, absolute),
+          await readFile(absolute, 'base64').catch(() => null),
+        ]);
+      }
+    }
+  };
+
+  await walk(root);
+
+  return JSON.stringify(entries.sort(([left], [right]) => left.localeCompare(right)));
+};
+
+/**
+ * TB-041: opening the lock to READ it creates nothing.
+ *
+ * `openCoordinationLock` used to ensure its own directory existed before it had
+ * been asked to write anything, so `inspect()` — and therefore `gate locks` —
+ * gave a clone that had never taken a lock an empty
+ * `change-evaluation-gate/coordination/` directory. Inspection is observation,
+ * and observation writes nothing (`FR-LIFE-019`, `SG-LIFE-001`).
+ */
+test('TB-041 SG-LIFE-001: opening and inspecting the lock creates no directory, and acquiring one does', async (t) => {
+  const clone = await fixtureClone(t, 'read-only');
+  const before = await treeSnapshot(clone.root);
+
+  const lock = await openCoordinationLock({ repositoryRoot: clone.root });
+
+  // Merely opening the seam is not a write.
+  assert.equal(await treeSnapshot(clone.root), before);
+
+  const inspection = await lock.inspect();
+
+  assert.equal(inspection.held, false);
+  assert.equal(inspection.recoveryToken, null);
+  assert.equal(await lock.readRecord(), null);
+
+  // Reading, judging, and reporting are all still not writes — not one file,
+  // and not one directory.
+  assert.equal(await treeSnapshot(clone.root), before);
+
+  // Recovering a lock that is not there writes nothing either.
+  const nothing = await lock.recoverStale({ confirmation: 'sha256:whatever' });
+
+  assert.equal(nothing.recovered, false);
+  assert.equal(nothing.reasonCode, 'lock-absent');
+  assert.equal(await treeSnapshot(clone.root), before);
+
+  // Acquisition is the path that needs the directory, and it makes it.
+  const held = await lock.acquire({ bindingKey: 'sha256:binding', executionId: 'execution-1' });
+
+  assert.equal(held.acquired, true);
+  assert.equal(JSON.parse(await readFile(lock.lockPath, 'utf8')).lockId, held.record.lockId);
+  assert.notEqual(await treeSnapshot(clone.root), before);
+
+  // And a heartbeat on a held lock still writes through the same directory.
+  assert.equal((await held.heartbeat()).beat, true);
+  assert.equal((await held.release()).released, true);
 });
 
 const evaluationRequest = (root, role) => ({
