@@ -367,8 +367,13 @@ const answerSelfTest = async (subjectPath) => {
  *
  * Git starts a hook at the top of the working tree, but the runner is also
  * reachable directly, so the root is asked for rather than assumed.
+ *
+ * It is exported so the operator surface resolves the clone it is observing
+ * exactly the way the authoritative runner resolves the clone it is grading. A
+ * second definition of "which clone is this" is a second answer waiting to
+ * disagree with this one (`TB-040`).
  */
-const resolveRepositoryRoot = async (cwd) => {
+export const resolveRepositoryRoot = async (cwd) => {
   try {
     const { stdout } = await runFile('git', ['rev-parse', '--show-toplevel'], { cwd });
 

@@ -173,7 +173,22 @@ export const openCoordinationLock = async ({
   const root = path.join(common, COORDINATION_DIRECTORY);
   const lockPath = path.join(root, 'lock.json');
 
-  await mkdir(root, { recursive: true, mode: DIRECTORY_MODE });
+  /**
+   * Ensure the runtime-owned directory exists — on the paths that WRITE, and
+   * only there.
+   *
+   * This used to run once when the lock was opened, which made opening the seam
+   * a mutation: `inspect()` reads, and `inspectCoordination` — and therefore
+   * `gate locks` — gave a clone that had never taken a lock an empty
+   * `change-evaluation-gate/coordination/` directory. Observation writes
+   * nothing, so the directory is now created by acquisition and by stale
+   * recovery, which are the two operations that actually put something in it
+   * (`SG-LIFE-001`, `FR-LIFE-019`).
+   *
+   * It stays `recursive`, so it is idempotent and each writer may call it
+   * without first asking whether an earlier one already did.
+   */
+  const ensureRoot = () => mkdir(root, { recursive: true, mode: DIRECTORY_MODE });
 
   const readRecord = async () => {
     const contents = await readFile(lockPath, 'utf8').catch((error) => {
@@ -299,6 +314,8 @@ export const openCoordinationLock = async ({
     const lockId = inspection.record.lockId ?? randomUUID();
     const recoveredPath = path.join(root, 'recovered', `${lockId}.json`);
 
+    // Recovery is the other path that writes, so it makes its own room too —
+    // `recursive` covers the coordination root as well as `recovered/`.
     await mkdir(path.dirname(recoveredPath), { recursive: true, mode: DIRECTORY_MODE });
     // A rename, never a delete: the abandoned holder's evidence outlives the
     // recovery that took its turn.
@@ -340,6 +357,11 @@ export const openCoordinationLock = async ({
       executionId,
       role,
     };
+
+    // The first write is the one that needs somewhere to write. Every other
+    // path here — reading, inspecting, releasing — reaches an absent directory
+    // as an absent lock, which is exactly what it is.
+    await ensureRoot();
 
     try {
       // Exclusive creation is the whole mutual exclusion: whoever creates the
