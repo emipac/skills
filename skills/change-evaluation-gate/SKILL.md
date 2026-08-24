@@ -96,6 +96,16 @@ state or historical Evidence — belongs to the
 update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
+The read-only half of that lifecycle is reachable as a command. Run
+`change-evaluation-gate status`, `... locks`, or `... prune` — or
+`node skills/change-evaluation-gate/scripts/gate.mjs <command>` — to report a
+clone's health, inspect its coordination lock, or preview what a prune would
+remove. Add `--json` for the same document a person is shown. Exit status is `0`
+when nothing is wrong, `1` when the clone needs attention, and `2` when the
+command could not run. That surface writes nothing and refuses every mutating
+selector, including `--recover`, `--confirm`, and `--force`; use it to diagnose
+a clone instead of importing the lifecycle library.
+
 Report the repository as `configured`, never `activated`, and name activation
 as a separate future action.
 

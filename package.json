@@ -10,6 +10,7 @@
   },
   "license": "MIT",
   "bin": {
+    "change-evaluation-gate": "skills/change-evaluation-gate/scripts/gate.mjs",
     "change-evaluation-gate-precommit": "skills/change-evaluation-gate/scripts/gate-precommit.mjs"
   },
   "scripts": {
@@ -19,6 +20,7 @@
     "validate": "node scripts/validate-repo.mjs",
     "test:unit": "node --test tests/*.test.mjs",
     "test:install": "node scripts/smoke-install.mjs",
+    "gate": "node skills/change-evaluation-gate/scripts/gate.mjs",
     "gate-runtime-binding-smoke": "node skills/change-evaluation-gate/scripts/runtime-binding-smoke.mjs",
     "gate-fix-smoke": "node skills/change-evaluation-gate/scripts/gate-fix-smoke.mjs",
     "gate-evidence-prune-smoke": "node skills/change-evaluation-gate/scripts/gate-evidence-prune-smoke.mjs",

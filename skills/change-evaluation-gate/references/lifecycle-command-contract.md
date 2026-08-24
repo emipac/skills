@@ -50,6 +50,63 @@ their own: they delegate to `store.previewPrune`/`store.confirmPrune` and to
 lock inspection are reached the same way every other lifecycle operation is —
 preview first, confirm against that exact preview, never implicitly.
 
+## The operator surface (`TB-040`)
+
+The commands above are reached through one packaged program,
+[`scripts/gate.mjs`](../scripts/gate.mjs), implemented in
+[`scripts/lib/operator-surface.mjs`](../scripts/lib/operator-surface.mjs) and
+installed as the `change-evaluation-gate` bin entry. It resolves the clone, its
+configuration, its Activation receipt, and its Evidence store through the same
+helpers the authoritative runner resolves them with (`resolveRepositoryRoot`,
+`resolveConfiguration`, `resolveReceipt`, `openStore` in
+[`hook-runner.mjs`](../scripts/lib/hook-runner.mjs)), calls the lifecycle seams
+unchanged, and renders what they returned. It grades nothing itself.
+
+This slice ships the three operations that write nothing:
+
+```
+gate status [--json]
+gate locks  [--json]
+gate prune  [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--json]
+```
+
+**One document, two readers.** Every invocation builds exactly one observation
+document and renders it once — as `--json` for an agent, or as a summary for a
+person. The two cannot disagree, because there is only one thing to disagree
+about (`NFR-OPER-001`). `--json` is recognized the way every other capability in
+this skill recognizes it, and no dependency is added to parse three flags.
+
+**Exit status, in the `diff`/`grep` shape:**
+
+| Status | Meaning |
+| --- | --- |
+| `0` | the command ran and found nothing wrong |
+| `1` | the command ran and the clone needs attention — `degraded`, `broken`, or a stale lock |
+| `2` | the command could not run |
+
+A `broken` clone is not a failed invocation. An agent branches on that
+difference without reading a word of output, and `document.failure` is `null`
+for every clone that was actually observed.
+
+**No mutation, and no back door to one.** `--recover`, `--confirm`, `--force`, a
+bare confirmation token, and every mutating command name are refused with exit
+`2`, and the refusal names the confirmed operation that owns the selector.
+`gate prune` returns a confirmation token and accepts none. There is no
+interactive prompt anywhere: a prompt is exactly what would lock an agent out of
+a surface both callers must reach.
+
+**Adapter observation.** An adapter the receipt pinned that the installed gate
+no longer declares (`describeAdapter`) is not observed as present, which is the
+loss `statusGate` already grades by the authority the receipt recorded. The
+surface passes no `controlSurface` observation, so independent control-surface
+drift is not yet part of what `gate status` reports.
+
+**One residual write, inside the seam.** `inspectCoordination` opens the lock
+through `openCoordinationLock`, which ensures the coordination directory exists
+before it reads. On a clone that never acquired a lock, the first `gate locks`
+therefore creates one empty directory. No file is written, no lock is acquired,
+and nothing is recovered.
+
 ## `gate update`
 
 `UPDATE_STEPS` is frozen and ends at `release-switch`:
@@ -198,6 +255,14 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   grading, durable-identity tamper detection, candidate versus active release,
   deactivation, uninstall, cleanup, repair, the two operator commands, and a
   whole-clone snapshot proving `gate status` mutates nothing.
+- `tests/gate-operator-surface.test.mjs` — the packaged operator surface against
+  real activated clones: healthy, degraded, and broken health through the
+  command, a configured clone that was never activated, free/live/stale lock
+  inspection, a prune preview and its token, the two renderings agreeing from
+  one invocation, mutation refusal by name, the exit status separating an
+  unhealthy clone from a failed invocation, and a whole-clone snapshot —
+  directories included — proving every observation writes nothing.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle
   against throwaway Git repositories, real registered hooks, and real
-  `git commit` invocations.
+  `git commit` invocations, plus `packaged-observation`, which drives
+  `gate.mjs` as a real child process against a real activated clone.

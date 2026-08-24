@@ -20,6 +20,13 @@
  * 3. `observation-mutates-nothing` — `gate status` reconciles a healthy and
  *    then a broken clone and changes not one byte of it, and the drift it
  *    reports is still there afterwards (FR-LIFE-009, FR-LIFE-019, AC-LIFE-010).
+ * 4. `packaged-observation` — the same clone observed through the PACKAGED
+ *    `gate` command a maintainer and an agent both run: it reports health,
+ *    inspects the lock, previews a prune, renders one document identically to
+ *    a person and to a parser, refuses every confirmed operation by name,
+ *    distinguishes a broken clone from a failed invocation by exit status
+ *    alone, and leaves the clone and its Evidence store unchanged
+ *    (AC-LIFE-004, AC-EVID-002, NFR-OPER-001, SG-LIFE-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -58,6 +65,9 @@ const CAPABILITY = 'gate-lifecycle-smoke';
 
 /** This repository. No fixture may ever touch its Git state or its hooks. */
 const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/** The packaged operator command, driven here exactly as a maintainer would. */
+const PACKAGED_COMMAND = fileURLToPath(new URL('gate.mjs', import.meta.url));
 
 const ACTIVE_RELEASE = { id: 'change-evaluation-gate', version: '0.9.0', protocolVersion: '1.0' };
 
@@ -147,7 +157,7 @@ const gatePolicy = () => ({
   evidence: {},
 });
 
-const activationRequest = (root) => ({
+const activationRequest = (root, overrides = {}) => ({
   scope: 'repository',
   trigger: 'explicit',
   repository: { root },
@@ -176,6 +186,7 @@ const activationRequest = (root) => ({
     { id: 'claude-code', version: '1.2.3', authoritative: false },
   ],
   runtimeInputs: [{ name: 'APP_TOKEN', source: 'approved-environment-file' }],
+  ...overrides,
 });
 
 const storeFor = async (root) => openEvidenceStore({
@@ -270,10 +281,10 @@ const fixtureClone = async () => {
 };
 
 /** Activate a fixture clone for real, composing into the hook it already had. */
-const activateFixture = async (root, store) => {
+const activateFixture = async (root, store, overrides = {}) => {
   await assertThrowawayRepository(root);
 
-  const request = activationRequest(root);
+  const request = activationRequest(root, overrides);
   const unconfirmed = await previewActivation(request, dependencies());
   const confirmed = {
     ...request,
@@ -628,6 +639,143 @@ const observationMutatesNothing = async () => {
   return { name: 'observation-mutates-nothing', ok: findings.length === 0, findings };
 };
 
+/**
+ * The packaged command a maintainer types and an agent runs, driven as a real
+ * child process against a real activated clone.
+ *
+ * `observationMutatesNothing` above proves the library. This proves the thing
+ * anybody can actually reach: the same clone, observed through `gate.mjs`,
+ * reports its health, renders that health identically to a person and to a
+ * parser, refuses the confirmed operations by name, and leaves the clone and
+ * its Evidence store byte for byte as it found them (`AC-LIFE-004`,
+ * `AC-EVID-002`, `NFR-OPER-001`, `SG-LIFE-001`).
+ */
+const packagedObservation = async () => {
+  const findings = [];
+  const { root, store } = await fixtureClone();
+  // Authoritative Git alone: a desktop surface this fixture pins but never
+  // registers is a drifted clone, and this scenario wants a healthy one.
+  const activated = await activateFixture(root, store, {
+    adapters: [{ id: 'git', version: '1.0.0', authoritative: true }],
+  });
+
+  check(findings, activated.activated === true, `The fixture failed to activate: ${activated.reasonCode}.`);
+
+  if (!activated.activated) {
+    return { name: 'packaged-observation', ok: false, findings };
+  }
+
+  const gate = (args) => runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).catch((error) => error);
+
+  const before = await snapshotOf(root);
+  const blobsBefore = (await store.listBlobs()).length;
+  const eventsBefore = (await store.readEvents()).length;
+
+  const machine = await gate(['status', '--json']);
+  const document = JSON.parse(machine.stdout || '{}');
+
+  check(findings, (machine.code ?? 0) === 0, `An activated clone exited ${machine.code} from gate status.`);
+  check(findings, document.observation?.health === 'healthy', `The packaged command reported ${document.observation?.health}.`);
+  check(findings, document.observation?.state === 'activated', `The packaged command reported state ${document.observation?.state}.`);
+  check(findings, document.observation?.repaired === false, 'The packaged command claimed to have repaired something.');
+
+  // The same invocation, rendered for a person: an agent and a maintainer
+  // never observe different things.
+  const human = await gate(['status']);
+
+  check(findings, human.stdout.includes('healthy'), 'The human rendering did not state the health the document names.');
+  check(
+    findings,
+    (document.observation?.findings ?? []).every((finding) => human.stdout.includes(finding.code)),
+    'The human rendering did not name every finding the document carries.',
+  );
+  check(
+    findings,
+    human.stdout.includes(document.trustBoundary?.statement ?? ' '),
+    'The human rendering did not state the local trust boundary.',
+  );
+
+  // The other two observations, through the same program.
+  const locks = JSON.parse((await gate(['locks', '--json'])).stdout || '{}');
+
+  check(findings, locks.observation?.held === false, 'A clone with no evaluation running reported a held lock.');
+  check(findings, locks.observation?.acquired === false, 'Inspecting the lock acquired it.');
+  check(findings, locks.observation?.recovered === false, 'Inspecting the lock recovered it.');
+
+  const prune = JSON.parse((await gate(['prune', '--json'])).stdout || '{}');
+
+  check(findings, prune.observation?.removed === false, 'The prune preview claimed to have removed something.');
+  check(
+    findings,
+    /^sha256:[0-9a-f]{64}$/.test(prune.observation?.confirmationToken ?? ''),
+    'The prune preview returned no confirmation token.',
+  );
+  check(
+    findings,
+    prune.observation?.blobs?.length === blobsBefore,
+    `The prune preview named ${prune.observation?.blobs?.length} blobs of ${blobsBefore}.`,
+  );
+
+  // Refusal, by name, of the confirmed half of the lifecycle.
+  for (const [args, owner] of [
+    [['locks', '--recover'], 'gate locks --recover'],
+    [['prune', '--confirm', prune.observation?.confirmationToken ?? 'x'], 'gate prune --confirm'],
+    [['repair'], 'gate repair'],
+    [['deactivate'], 'gate deactivate'],
+  ]) {
+    const refused = await gate(args);
+
+    check(findings, refused.code === 2, `gate ${args.join(' ')} exited ${refused.code ?? 0} instead of refusing.`);
+    check(
+      findings,
+      (refused.stderr ?? '').includes(owner),
+      `gate ${args.join(' ')} did not name ${owner} as the operation that owns it.`,
+    );
+  }
+
+  // A broken clone is not a failed invocation, and the difference is readable
+  // from the exit status alone.
+  const registration = await readFile(path.join(store.gitCommonDirectory, 'hooks', 'pre-commit'), 'utf8');
+
+  await writeFile(
+    path.join(store.gitCommonDirectory, 'hooks', 'pre-commit'),
+    registration.replace(/\|\| exit \$\?/, '|| true'),
+    'utf8',
+  );
+
+  const brokenBefore = await snapshotOf(root);
+  const broken = await gate(['status', '--json']);
+  const brokenDocument = JSON.parse(broken.stdout || '{}');
+
+  check(findings, broken.code === 1, `A broken clone exited ${broken.code ?? 0} rather than 1.`);
+  check(findings, brokenDocument.observation?.health === 'broken', `A tampered registration reported ${brokenDocument.observation?.health}.`);
+  check(findings, brokenDocument.failure === null, 'An unhealthy clone was reported as a failed invocation.');
+  check(
+    findings,
+    (await snapshotOf(root)) === brokenBefore,
+    'Observing a broken clone through the packaged command changed it.',
+  );
+
+  // Everything above ran against this clone and its store, and left both
+  // exactly as they were.
+  check(
+    findings,
+    (await store.listBlobs()).length === blobsBefore,
+    'Observation removed Evidence.',
+  );
+  check(
+    findings,
+    (await store.readEvents()).length === eventsBefore,
+    'Observation recorded a Lifecycle event.',
+  );
+  check(findings, before !== brokenBefore, 'The tampering fixture did not change the clone at all.');
+
+  return { name: 'packaged-observation', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -637,6 +785,7 @@ const main = async () => {
       await packagedUpdate(),
       await packagedRemoval(),
       await observationMutatesNothing(),
+      await packagedObservation(),
     ];
   } finally {
     for (const root of temporaryRoots) {
