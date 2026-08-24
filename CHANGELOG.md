@@ -1,5 +1,98 @@
 # ai-skills-framework
 
+## 0.11.2
+
+### Patch Changes
+
+- [#33](https://github.com/emipac/skills/pull/33) [`5b2625c`](https://github.com/emipac/skills/commit/5b2625c4a612ea070f2437998a59d1bca8ced792) Thanks [@emipac](https://github.com/emipac)! - Judge a preflight decision by the same contract the authoritative runner judges
+  by. The wrapper around `validateDecision` is now shared by both runners, so
+  neither carries its own definition of a complete decision, and a decision the
+  contract rejects is presented as `unverified` through the declared feedback
+  channel — naming that it could not be read and how many contract findings there
+  were, rather than reproducing them in a message an agent is prompted with.
+  Preflight remains not-authoritative and non-blocking, and still always exits 0.
+
+- [#33](https://github.com/emipac/skills/pull/33) [`8f14c95`](https://github.com/emipac/skills/commit/8f14c95962f9a58a47b28a3de406023a65b9c076) Thanks [@emipac](https://github.com/emipac)! - Reconcile the pinned Gate control surface where the Change Evaluation Gate
+  authorizes: both the authoritative pre-commit runner and the packaged desktop
+  preflight runner now observe this machine through one shared observer and pass
+  it to every evaluation, so an activated clone whose policy, command arguments,
+  adapters, registered hook, receipt, or descriptors changed after activation is
+  `unverified` with `integrity-drift` and denied instead of being graded by the
+  edit. The Activation receipt additionally pins the exact previewed invocation
+  for each resolved runner, because the executable alone never said what it would
+  be asked to do. Drift is reported and never repaired, a preflight surface stays
+  non-blocking, and a commit that edits a declared Grader surface remains
+  visibility rather than drift.
+
+- [#33](https://github.com/emipac/skills/pull/33) [`bcf90d6`](https://github.com/emipac/skills/commit/bcf90d6fcc4ede8e531f15027bdac0a2871bb699) Thanks [@emipac](https://github.com/emipac)! - Fail closed in the authoritative Git hook on any decision the runner cannot
+  verify. Completeness is now judged by `validateDecision`, the evaluation
+  contract's own rule, so a decision missing its checks, evidence, evaluation
+  identity, or snapshot denies with the contract findings stated rather than
+  exiting `0`. An `allow` is authorized only by evidence that was positively
+  persisted and carries its reference, so absent, `false`, and malformed evidence
+  take one path. `validateDecision` is total: every malformed input returns
+  findings and none of them throws. At attempt level, a check whose program could
+  not be launched is `unverified` with a new `launch-failed` reason reported by
+  bounded execution, never `failed` / `grader-negative`, and a tool that really
+  runs is still classified by its own exit status.
+
+- [#33](https://github.com/emipac/skills/pull/33) [`e0f0983`](https://github.com/emipac/skills/commit/e0f09835ad1606b5316b7089fe37a0027977fd16) Thanks [@emipac](https://github.com/emipac)! - Grade the whole worktree change in a Change Evaluation Gate preflight,
+  including the files that are new. A `worktree` snapshot was materialized from
+  `git ls-files`, which lists index entries: a file the agent had just created was
+  in no execution root the gate ever built and no check read it, while an ordinary
+  deletion left an index entry pointing at a file that was gone, failed the
+  capture, and made the whole preflight `unverified` before a single check ran. A
+  rename was both at once.
+
+  The worktree content set is now the tracked paths, plus the
+  untracked-and-not-ignored ones, minus the ones the worktree no longer holds,
+  derived from the `git status --porcelain` parse that was already there. A
+  created file is graded and reported as a changed path so applicability rules can
+  match it; a deletion is materialized by absence and is no longer an error; both
+  sides of a rename are reported, while a copy names only its destination. Ignored
+  content still never enters a snapshot, and a declared dependency root remains the
+  one way git-ignored content reaches an execution root and stays outside the
+  identity. A path Git still reports that cannot be read is `snapshot-mismatch` as
+  before.
+
+  The `git-index` path is untouched: a commit is graded on the same tree, under the
+  same snapshot identity, as it was before, proved by a fixture pinned to the
+  identity the previous implementation produced.
+
+  File modes, symlink targets, and submodules are stated as known limitations in
+  the evaluation process contract: a snapshot carries file content only, so a
+  change consisting solely of one of those is not something this gate can grade.
+
+- [#33](https://github.com/emipac/skills/pull/33) [`b527fa4`](https://github.com/emipac/skills/commit/b527fa41272cb578307fd67a34b64709912d72d0) Thanks [@emipac](https://github.com/emipac)! - Address a stored Evidence envelope by what was evaluated, and let it state that
+  it was stored. The store addressed envelopes by hashing the whole decision,
+  which embeds the per-run `mkdtemp` execution root — so the exclusion
+  `buildDecision` already applied to `decision.evidence.id` was undone one layer
+  down, and five byte-identical evaluations in recorded real-world evidence
+  produced five envelopes differing only in run-local values. Every stored
+  envelope also recorded `"evidence": { "persisted": false, "reference": null }`,
+  because the store fills those fields on the copy it returns, after the bytes
+  are written.
+
+  Values that describe one run on one machine are now replaced by the stated
+  constant `<run-local>` before anything is hashed or written: the execution root
+  wherever it appears — including inside a check's captured output and its inline
+  excerpt — each attempt's wall-clock duration, and the store root and append
+  instant inside the envelope's own reference. Two evaluations of identical
+  content therefore append one envelope and two log entries. The elided values are
+  recorded on the per-append log entry under `execution`, which is not
+  content-addressed, and the decision a runner reports is unchanged, so
+  diagnostics and stderr still name the real path and the real durations.
+
+  A stored envelope now states `persisted: true` and names its own evidence
+  identity. That self-reference is hashed with the placeholder
+  `<evidence-identity>` and substituted afterwards, the same technique
+  `HOOK_RECEIPT_PLACEHOLDER` already uses for the Activation receipt;
+  `envelopeIdentity` recomputes an envelope's identity from its own bytes.
+
+  `storeVersion` is now `change-evaluation-gate/evidence/v2`. The store layout is
+  unchanged and envelopes written before this change stay readable, prunable, and
+  auditable exactly as written; nothing is rewritten or removed.
+
 ## 0.11.1
 
 ### Patch Changes
