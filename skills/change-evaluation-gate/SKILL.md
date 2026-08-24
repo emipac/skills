@@ -71,7 +71,7 @@ Completion criterion: absent configuration remains unconfigured; confirmed
 configuration contains exactly the five policy subcontracts and no command or
 activation state.
 
-## 3. Stop before activation
+## 3. Never activate implicitly, and operate an activated clone by command
 
 Do not create or modify Git hooks, `core.hooksPath`, trust settings, runtime
 inputs, activation receipts, active-release pointers, or evidence storage.
@@ -97,10 +97,13 @@ update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
 All of that lifecycle is reachable as one command. Run
-`change-evaluation-gate <command>` — or
-`node skills/change-evaluation-gate/scripts/gate.mjs <command>` — where the
-command is `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
-`uninstall`, or `cleanup`. Add `--json` for the same document a person is shown.
+`change-evaluation-gate <command>` where that executable is on the path, or run
+this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
+beside the `SKILL.md` you are reading rather than assuming a path: an installed
+skill sits wherever the client placed it, so the same literal path does not hold
+across projects. The command is `status`, `locks`, `prune`, `repair`, `update`,
+`deactivate`, `uninstall`, or `cleanup`. Add `--json` for the same document a
+person is shown.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
@@ -114,8 +117,11 @@ diagnose *and* to recover a clone, instead of importing the lifecycle library or
 re-activating. `gate activate` and `gate fix` are separate contracts and are
 refused here by name.
 
-Report the repository as `configured`, never `activated`, and name activation
-as a separate future action.
+When this skill configured the policy, report the repository as `configured`,
+never `activated`, and name activation as a separate explicit action. When
+reporting on a clone the surface observed, report the state that surface
+found — an activated clone is `activated` — and never infer a state the surface
+did not report.
 
 ## Supported preflight adapters
 

@@ -247,6 +247,13 @@ model to make a clone activate.
   registered does not fail an otherwise successful activation.
 - [ ] `SG-LIFE-001`: a failed or rolled-back activation leaves no shortcut
   behind, proved by comparing the clone's own configuration before and after.
+- [ ] The skill's discovery copy states what it now does. `SKILL.md`'s
+  frontmatter description, `agents/openai.yaml`'s short description and default
+  prompt, and this skill's `README.md` entry all still describe a
+  configuration-only skill, so an agent asked to activate, diagnose, or recover
+  a clone does not match this skill at all. Each is brought in line with the
+  surface as it stands after this slice, and `SKILL.md` no longer says
+  `gate activate` is refused by name.
 - [ ] The evaluation runtime is unchanged, proved by the existing commit and
   preflight capabilities passing untouched.
 
