@@ -3,11 +3,14 @@
  *
  * Until it existed, every lifecycle operation was proved in isolation and
  * reachable by nothing a person or an agent runs. `TB-040` made the read-only
- * half reachable; `TB-041` finishes the surface with the half that writes —
- * `repair`, `update`, `deactivate`, `uninstall`, `cleanup`, `prune --confirm`,
- * and `locks --recover` — which until now existed only in `tests/` and in three
+ * half reachable; `TB-041` added the half that writes — `repair`, `update`,
+ * `deactivate`, `uninstall`, `cleanup`, `prune --confirm`, and
+ * `locks --recover` — which until then existed only in `tests/` and in three
  * smoke scripts, so the only recovery available to an operator whose managed
- * hook block had been clobbered was to re-activate.
+ * hook block had been clobbered was to re-activate. `TB-042` added the
+ * operation that had no entrypoint at all: `activate`, which until then was
+ * reachable only by writing a throwaway script that imported `activation.mjs`
+ * and reconstructed its argument shapes from the test suite.
  *
  * This module is the surface, not a second implementation of anything behind
  * it. It resolves the same inputs the authoritative runner resolves
@@ -56,12 +59,28 @@
  * (`SG-TRUST-001`).
  */
 
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
-import { readHookRegistration } from './activation.mjs';
+import {
+  activate,
+  adapterIdentity,
+  previewActivation,
+  readHookRegistration,
+} from './activation.mjs';
+import {
+  COMMAND_ALIAS_NAME,
+  SELF_DECLARED,
+  createTrustEstablishment,
+  registerCommandAlias,
+  selfTestAdapterSurface,
+  selfTestEvaluationDenial,
+} from './activation-seams.mjs';
 import { describeAdapter } from './adapters.mjs';
+import { gateChecksFromConfiguration } from './configuration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { PROTOCOL_VERSION } from './evaluation-contract.mjs';
 import {
@@ -114,6 +133,7 @@ export const EXIT_UNRUNNABLE = 2;
 
 /** Every command this surface performs. All of them preview by default. */
 export const COMMANDS = Object.freeze([
+  'activate',
   'status',
   'locks',
   'prune',
@@ -137,6 +157,7 @@ export const COMMANDS = Object.freeze([
  * it is the one command that must still record nothing at all.
  */
 export const CONFIRMABLE_COMMANDS = Object.freeze({
+  activate: '--confirm',
   locks: '--recover',
   prune: '--confirm',
   repair: '--confirm',
@@ -166,13 +187,13 @@ export const CONFIRMED_SELECTORS = Object.freeze({
  * Every lifecycle operation that mutates and that this surface does NOT
  * perform, named so a refusal can point at it.
  *
- * `gate activate` needs three behaviors `runActivation` left abstract and a
- * product decision about client-controlled trust that no implementation detail
- * settles; `gate fix` mutates a maintainer's working tree, which is a different
- * risk profile. Both are separate contracts.
+ * `TB-042` moved `activate` OUT of this table and into the command registry,
+ * once the three behaviors `runActivation` left abstract had real
+ * implementations and the trust question was settled by dispatching on the
+ * model each adapter already declares. What is left is `gate fix`, which mutates
+ * a maintainer's working tree — a different risk profile, and its own contract.
  */
 export const CONFIRMED_COMMANDS = Object.freeze({
-  activate: 'gate activate',
   fix: 'gate fix',
 });
 
@@ -189,6 +210,12 @@ const CONFIRMATION_TOKEN = /^sha256:[0-9a-f]{64}$/;
 
 /** The selectors each command accepts, and how each one is read. */
 const SELECTORS = Object.freeze({
+  activate: Object.freeze({
+    '--client': 'value',
+    '--actor': 'value',
+    '--resume': 'value',
+    '--confirm': 'confirmation',
+  }),
   status: Object.freeze({}),
   locks: Object.freeze({ '--recover': 'confirmation' }),
   prune: Object.freeze({
@@ -236,10 +263,22 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  */
 export const PACKAGED_HOOK_PROGRAM = path.resolve(HERE, '..', 'gate-precommit.mjs');
 
+/**
+ * This command itself, as an activated clone's shortcut has to name it.
+ *
+ * The alias points at the installed distribution that performed the activation,
+ * which is the same distribution that registered the hook program beside it.
+ */
+export const PACKAGED_COMMAND = path.resolve(HERE, '..', 'gate.mjs');
+
+/** The gate this surface speaks for; one name, stated once. */
+const GATE_ID = 'change-evaluation-gate';
+
 export const USAGE = [
-  'gate — observe and operate an activated Change Evaluation Gate clone.',
+  'gate — activate, observe, and operate a Change Evaluation Gate clone.',
   '',
   'Usage:',
+  '  gate activate   [--client <id>]          Preview activating this configured clone.',
   '  gate status     [--json]                 Report this clone\'s health.',
   '  gate locks      [--json]                 Inspect the coordination lock.',
   '  gate prune      [selector] [--json]      Preview what a prune would remove.',
@@ -255,6 +294,11 @@ export const USAGE = [
   '  gate locks --recover <token>             Recover one stale lock.',
   '  gate prune --confirm <token>             Remove exactly the previewed blobs.',
   '  gate <command> --confirm <token>         Perform exactly the previewed operation.',
+  '',
+  'Activate selectors:',
+  '  --client <adapter-id>             The client being activated; default git.',
+  '  --actor <name>                    A name to carry, recorded as self-declared only.',
+  '  --resume <transaction-id>         Resume the paused transaction of that identity.',
   '',
   'Prune selectors:',
   '  --evaluation <evaluation-id>      Restrict to one evaluation; repeatable.',
@@ -273,8 +317,13 @@ export const USAGE = [
   'A preview writes nothing. A confirmation performs exactly the operation whose',
   'token it names, or nothing at all — never half of one — and is recorded as a',
   'Lifecycle event either way. There is no flag that previews and confirms in one',
-  `invocation, and no --yes, --force, or bypass of any token. ${Object.values(CONFIRMED_COMMANDS).join(' and ')} are`,
-  'separate contracts and are refused here by name.',
+  `invocation, and no --yes, --force, or bypass of any token. ${Object.values(CONFIRMED_COMMANDS).join(' and ')} is a`,
+  'separate contract and is refused here by name.',
+  '',
+  'An activation records only what it can prove: that a confirmation reproducing',
+  'this exact preview arrived in a separate invocation. Who ran it is not',
+  `something this command can observe, so any --actor is recorded as ${SELF_DECLARED}`,
+  'and never as proven.',
   '',
   TRUST_BOUNDARY.statement,
   '',
@@ -344,6 +393,9 @@ const parseArguments = (argv) => {
     reclaimBytes: null,
     assets: null,
     hookScript: null,
+    client: null,
+    actor: null,
+    resume: null,
   };
   let confirmation = null;
   let previewRequested = false;
@@ -468,6 +520,33 @@ const parseArguments = (argv) => {
 
     if (argument === '--hook-script') {
       selector.hookScript = value;
+    }
+
+    if (argument === '--client') {
+      // Named, never guessed: which client is being activated decides which
+      // trust model has to be satisfied, and this surface resolves that from
+      // the adapter's own declaration rather than from a default that would
+      // quietly pick the easiest one.
+      selector.client = value;
+    }
+
+    if (argument === '--actor') {
+      selector.actor = value;
+    }
+
+    if (argument === '--resume') {
+      if (!CONFIRMATION_TOKEN.test(value)) {
+        return {
+          json,
+          ...failure({
+            command,
+            reasonCode: 'selector-invalid',
+            detail: `--resume needs the transaction identity a paused activation reported; ${JSON.stringify(value)} is not one.`,
+          }),
+        };
+      }
+
+      selector.resume = value;
     }
 
     if (argument === '--before') {
@@ -674,6 +753,320 @@ const mutation = ({ confirmation, performed, reasonCode = null, summary, ...rest
   summary,
   ...rest,
 });
+
+/** Git, from this clone, the way every other seam in this skill runs it. */
+const runFile = promisify(execFile);
+
+const runGit = async (repositoryRoot, args) => (
+  await runFile('git', args, { cwd: repositoryRoot })
+).stdout;
+
+/**
+ * Everything one activation of THIS clone would be, resolved from the clone
+ * itself and from the installed distribution running this command.
+ *
+ * Nothing here is a value a caller handed in. The policy and the checks come
+ * from the clone's own configuration through the same reader the authoritative
+ * runner uses; the hook program and the gate release come from the distribution
+ * that would register them; the adapter set comes from the declared registry.
+ * An activation whose request was assembled from anything else would pin a
+ * clone that does not exist.
+ *
+ * Runtime inputs are deliberately empty: nothing in schema v4 declares one, so
+ * an activation performed from a configuration has none to pin, and inventing a
+ * name here would put an unapproved Sensitive value in the receipt.
+ */
+const activationRequestFor = async ({ repositoryRoot, selector }) => {
+  const configuration = await resolveConfiguration(repositoryRoot);
+
+  if (!configuration.ok) {
+    return {
+      failed: failure({
+        command: 'activate',
+        reasonCode: configuration.reasonCode,
+        // Activation never configures a clone on the way past.
+        detail: `${configuration.detail} Activation configures nothing; configure this clone first, then activate it.`,
+      }),
+    };
+  }
+
+  const { checks, errors } = gateChecksFromConfiguration(configuration.configuration);
+
+  if (errors.length > 0) {
+    return {
+      failed: failure({
+        command: 'activate',
+        reasonCode: 'check-descriptors-invalid',
+        detail: `this clone's configured verification commands cannot be resolved into checks: ${errors.map((error) => `${error.path}: ${error.message}`).join(' ')}`,
+      }),
+    };
+  }
+
+  const clientId = selector.client ?? 'git';
+  const client = describeAdapter(clientId);
+
+  if (client === null) {
+    return {
+      failed: failure({
+        command: 'activate',
+        reasonCode: 'adapter-undeclared',
+        detail: `${JSON.stringify(clientId)} is not an adapter this gate declares, so it declares no trust model to satisfy and nothing to self-test.`,
+      }),
+    };
+  }
+
+  const git = describeAdapter('git');
+  // Authoritative Git is always in the set: it is what a `pre-commit`
+  // registration makes authoritative, whichever client asked for the
+  // activation.
+  const adapters = [
+    { id: git.id, version: git.version, authoritative: git.role === 'authoritative' },
+    ...(client.id === git.id
+      ? []
+      : [{ id: client.id, version: client.version, authoritative: client.role === 'authoritative' }]),
+  ];
+  const distribution = await installedDistribution();
+
+  return {
+    client,
+    distribution,
+    request: {
+      scope: 'repository',
+      // A package or plugin lifecycle can never reach this: the operator ran a
+      // command, twice, and the transaction is told exactly that.
+      trigger: 'explicit',
+      repository: { root: repositoryRoot },
+      configuration: {
+        schemaVersion: configuration.configuration?.schema_version ?? null,
+        policy: configuration.policy,
+      },
+      client: { id: client.id, surface: client.surface, version: client.version },
+      gate: {
+        id: GATE_ID,
+        version: distribution.version,
+        protocolVersion: PROTOCOL_VERSION,
+      },
+      runtime: {
+        runnerVersion: `${GATE_ID}/${distribution.version ?? 'unknown'}`,
+        hookProgram: {
+          interpreter: process.execPath,
+          script: PACKAGED_HOOK_PROGRAM,
+          args: [],
+        },
+      },
+      checks,
+      adapters,
+      runtimeInputs: [],
+    },
+  };
+};
+
+/** What one activation invocation did, in the transaction's own terms. */
+const activationSummary = (result, shortcut) => {
+  if (result.activated === true) {
+    return `This clone is activated: every step ran in the settled order, the receipt ${result.receipt.receiptId} was published and confirmed, and authoritative Git was enabled last. ${shortcut.detail}`;
+  }
+
+  if (result.state === 'paused') {
+    return `Nothing was activated (${result.reasonCode}): the transaction paused at ${result.step}, no gate integration is active, and it resumes only as \`gate activate --resume ${result.resumption.transactionId} --confirm <token>\` against the same clone, policy, adapters, and preview.`;
+  }
+
+  if (result.state === 'recovery-required') {
+    return `The activation failed at ${result.step} (${result.reasonCode}) and could not be fully rolled back; this clone requires recovery: ${result.rollback.remains.join(' ')}`;
+  }
+
+  return `Nothing was activated (${result.reasonCode}): the transaction failed at ${result.step}, every gate-owned change was rolled back, no shortcut was written, and this clone commits exactly as it did while configured.`;
+};
+
+/**
+ * `gate activate` — activate this configured clone, in two invocations.
+ *
+ * The first previews and writes nothing. The second names the token the first
+ * printed, and this rebuilds the preview from the clone AS IT IS NOW and checks
+ * the token against that. A confirmation naming a preview this clone no longer
+ * matches — because a command resolved differently, because the policy changed,
+ * because it is a different clone — performs no mutation and says so
+ * (`AC-LIFE-008`, `TB-036`).
+ *
+ * The consent handed to the transaction is built from the RECOMPUTED preview,
+ * never from anything the caller carried, so the identities the transaction
+ * checks are identities this process observed.
+ */
+const operateActivate = async ({ repositoryRoot, environment, selector, confirmation }) => {
+  const resolved = await activationRequestFor({ repositoryRoot, selector });
+
+  if (resolved.failed) {
+    return resolved.failed;
+  }
+
+  const { client, distribution, request } = resolved;
+  const dependencies = { runGit, environment };
+  let preview;
+
+  try {
+    preview = await previewActivation(request, dependencies);
+  } catch (error) {
+    return failure({
+      command: 'activate',
+      reasonCode: 'activation-unpreviewable',
+      detail: `this clone cannot be previewed for activation (${error.message}); nothing was written.`,
+    });
+  }
+
+  // What this clone IS right now, read without opening — and therefore without
+  // creating — an Evidence store. A clone that already carries a receipt is
+  // `activated`, and the transaction refuses to take over the hook it owns; a
+  // preview that called it `configured` regardless would be describing the
+  // request rather than the clone.
+  const existing = await resolveReceipt(repositoryRoot);
+  const observation = {
+    state: existing.ok ? 'activated' : 'configured',
+    client: client.id,
+    // What has to be satisfied before this clone can be activated, in the
+    // adapter's own declared words.
+    trustModel: client.capabilities?.trust?.model ?? null,
+    release: {
+      id: GATE_ID,
+      version: distribution.version,
+      protocolVersion: PROTOCOL_VERSION,
+    },
+    repositoryIdentity: preview.repository.identity,
+    configurationIdentity: preview.configuration.identity,
+    hooks: preview.hooks.map((hook) => ({
+      hook: hook.hook,
+      path: hook.path,
+      action: hook.action,
+      ownership: hook.ownership,
+    })),
+    hookManager: preview.hookManager,
+    hookProgram: request.runtime.hookProgram,
+    commands: preview.commands,
+    unresolved: preview.unresolved,
+    adapters: preview.adapters,
+    dependencyRoots: preview.dependencyRoots,
+    runtimeInputs: preview.runtimeInputs,
+    shortcut: { kind: 'clone-local-git-alias', name: `alias.${COMMAND_ALIAS_NAME}` },
+    confirmationToken: preview.previewId,
+  };
+
+  if (confirmation === null) {
+    return { command: 'activate', healthy: true, observation, mutation: null };
+  }
+
+  const clone = await resolveClone({
+    repositoryRoot,
+    environment,
+    command: 'activate',
+    // A clone that is not activated has no receipt, which is the whole point.
+    // The store is opened because a confirmation writes: the receipt goes in
+    // it, and so does the Lifecycle event that records this either way.
+    receiptRequired: false,
+  });
+
+  if (clone.failed) {
+    return clone.failed;
+  }
+
+  if (confirmation !== preview.previewId) {
+    await recordSurfaceRefusal({
+      evidenceStore: clone.store,
+      type: 'activation',
+      before: confirmation,
+      reason: 'preview-mismatch: the confirmation named an activation this clone no longer matches; nothing was registered and no receipt was written.',
+    });
+
+    return {
+      command: 'activate',
+      healthy: false,
+      observation,
+      mutation: mutation({
+        confirmation,
+        performed: false,
+        reasonCode: 'preview-mismatch',
+        expected: preview.previewId,
+        summary: 'Nothing was activated (preview-mismatch): this clone no longer matches the activation that token named. Preview again and confirm the new preview.',
+      }),
+    };
+  }
+
+  const consent = {
+    previewId: preview.previewId,
+    repositoryIdentity: preview.repository.identity,
+    configurationIdentity: preview.configuration.identity,
+    // Carried, never asserted. See `SELF_DECLARED`.
+    actor: selector.actor === null ? null : { name: selector.actor, source: SELF_DECLARED },
+    grantedAt: new Date().toISOString(),
+  };
+  // A resumption names the transaction it is resuming, and that identity binds
+  // all four things a resumption may never change. Every one of them is
+  // re-derived here, so a clone, policy, adapter set, or preview that moved
+  // since the pause produces a different identity and the transaction refuses.
+  const resume = selector.resume === null ? null : {
+    transactionId: selector.resume,
+    previewId: preview.previewId,
+    repositoryIdentity: preview.repository.identity,
+    configurationIdentity: preview.configuration.identity,
+    adapterIdentity: adapterIdentity(preview.adapters),
+  };
+  const result = await activate({ ...request, consent, resume }, {
+    ...dependencies,
+    evidenceStore: clone.store,
+    // The three seams `runActivation` leaves abstract. They are supplied here
+    // and nowhere else on this surface, and none of them can be replaced from
+    // an argument vector: a caller that could inject its own self-test could
+    // activate a clone that proves nothing.
+    establishTrust: createTrustEstablishment({ consent, actor: selector.actor }),
+    selfTestEvaluation: () => selfTestEvaluationDenial({
+      runnerVersion: request.runtime.runnerVersion,
+    }),
+    selfTestAdapter: selfTestAdapterSurface,
+  });
+
+  // The shortcut is registered only after the transaction has fully succeeded,
+  // and outside its stepped sequence: `ACTIVATION_STEPS` may not grow and the
+  // transaction may not change, so there is no journal entry to hang it from. A
+  // failed or rolled-back activation therefore never writes one at all, which
+  // is the property `SG-LIFE-001` asks for, reached by not writing rather than
+  // by taking back. A shortcut that cannot be registered is an inconvenience,
+  // never a reason to leave an otherwise activated clone unactivated.
+  const shortcut = result.activated === true
+    ? await registerCommandAlias({
+      repositoryRoot,
+      command: PACKAGED_COMMAND,
+      runGit: (args) => runGit(repositoryRoot, args),
+    })
+    : {
+      registered: false,
+      reason: 'activation-not-completed',
+      name: `alias.${COMMAND_ALIAS_NAME}`,
+      value: null,
+      detail: 'No shortcut was registered, because nothing was activated.',
+    };
+
+  return {
+    command: 'activate',
+    healthy: result.activated === true,
+    observation: { ...observation, state: result.state },
+    mutation: mutation({
+      confirmation,
+      performed: result.activated === true,
+      reasonCode: result.reasonCode,
+      step: result.step,
+      order: result.order,
+      state: result.state,
+      receiptId: result.receipt?.receiptId ?? null,
+      // Exactly what the receipt claims about consent, restated where a reader
+      // meets it, so nobody has to open the receipt to see that no human was
+      // asserted.
+      trust: result.receipt?.trust ?? null,
+      resumption: result.resumption,
+      rollback: result.rollback,
+      shortcut,
+      errors: result.errors ?? [],
+      summary: activationSummary(result, shortcut),
+    }),
+  };
+};
 
 /**
  * `gate status` — reconcile desired against actual state and report it.
@@ -1214,6 +1607,7 @@ const operateCleanup = async ({ repositoryRoot, environment, confirmation }) => 
 };
 
 const OPERATIONS = Object.freeze({
+  activate: operateActivate,
   status: operateStatus,
   locks: operateLocks,
   prune: operatePrune,
@@ -1233,7 +1627,7 @@ const documentOf = ({ command, repositoryRoot, result }) => {
 
   return {
     document: DOCUMENT_VERSION,
-    gate: 'change-evaluation-gate',
+    gate: GATE_ID,
     command: result.command ?? command ?? null,
     ok: !failed && result.healthy === true,
     exitStatus,
@@ -1271,6 +1665,34 @@ const renderConfirmation = (command, observation) => line(
     ? 'nothing to confirm'
     : `gate ${command} ${CONFIRMABLE_COMMANDS[command]} ${observation.confirmationToken}`,
 );
+
+const renderActivate = (observation) => [
+  line('state', observation.state),
+  line('client', `${observation.client} (trust model ${observation.trustModel ?? 'undeclared'})`),
+  line(
+    'release',
+    `${observation.release.id} ${observation.release.version ?? 'unknown'} (protocol ${observation.release.protocolVersion})`,
+  ),
+  line('repository identity', observation.repositoryIdentity),
+  line('configuration identity', observation.configurationIdentity),
+  line('hooks', observation.hooks.length),
+  ...observation.hooks.map(
+    (hook) => `  - ${hook.hook} ${hook.path} (${hook.action}, ${hook.ownership ?? 'unowned'})`,
+  ),
+  line('hook manager', observation.hookManager?.id ?? 'none'),
+  line('hook program', `${observation.hookProgram.interpreter} ${observation.hookProgram.script}`),
+  line('commands', observation.commands.length),
+  ...observation.commands.map(
+    (command) => `  - ${command.check_id} ${command.runner} ${command.executable} ${command.version ?? 'unversioned'}`,
+  ),
+  line('unresolved', observation.unresolved.length),
+  ...observation.unresolved.map((entry) => `  - ${JSON.stringify(entry)}`),
+  line('adapters', observation.adapters.map((adapter) => adapter.id).join(', ') || 'none'),
+  line('dependency roots', observation.dependencyRoots.join(', ') || 'none'),
+  line('runtime inputs', observation.runtimeInputs.join(', ') || 'none'),
+  line('shortcut', `${observation.shortcut.name} (${observation.shortcut.kind})`),
+  renderConfirmation('activate', observation),
+];
 
 const renderStatus = (observation) => [
   line('state', observation.state),
@@ -1396,6 +1818,7 @@ const renderCleanup = (observation) => [
 ];
 
 const RENDERERS = Object.freeze({
+  activate: renderActivate,
   status: renderStatus,
   locks: renderLocks,
   prune: renderPrune,

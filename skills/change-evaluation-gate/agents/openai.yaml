@@ -1,6 +1,6 @@
 interface:
   display_name: "Change Evaluation Gate"
-  short_description: "Configure the optional Gate without activation"
-  default_prompt: "Install or explicitly configure the dormant Change Evaluation Gate while keeping activation, hooks, trust, and receipts unchanged."
+  short_description: "Configure, activate, diagnose, and recover the Gate"
+  default_prompt: "Configure the Change Evaluation Gate's repository policy, activate a configured clone through its two-invocation command, or diagnose and recover an activated one, keeping configuration and clone-local activation separate."
 policy:
   allow_implicit_invocation: false

@@ -96,7 +96,7 @@ const throwawayRepository = async (t) => {
   return root;
 };
 
-const configureClone = async (root, { dependencyRoots = [] } = {}) => {
+const configureClone = async (root, { dependencyRoots = [], prerequisites = [] } = {}) => {
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(
     path.join(root, 'tools/check.mjs'),
@@ -135,6 +135,15 @@ const configureClone = async (root, { dependencyRoots = [] } = {}) => {
       '            - PATH',
       '          evidence_category: test',
       '          source_scope: both',
+      ...(prerequisites.length === 0
+        ? []
+        : [
+          '          prerequisites:',
+          ...prerequisites.flatMap((prerequisite) => [
+            `            - kind: ${prerequisite.kind}`,
+            `              name: ${prerequisite.name}`,
+          ]),
+        ]),
       'evaluation_gate:',
       '  checks:',
       '    required:',
@@ -266,6 +275,33 @@ test('AC-ADAPT-001: a failing Cursor stop payload produces stdout JSON whose dec
     body.followup_message,
     /this commit was not authorized|authorized the commit/i,
     'a worktree preflight must never describe itself as the decision a commit would receive.',
+  );
+});
+
+test('TB-044 NFR-OPER-001: a check whose declared prerequisite is not proved names it on the desktop feedback channel, instead of a verdict about the code', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, {
+    prerequisites: [{ kind: 'environment', name: 'source-control-history' }],
+  });
+  await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+  const body = JSON.parse(result.stdout);
+
+  assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+  assert.match(body.followup_message, /configuration\.broad-tests\.test/);
+  assert.match(body.followup_message, /prerequisite-missing/);
+  assert.match(
+    body.followup_message,
+    /source-control-history/,
+    'the channel that pointed an agent at the project must say what the check never got.',
+  );
+  assert.doesNotMatch(
+    body.followup_message,
+    /grader-negative/,
+    'a check that never ran says nothing about the code.',
   );
 });
 

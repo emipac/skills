@@ -80,7 +80,14 @@ const IDENTIFIER = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
 
 const CAPABILITY_NAME = /^[a-z][a-z0-9-]*$/;
 
-const PREREQUISITE_KINDS = Object.freeze([
+/**
+ * The four kinds of requirement a check may declare.
+ *
+ * Exported so the one resolver that proves them reads the same list this
+ * contract validates against. A second copy is how a kind would come to
+ * validate here and be silently unprovable there (`SG-OWNER-001`).
+ */
+export const PREREQUISITE_KINDS = Object.freeze([
   'executable',
   'configuration',
   'service',

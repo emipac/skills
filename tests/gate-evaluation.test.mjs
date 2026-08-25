@@ -22,6 +22,11 @@ import {
   validateEvaluationRequest,
 } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
 import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
+import { PREREQUISITE_KINDS } from '../skills/change-evaluation-gate/scripts/lib/check-descriptor.mjs';
+import {
+  createPrerequisiteResolver,
+  describeMissingPrerequisites,
+} from '../skills/change-evaluation-gate/scripts/lib/prerequisites.mjs';
 
 const runFile = promisify(execFile);
 
@@ -710,5 +715,83 @@ test('TB-033 AC-EVAL-002: validateDecision returns findings for every malformed 
 
     assert.ok(Array.isArray(findings), `${JSON.stringify(decision)} must be answered with findings.`);
     assert.ok(findings.length > 0, `${JSON.stringify(decision)} must be refused, not accepted.`);
+  }
+});
+
+/**
+ * TB-044: what "proved" means for each declared kind, asked of the one resolver
+ * both production runners bind. Every unknown answers false, because an
+ * unproved requirement is `unverified` and `unverified` denies (`NFR-REL-003`).
+ */
+test('TB-044 AC-EVAL-003: each prerequisite kind is proved from established facts, and nothing else is', () => {
+  const resolve = createPrerequisiteResolver({
+    searchPath: path.dirname(process.execPath),
+    environment: { DECLARED: 'value', UNDECLARED: 'value' },
+  });
+  const context = {
+    check: { evaluate: { allowed_environment: ['DECLARED'] } },
+    repositoryRoot: '/repository',
+    snapshot: { executionRoot: '/execution-root' },
+    // Tracked content this evaluation materialized, and one dependency root it
+    // provided beside it — the same lists materialization already reported.
+    evaluatedPaths: ['app/Order.php', 'vendor'],
+  };
+
+  const cases = [
+    ['an executable the checks run with', { kind: 'executable', name: path.basename(process.execPath) }, true],
+    ['an executable that is nowhere on that path', { kind: 'executable', name: 'no-such-program-anywhere' }, false],
+    ['a path the snapshot holds', { kind: 'configuration', name: 'app' }, true],
+    ['a dependency root that was provided', { kind: 'configuration', name: 'vendor' }, true],
+    ['a path only a build step would generate', { kind: 'configuration', name: 'app/generated' }, false],
+    ['a service, which nothing here probes', { kind: 'service', name: 'database' }, false],
+    ['an environment name the check is given', { kind: 'environment', name: 'DECLARED' }, true],
+    ['an environment name the check never declared', { kind: 'environment', name: 'UNDECLARED' }, false],
+    ['source-control history a materialized snapshot cannot have', { kind: 'environment', name: 'source-control-history' }, false],
+    ['a kind no descriptor may declare', { kind: 'invented', name: 'anything' }, false],
+    ['nothing readable at all', null, false],
+  ];
+
+  for (const [label, prerequisite, expected] of cases) {
+    assert.equal(resolve(prerequisite, context), expected, label);
+  }
+});
+
+test('TB-044 SG-EVAL-001: source-control history is proved only where the executed tree is the repository, never asserted', () => {
+  const resolve = createPrerequisiteResolver({});
+  const prerequisite = { kind: 'environment', name: 'source-control-history' };
+
+  assert.equal(
+    resolve(prerequisite, { repositoryRoot: '/repository', snapshot: { executionRoot: '/repository' } }),
+    true,
+    'the fact is derived from where the checks run, not hard-coded.',
+  );
+  assert.equal(
+    resolve(prerequisite, { repositoryRoot: '/repository', snapshot: { executionRoot: '/somewhere-else' } }),
+    false,
+    'an evaluation materializes its subject elsewhere, so the history is not there.',
+  );
+  assert.equal(resolve(prerequisite, {}), false, 'nothing established is nothing proved.');
+});
+
+test('TB-044 NFR-OPER-001: an unproved requirement is named as declared, so no tool log is needed to read the denial', () => {
+  const stated = describeMissingPrerequisites([
+    { kind: 'environment', name: 'source-control-history' },
+    { kind: 'configuration', name: 'app/generated' },
+  ]);
+
+  assert.match(stated, /environment "source-control-history"/);
+  assert.match(stated, /configuration "app\/generated"/);
+  assert.match(stated, /Nothing here is a finding about the code/i);
+});
+
+test('TB-044 SG-OWNER-001: every kind the descriptor contract validates has a proof, and no proof exists for a kind it does not', () => {
+  const resolve = createPrerequisiteResolver({});
+
+  for (const kind of PREREQUISITE_KINDS) {
+    assert.equal(
+      typeof resolve({ kind, name: 'anything-at-all' }, {}),
+      'boolean',
+      `${kind} must be answered rather than assumed proved.`,
+    );
   }
 });

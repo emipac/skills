@@ -1,12 +1,14 @@
 ---
 name: change-evaluation-gate
-description: Install or explicitly configure the optional Change Evaluation Gate module while keeping repository configuration separate from clone-local activation. Use when a maintainer wants to adopt Gate policy, inspect whether the Gate is configured, or confirm that distribution remains dormant.
+description: Install and configure the optional Change Evaluation Gate module, activate a configured clone through its two-invocation command, and diagnose, repair, update, or recover an activated one. Use when a maintainer wants to adopt Gate policy, activate or deactivate commit enforcement in one clone, or find out why a clone is unhealthy.
 ---
 
 # Change Evaluation Gate
 
-Make the optional Gate module available and configure its repository policy
-without activating commit enforcement. Configuration does not activate the Gate.
+Make the optional Gate module available, configure its repository policy, and —
+as a separate explicit act — activate, observe, or recover one clone through the
+Gate's own command. Installing does not configure, and configuring does not
+activate.
 
 ## 1. Confirm the lifecycle state
 
@@ -71,11 +73,12 @@ Completion criterion: absent configuration remains unconfigured; confirmed
 configuration contains exactly the five policy subcontracts and no command or
 activation state.
 
-## 3. Stop before activation
+## 3. Never activate implicitly, and operate an activated clone by command
 
-Do not create or modify Git hooks, `core.hooksPath`, trust settings, runtime
-inputs, activation receipts, active-release pointers, or evidence storage.
-Those belong to the separate, explicitly requested, clone-local Activation
+Never write Git hooks, `core.hooksPath`, trust settings, runtime inputs,
+activation receipts, active-release pointers, or evidence storage yourself — not
+by editing them, and not by importing the activation library and driving it. All
+of it belongs to the separate, explicitly requested, clone-local Activation
 transaction defined by the
 [Activation transaction contract](references/activation-transaction-contract.md):
 it previews exact changes and commands, obtains repository-bound consent,
@@ -85,7 +88,10 @@ program it is about to register — by running it against a change it must deny
 and requiring a refusal — pins a receipt,
 and enables authoritative Git last. Configuring policy never starts it, and a
 failed transaction leaves the clone configured with no receipt and no
-registration.
+registration. That transaction is reached by `gate activate`, described below,
+and by nothing else — never as a side effect of installing, configuring, or
+opening a client. Running that command when the maintainer asked for activation
+is not a violation of the paragraph above; it is the only way to satisfy it.
 
 Everything that happens to a clone *after* it is activated — taking a candidate
 release through an explicit atomic `gate update`, observing health without
@@ -97,10 +103,15 @@ update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
 All of that lifecycle is reachable as one command. Run
-`change-evaluation-gate <command>` — or
-`node skills/change-evaluation-gate/scripts/gate.mjs <command>` — where the
-command is `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
-`uninstall`, or `cleanup`. Add `--json` for the same document a person is shown.
+`change-evaluation-gate <command>` where that executable is on the path, or run
+this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
+beside the `SKILL.md` you are reading rather than assuming a path: an installed
+skill sits wherever the client placed it, so the same literal path does not hold
+across projects. The command is `activate`, `status`, `locks`, `prune`,
+`repair`, `update`, `deactivate`, `uninstall`, or `cleanup`. Add `--json` for
+the same document a person is shown. An activated clone also carries `git gate`,
+a shortcut this activation wrote into that clone's own `.git/config` and
+nowhere else.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
@@ -110,12 +121,26 @@ naming the token the preview printed: `gate repair --confirm <token>`,
 `gate locks --recover <token>`, and so on. No flag previews and confirms in one
 invocation, no `--yes` or `--force` exists, and a confirmation naming a preview
 the clone no longer matches performs nothing and says so. Use this surface to
-diagnose *and* to recover a clone, instead of importing the lifecycle library or
-re-activating. `gate activate` and `gate fix` are separate contracts and are
-refused here by name.
+activate, to diagnose, *and* to recover a clone, instead of importing the
+lifecycle library or writing a script against it. `gate fix` is a separate
+contract and is refused here by name.
 
-Report the repository as `configured`, never `activated`, and name activation
-as a separate future action.
+`gate activate` is the same two invocations. `gate activate` previews exactly
+what the transaction would change and writes nothing; `gate activate --confirm
+<token>` performs it. Name the client with `--client <adapter-id>` when it is
+not authoritative Git; a desktop client that has not granted trust pauses the
+transaction, leaves no integration active, and prints the
+`gate activate --resume <transaction-id> --confirm <token>` that resumes it.
+A configured clone is a prerequisite: activation never configures one on the way
+past. `--actor <name>` is carried into the receipt as **self-declared** and
+never as proven — this command cannot see who ran it, and its receipt does not
+pretend otherwise.
+
+When this skill configured the policy, report the repository as `configured`,
+never `activated`, and name activation as a separate explicit action. When
+reporting on a clone the surface observed, report the state that surface
+found — an activated clone is `activated` — and never infer a state the surface
+did not report.
 
 ## Supported preflight adapters
 
@@ -162,8 +187,10 @@ including this paragraph.
 Installing an adapter never registers it. Adapters are dormant assets until the
 Activation transaction self-tests and registers them.
 
-Completion criterion: repository policy may be configured, but the clone has
-no Gate-owned operational state and commit behavior is unchanged.
+Completion criterion: installing or configuring leaves the clone with no
+Gate-owned operational state and commit behavior unchanged; only a confirmed
+`gate activate` registers an adapter, and it registers exactly the ones the
+maintainer confirmed in its preview.
 
 ## Release qualification
 

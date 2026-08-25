@@ -75,6 +75,24 @@ operator has not granted yet — the existing pause and resumption path. For
 Git's model, the repository-bound consent this command already requires is the
 grant.
 
+**The convenience shortcut activation registers is clone-local, and is a Git
+alias rather than a project manifest entry.**
+
+A maintainer should not have to type the full path to the command on every
+invocation. The obvious place to put a shortcut is the project's
+`package.json`, and that is the wrong place: `FR-LIFE-003` requires activation
+to be clone-local and repository-specific, and `package.json` is tracked and
+shared. An activation that wrote there would push `gate` scripts to every
+teammate who pulls, including those who never activated — the precise
+separation the installed/configured/activated model exists to hold. Verified: no
+part of this framework writes to a project manifest today;
+`framework-setup`'s `configure.mjs` only reads one.
+
+A local Git alias has the ergonomics without the conflict. It lives in the
+clone's own `.git/config`, which is untracked by construction, so it appears
+when the clone activates and is gone when the clone is. It also works from any
+subdirectory, which the manifest form does not.
+
 **What the receipt may claim.** A command surface cannot distinguish a human
 typing a confirmation from an agent invoking the command twice. Recording an
 operator as the grantor would be an unverifiable claim inside the receipt hash
@@ -122,6 +140,19 @@ character: they must establish that the thing answered, not merely that it
 exited. `TB-035` established the shape — proof that the subject was read, not an
 exit status. The implementer confirms a stub that always reports success fails
 the fixtures added here.
+
+Proposed — register the shortcut as one more journalled step, or not at all.
+The alias is a gate-owned change to the clone, so it belongs in the activation
+journal with a `remains` line and an `undo` that removes it, exactly as trust
+and adapter registration already do (`activation.mjs:1696`, `:1822`). The
+implementer confirms it is written to the clone's own configuration and never
+to a global or shared one, that an alias name already in use is left alone
+rather than overwritten, and that failing to register it does not fail an
+otherwise successful activation — a missing shortcut is an inconvenience, not a
+reason to leave a clone unactivated. Whether this needs a new activation step or
+fits inside an existing one is the implementer's call; `ACTIVATION_STEPS` may
+not grow, so if it does not fit, the alias is registered outside the stepped
+sequence or the proposal is discarded and reported.
 
 Proposed — surface the pause rather than resolving it. A desktop adapter that
 returns `pending` leaves the clone untouched and the command reports what must
@@ -176,8 +207,10 @@ invocation, and do not add any bypass of the consent identity checks. Do not
 record an operator identity as proven. Do not implement `repair`, `update`,
 `deactivate`, `uninstall`, `cleanup`, or `fix` — other contracts own them. Do
 not configure a repository, migrate a schema, or write
-`.agent-framework.yaml`. Do not weaken any trust model to make a clone
-activate.
+`.agent-framework.yaml`. Do not write a convenience shortcut into
+`package.json`, `composer.json`, or any other tracked project file, and do not
+write one into a global or system Git configuration. Do not weaken any trust
+model to make a clone activate.
 
 ## Risk and Decision Impacts
 
@@ -208,6 +241,19 @@ activate.
   fails the fixtures, so the supplied implementations cannot be hollow.
 - [ ] `SG-LIFE-001`: a clone whose activation fails at any step commits exactly
   as it did while configured, or reports `recovery-required` naming what remains.
+- [ ] `FR-LIFE-003`: the convenience shortcut is written only to the clone's own
+  Git configuration, never to a tracked project file and never to a global one;
+  an alias name already in use is left unchanged; and a shortcut that cannot be
+  registered does not fail an otherwise successful activation.
+- [ ] `SG-LIFE-001`: a failed or rolled-back activation leaves no shortcut
+  behind, proved by comparing the clone's own configuration before and after.
+- [ ] The skill's discovery copy states what it now does. `SKILL.md`'s
+  frontmatter description, `agents/openai.yaml`'s short description and default
+  prompt, and this skill's `README.md` entry all still describe a
+  configuration-only skill, so an agent asked to activate, diagnose, or recover
+  a clone does not match this skill at all. Each is brought in line with the
+  surface as it stands after this slice, and `SKILL.md` no longer says
+  `gate activate` is refused by name.
 - [ ] The evaluation runtime is unchanged, proved by the existing commit and
   preflight capabilities passing untouched.
 

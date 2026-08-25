@@ -44,6 +44,41 @@ validate. It never repairs, guesses, or partially accepts one provider's output.
 | `order` | Stable ordering within a stage. |
 | `selection` | Deterministic test selection; required for `focused` and `affected-tests`, `null` elsewhere. |
 
+## Prerequisites
+
+A prerequisite is `{ kind, name }`, where `kind` is one of `executable`,
+`configuration`, `service`, or `environment`. It states what a check needs in
+order to produce evidence at all. Whoever owns the check declares it — a stack
+provider through its descriptors, or the clone itself beside a configured
+verification command. Gate core never proposes one and never learns why one is
+needed.
+
+Before a check runs, every prerequisite it declares is proved against the
+environment the evaluation built. What is not proved makes the check
+`unverified` with `prerequisite-missing`, naming what was not proved; the
+command is never started, so nothing about the code is claimed. A required
+check in that state denies exactly as it did before — this changes the reason a
+maintainer is given, never the authorization.
+
+| Kind | Proved when |
+| --- | --- |
+| `executable` | `name` resolves on the search path the checks themselves run with — the pinned executables, their pinned interpreters, and the platform's utility directories. |
+| `configuration` | `name` is a repository-relative path the evaluated tree holds: tracked content the snapshot materialized, or a declared dependency root that was provided beside it. |
+| `service` | Never. Nothing here probes a service, and absence of evidence is not evidence of presence. |
+| `environment` | `name` is either a fact the evaluation states about itself, or an environment variable name the check will actually be given — declared in the command's `allowed_environment` and present in the invoking environment. |
+
+The environment facts an evaluation can state are properties of the evaluation,
+never of a toolchain. There is one: `source-control-history`, proved only where
+the executed tree is the repository itself. An evaluation materializes an exact
+snapshot elsewhere so the graded tree cannot move, and a tree of files is not a
+repository — so a command whose arguments depend on one says so instead of
+reporting whatever its refusal to start looked like.
+
+Nothing is inferred. No exit code, error string, or line of tool output decides
+that a failure was environmental: a requirement is declared and proved, or it is
+not proved. A heuristic would be worse than no check at all, because it would
+sometimes hide a real failure of the code.
+
 ## Evidence ladder stages
 
 The eight ordered stages are owned by `verify-change` and imported, not

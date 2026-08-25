@@ -315,7 +315,7 @@ const VENDOR_BINARY_DIRECTORY = path.join('vendor', 'bin');
  * An unresolved runner never falls back to shell lookup, so resolution walks
  * the search path itself and reports nothing when it finds nothing.
  */
-const locateOnPath = (name, environment) => {
+export const locateOnPath = (name, environment) => {
   if (name.includes('/')) {
     return isExecutable(name) ? name : null;
   }

@@ -26,9 +26,12 @@ import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/ev
 import {
   EXECUTION_ROOT_PREFIXES,
   EXECUTION_ROOT_RETENTION_MS,
+  createExecutionRoot,
+  releaseExecutionRoot,
   runHook,
   sweepOrphanedExecutionRoots,
 } from '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs';
+import { captureSnapshot } from '../skills/change-evaluation-gate/scripts/lib/snapshot.mjs';
 
 const runFile = promisify(execFile);
 
@@ -108,36 +111,65 @@ const throwawayRepository = async (t) => {
   return root;
 };
 
+/** The graded check: reads what it was pointed at and fails on a broken subject. */
+const GRADING_CHECK = [
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  '',
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+/** A check that announces it started and then refuses to finish. */
+const blockingCheck = (blockUntil) => [
+  "import { writeFileSync } from 'node:fs';",
+  '',
+  `writeFileSync(${JSON.stringify(blockUntil)}, 'started\\n');`,
+  '// A backstop only: the test kills this process group long before it',
+  '// elapses, and nothing may be left running if the kill never lands.',
+  'setTimeout(() => process.exit(0), 30_000);',
+  '',
+].join('\n');
+
+/**
+ * TB-043. A check that reports the directory it is actually running in, and
+ * fails the way the preserved `0.11.2` run failed if the path it resolves is
+ * not the path it was handed. `report` is outside the execution root, so what
+ * the check observed survives the root's removal.
+ */
+const observingCheck = (report) => [
+  "import { realpathSync, writeFileSync } from 'node:fs';",
+  '',
+  'const observed = process.cwd();',
+  'const resolved = realpathSync(observed);',
+  '',
+  `writeFileSync(${JSON.stringify(report)}, JSON.stringify({ observed, resolved }));`,
+  '',
+  'if (observed !== resolved) {',
+  '  process.stdout.write(`FAILED ${resolved} is not ${observed}\\n`);',
+  '  process.exit(1);',
+  '}',
+  '',
+  'process.stdout.write(`observed ${observed}\\n`);',
+  '',
+].join('\n');
+
 /**
  * A clone configured with one required check. `blockUntil` makes that check
  * announce that it started and then refuse to finish, which is the only way to
  * hold a runner inside its evaluation long enough to interrupt it from outside.
+ * `report` makes it record the directory it ran in instead of grading.
  */
-const configureClone = async (root, { blockUntil = null } = {}) => {
+const configureClone = async (root, { blockUntil = null, report = null } = {}) => {
   await mkdir(path.join(root, 'tools'), { recursive: true });
-  await writeFile(
-    path.join(root, 'tools/check.mjs'),
-    blockUntil === null
-      ? [
-        "import { readFile } from 'node:fs/promises';",
-        '',
-        "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
-        '',
-        'process.stdout.write(`graded ${graded.length} bytes\\n`);',
-        "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
-        '',
-      ].join('\n')
-      : [
-        "import { writeFileSync } from 'node:fs';",
-        '',
-        `writeFileSync(${JSON.stringify(blockUntil)}, 'started\\n');`,
-        '// A backstop only: the test kills this process group long before it',
-        '// elapses, and nothing may be left running if the kill never lands.',
-        'setTimeout(() => process.exit(0), 30_000);',
-        '',
-      ].join('\n'),
-    'utf8',
-  );
+
+  const check = blockUntil !== null
+    ? blockingCheck(blockUntil)
+    : (report !== null ? observingCheck(report) : GRADING_CHECK);
+
+  await writeFile(path.join(root, 'tools/check.mjs'), check, 'utf8');
   await writeFile(
     path.join(root, '.agent-framework.yaml'),
     [
@@ -598,6 +630,185 @@ test('TB-038 FR-LIFE-019: the sweep is not a maintainer-facing recovery action',
     sources[1],
     /sweepOrphanedExecutionRoots/,
     'the preflight runner reclaims abandoned roots too.',
+  );
+  void t;
+});
+
+/**
+ * TB-043. The execution root has one name.
+ *
+ * A temporary directory reached through a symbolic link is what the reporting
+ * machine had, and it is what every fixture below builds explicitly: the runner
+ * under test is handed a `TMPDIR` that is a link to a real directory, so the
+ * split between the name the gate holds and the name the operating system
+ * considers canonical is reproduced on any filesystem rather than only on one.
+ * That makes these fixtures free of operating-system-labelled logic and red on
+ * every platform before the fix, not only on macOS (`NFR-PORT-002`).
+ */
+const linkedTemporaryRoot = async (t) => {
+  const canonical = await throwawayDirectory(t, 'gate-exec-root-canonical-');
+  const link = path.join(await throwawayDirectory(t, 'gate-exec-root-link-'), 'temporary');
+
+  await symlink(canonical, link, 'dir');
+
+  assert.notEqual(link, canonical, 'the fixture is only meaningful if the two spellings differ.');
+
+  return { canonical, link };
+};
+
+/** Run `work` with the process's temporary directory pointed somewhere else. */
+const withTemporaryRoot = async (temporaryRoot, work) => {
+  const previous = process.env.TMPDIR;
+
+  process.env.TMPDIR = temporaryRoot;
+
+  try {
+    return await work();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = previous;
+    }
+  }
+};
+
+const evidenceLogEntries = async (repository) => {
+  const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
+    cwd: repository,
+    env: isolatedGitEnvironment(),
+  })).stdout.trim();
+  const log = path.resolve(repository, common, 'change-evaluation-gate/evidence/log.ndjson');
+  const contents = await readFile(log, 'utf8').catch(() => '');
+
+  return contents.split('\n').filter((line) => line.length > 0).map((line) => JSON.parse(line));
+};
+
+test('TB-043 AC-EVAL-006: a program executing inside the execution root resolves the path the gate created', async (t) => {
+  const { link } = await linkedTemporaryRoot(t);
+  const root = await withTemporaryRoot(
+    link,
+    () => createExecutionRoot('gate-hook-runner-exec-'),
+  );
+
+  t.after(() => releaseExecutionRoot(root).catch(() => {}));
+
+  // The comparison the preserved test runner made: resolve the path you were
+  // handed, compare it against the path you were handed.
+  const resolvedByTool = (await runFile(
+    process.execPath,
+    ['-e', 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))', root],
+    { cwd: root },
+  )).stdout;
+
+  assert.equal(
+    resolvedByTool,
+    root,
+    `a check that resolves the execution root it was given must reach the name the gate holds, got ${resolvedByTool}.`,
+  );
+
+  // And the same directory read from the inside: a process's working directory
+  // is reported canonically, which is the spelling the gate has to be holding.
+  const observedInside = (await runFile(
+    process.execPath,
+    ['-e', 'process.stdout.write(process.cwd())'],
+    { cwd: root },
+  )).stdout;
+
+  assert.equal(
+    observedInside,
+    root,
+    `a program executing inside the execution root must observe the name the gate holds, got ${observedInside}.`,
+  );
+});
+
+test('TB-043 AC-EVAL-004: a check executing inside the execution root observes the path the decision records', async (t) => {
+  const repository = await throwawayRepository(t);
+  const { canonical, link } = await linkedTemporaryRoot(t);
+  const report = path.join(await throwawayDirectory(t, 'gate-exec-root-report-'), 'observed.json');
+
+  await configureClone(repository, { report });
+  await publishReceipt(repository);
+  await stage(repository, 'baseline\nunder evaluation\n');
+
+  const finished = await new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', HOOK_RUNNER_DRIVER], {
+      cwd: repository,
+      env: { ...isolatedGitEnvironment(), TMPDIR: link },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+
+    child.stdout.resume();
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('close', (exitCode) => resolve({ exitCode, stderr }));
+  });
+
+  const observation = JSON.parse(await readFile(report, 'utf8'));
+  const entries = await evidenceLogEntries(repository);
+  const recorded = entries.at(-1)?.execution?.executionRoot ?? null;
+
+  assert.equal(
+    observation.observed,
+    recorded,
+    `the directory the check ran in and the directory the decision records must be one name: ran in ${observation.observed}, recorded ${recorded}.`,
+  );
+  assert.equal(
+    observation.observed,
+    observation.resolved,
+    'a check that resolves where it is running must reach where it was put.',
+  );
+  assert.equal(
+    finished.exitCode,
+    0,
+    `a check that compares the two spellings must pass, got exit ${finished.exitCode}: ${finished.stderr}`,
+  );
+
+  // FR-EVAL-005: the root is still removed, under its own prefix, and the sweep
+  // still looks in the place the run actually created it.
+  assert.deepEqual(await rootsUnder(canonical), [], 'the run removes its own execution root.');
+  assert.deepEqual(await rootsUnder(link), [], 'and nothing is left under the linked spelling.');
+});
+
+test('TB-043 SG-EVAL-001, NFR-REL-001: the root\'s spelling moves no snapshot identity and no dependency root', async (t) => {
+  const repository = await throwawayRepository(t);
+  const { canonical, link } = await linkedTemporaryRoot(t);
+
+  await stage(repository, 'baseline\nidentified\n');
+  // Installed after staging, so the dependency root is what it is in a real
+  // clone: present on disk, untracked, and never part of what is graded.
+  await mkdir(path.join(repository, 'vendor/library'), { recursive: true });
+  await writeFile(path.join(repository, 'vendor/library/installed.txt'), 'installed\n', 'utf8');
+
+  const capture = async (executionRoot) => captureSnapshot({
+    repositoryRoot: repository,
+    kind: 'git-index',
+    executionRoot,
+    dependencyRoots: ['vendor'],
+  });
+
+  const underLink = await capture(path.join(link, 'gate-identity-linked'));
+  const underCanonical = await capture(path.join(canonical, 'gate-identity-canonical'));
+
+  assert.equal(underLink.captured, true, JSON.stringify(underLink));
+  assert.equal(underCanonical.captured, true, JSON.stringify(underCanonical));
+  assert.equal(
+    underLink.snapshot.id,
+    underCanonical.snapshot.id,
+    'SG-EVAL-001: an identity is derived over repository-relative paths, so the execution root\'s spelling cannot move it.',
+  );
+  assert.equal(
+    underCanonical.snapshot.paths.some((relative) => relative.startsWith('vendor/')),
+    false,
+    'NFR-REL-001: a provided dependency root stays outside the snapshot\'s path list.',
+  );
+  assert.deepEqual(underCanonical.dependencies.provided, ['vendor']);
+  assert.equal(
+    await realpath(path.join(canonical, 'gate-identity-canonical/vendor')),
+    await realpath(path.join(repository, 'vendor')),
+    'NFR-REL-001: the linked dependency root still resolves to the installed directory it names.',
   );
   void t;
 });

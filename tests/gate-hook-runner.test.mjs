@@ -268,8 +268,18 @@ const configureClone = async (root, overrides = {}) => {
       '          timeout_seconds: 60',
       '          allowed_environment:',
       '            - PATH',
+      ...(overrides.allowedEnvironment ?? []).map((name) => `            - ${name}`),
       '          evidence_category: test',
       '          source_scope: both',
+      ...((overrides.prerequisites ?? []).length === 0
+        ? []
+        : [
+          '          prerequisites:',
+          ...overrides.prerequisites.flatMap((prerequisite) => [
+            `            - kind: ${prerequisite.kind}`,
+            `              name: ${prerequisite.name}`,
+          ]),
+        ]),
       'evaluation_gate:',
       '  checks:',
       '    required:',
@@ -1067,4 +1077,128 @@ test('TB-033 AC-EVAL-002: the runner keeps no second completeness rule of its ow
     /validateDecision\(/,
     'completeness is judged by the contract that defines it.',
   );
+});
+
+/**
+ * TB-044: the three faults a real `gms` run at 0.11.2 reported as defects in
+ * the project, each expressed as the requirement its check never got.
+ *
+ * The fixtures state the requirement, never the tool: a command whose
+ * arguments only work where source-control history is present, a check whose
+ * limits are delivered through a named environment variable, and a check that
+ * reads paths a build step generates and the snapshot therefore never holds.
+ * Gate core learns none of those names — the clone's configuration declares
+ * them, exactly as the configuration declares the commands themselves
+ * (`SG-OWNER-001`).
+ */
+const ENVIRONMENT_FAULTS = Object.freeze([
+  {
+    label: 'arguments that only work inside a repository',
+    prerequisites: [{ kind: 'environment', name: 'source-control-history' }],
+    named: /source-control-history/,
+  },
+  {
+    label: 'limits delivered through an environment name the runtime does not carry',
+    prerequisites: [{ kind: 'environment', name: 'ANALYZER_MEMORY_LIMIT' }],
+    named: /ANALYZER_MEMORY_LIMIT/,
+  },
+  {
+    label: 'generated paths the snapshot never holds',
+    prerequisites: [{ kind: 'configuration', name: 'app/generated' }],
+    named: /app\/generated/,
+  },
+]);
+
+test('TB-044 AC-EVAL-003: a check whose declared prerequisite this environment does not satisfy is unverified and never runs, where it reported a verdict about the code before', async (t) => {
+  for (const fault of ENVIRONMENT_FAULTS) {
+    const root = await throwawayRepository(t);
+
+    await configureClone(root, { prerequisites: fault.prerequisites });
+    await publishReceipt(root);
+    // Content the check itself would reject. Before this slice the check ran
+    // in an environment it could not work in and its failure was reported as
+    // `grader-negative` — a finding about the maintainer's code.
+    await stage(root, 'baseline\nBROKEN\n');
+
+    const decision = await decisionFromRealEvaluation(root);
+    const [check] = decision?.checks ?? [];
+
+    assert.equal(check?.outcome, 'unverified', `${fault.label}: a check that could not run says so.`);
+    assert.equal(check?.reasonCode, 'prerequisite-missing', fault.label);
+    assert.equal(
+      check?.attempts?.[0]?.exitCode,
+      null,
+      `${fault.label}: an unproved prerequisite must never reach the command.`,
+    );
+    assert.match(
+      check?.summary ?? '',
+      fault.named,
+      `${fault.label}: NFR-OPER-001 requires the decision name what was not proved.`,
+    );
+
+    const result = await runHook({ cwd: root, environment: process.env });
+    const output = result.lines.join('\n');
+
+    assert.notEqual(result.exitCode, 0, `${fault.label}: a required unverified check still denies.`);
+    assert.equal(result.reasonCode, 'denied', fault.label);
+    assert.match(output, /prerequisite-missing/, fault.label);
+    assert.match(output, fault.named, `${fault.label}: the maintainer reads what was missing.`);
+    assert.doesNotMatch(
+      output,
+      /grader-negative/,
+      `${fault.label}: an environment fault is never reported as a verdict about the code.`,
+    );
+  }
+});
+
+test('TB-044 AC-EVAL-003: a declared prerequisite this environment does satisfy is proved, and its check runs exactly as it does with none declared', async (t) => {
+  const proved = [
+    { label: 'an executable the checks run with', prerequisites: [{ kind: 'executable', name: path.basename(process.execPath) }] },
+    { label: 'a path the snapshot holds', prerequisites: [{ kind: 'configuration', name: 'app' }] },
+    {
+      label: 'an environment name the check is given',
+      prerequisites: [{ kind: 'environment', name: 'ANALYZER_MEMORY_LIMIT' }],
+      allowedEnvironment: ['ANALYZER_MEMORY_LIMIT'],
+      environment: { ANALYZER_MEMORY_LIMIT: '512M' },
+    },
+  ];
+
+  for (const scenario of proved) {
+    const root = await throwawayRepository(t);
+
+    await configureClone(root, {
+      prerequisites: scenario.prerequisites,
+      allowedEnvironment: scenario.allowedEnvironment ?? [],
+    });
+    await publishReceipt(root);
+    await stage(root, 'baseline\nrepaired\n');
+
+    const result = await runHook({
+      cwd: root,
+      environment: { ...process.env, ...(scenario.environment ?? {}) },
+    });
+
+    assert.equal(
+      result.exitCode,
+      0,
+      `${scenario.label}: a proved prerequisite must leave the check running as before, got: ${result.lines.join('\n')}`,
+    );
+  }
+});
+
+test('TB-044 SG-OWNER-001: Gate core proves prerequisites without naming a tool, a flag, or a stack', async () => {
+  const core = [
+    'skills/change-evaluation-gate/scripts/lib/prerequisites.mjs',
+    'skills/change-evaluation-gate/scripts/lib/evaluate.mjs',
+  ];
+
+  for (const relative of core) {
+    const source = await readFile(path.join(FRAMEWORK_ROOT, relative), 'utf8');
+
+    assert.doesNotMatch(
+      source,
+      /\b(phpstan|pint|composer|laravel|eslint|prettier|--dirty|memory_limit)\b/i,
+      `${relative} must learn no tool, flag, or stack (SG-OWNER-001).`,
+    );
+  }
 });

@@ -433,7 +433,13 @@ export const gateChecksFromConfiguration = (configuration) => {
   const checks = [];
 
   for (const proposal of proposals) {
-    const { command } = proposal;
+    // What a configured entry declares about its command, and what it declares
+    // the command NEEDS, are different statements. The Command contract is a
+    // closed shape, so the requirements are read off the entry and projected
+    // onto the descriptor that carries them; leaving them on the command would
+    // be refused as an unknown field, and dropping them is what left every
+    // configured check unable to say it needed anything at all (`TB-044`).
+    const { prerequisites, ...command } = proposal.command ?? {};
     const scope = command?.source_scope;
     const descriptor = {
       id: proposal.id,
@@ -442,7 +448,10 @@ export const gateChecksFromConfiguration = (configuration) => {
       capability: proposal.stage.capability,
       scope: typeof scope === 'string' ? scope : 'both',
       applicability: { changed_path_globs: ['**'], required_facts: [] },
-      prerequisites: [],
+      // Declared by the clone, never proposed here. A malformed declaration is
+      // reported by the descriptor contract like any other, so nothing is
+      // repaired into a requirement the project did not write.
+      prerequisites: prerequisites === undefined ? [] : prerequisites,
       // Policy binds which identities are required; the reader proposes none.
       policy: 'advisory',
       evaluate: command,
