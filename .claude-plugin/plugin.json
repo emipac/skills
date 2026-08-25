@@ -1,6 +1,6 @@
 {
   "name": "ai-skills-framework",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "A deterministic, TDD-oriented Laravel or Express TypeScript development lifecycle with adaptable frontend support.",
   "author": {
     "name": "Minic",
