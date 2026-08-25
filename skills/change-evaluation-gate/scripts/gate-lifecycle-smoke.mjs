@@ -727,11 +727,13 @@ const packagedObservation = async () => {
     `The prune preview named ${prune.observation?.blobs?.length} blobs of ${blobsBefore}.`,
   );
 
-  // Refusal, by name, of the operations a separate contract owns and of every
-  // invocation that would preview and confirm in one run (`TB-041`).
+  // Refusal, by name, of the operation a separate contract owns and of every
+  // invocation that would preview and confirm in one run (`TB-041`). `activate`
+  // is no longer among them: `TB-042` moved it into the command registry, and
+  // its own two invocations are proved by `gate-activation-smoke`.
   for (const [args, owner] of [
-    [['activate'], 'gate activate'],
     [['fix'], 'gate fix'],
+    [['activate', '--confirm'], 'gate activate --confirm <token>'],
     [['status', '--repair'], 'gate repair'],
     [['locks', '--recover'], 'gate locks --recover <token>'],
     [['prune', '--confirm'], 'gate prune --confirm <token>'],

@@ -19,16 +19,28 @@
  *    Both decisions also leave an Evidence envelope and a Lifecycle event in
  *    the clone-local store the receipt identifies (TB-026, FR-EVID-001,
  *    FR-EVID-005, AC-EVID-001).
- * 3. `rollback-leaves-no-trace` — a genuine failure injected immediately before
+ * 3. `command-driven-activation` — a configured clone activated through the
+ *    PACKAGED COMMAND, in two separate child processes: one that previews and
+ *    writes nothing, and one that confirms the token it printed. The clone the
+ *    command activated then really blocks and really allows real commits, the
+ *    receipt's trust record claims only what a command surface can prove, and
+ *    the convenience shortcut lands in that clone's own `.git/config` and no
+ *    tracked file (`AC-LIFE-002`, `FR-LIFE-003`, `FR-LIFE-006`, `SG-TRUST-001`).
+ * 4. `command-driven-activation-failure` — the same command against a clone
+ *    whose `pre-commit` the gate can neither own nor compose into refuses at
+ *    `hook-chain-validation`, writes no receipt, registers no shortcut, changes
+ *    not one byte of the clone's own Git configuration, and leaves it
+ *    committing exactly as it did while configured (`SG-LIFE-001`).
+ * 5. `rollback-leaves-no-trace` — a genuine failure injected immediately before
  *    Git enablement leaves no receipt, no registration, and a clone that still
  *    commits exactly as it did while merely configured (FR-LIFE-005,
  *    NFR-REL-002, SG-LIFE-001).
- * 4. `hook-program-self-test` — a registered hook program that exits `0` for a
+ * 6. `hook-program-self-test` — a registered hook program that exits `0` for a
  *    change it must deny is refused at the `self-test` step: the clone is left
  *    configured with no receipt and no hook, the throwaway subject the proof
  *    ran against is gone, and the clone still commits (AC-LIFE-002,
  *    NFR-REL-003, SG-LIFE-001).
- * 5. `vendor-binary-commit` — a clone whose required check is a `composer-bin`
+ * 7. `vendor-binary-commit` — a clone whose required check is a `composer-bin`
  *    descriptor runs the binary under its own vendor directory: activation pins
  *    it and the interpreter its shebang names, the binary loads the project's
  *    git-ignored installed dependencies from inside the materialized snapshot,
@@ -36,7 +48,7 @@
  *    whose executable was removed denies as drift rather than re-resolving to
  *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003,
  *    TB-028, TB-030).
- * 6. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
+ * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
  *    execution root; a root an earlier abandoned run left behind is reclaimed
@@ -76,18 +88,22 @@ import {
 import {
   ACTIVATION_RECEIPT_VERSION,
   ACTIVATION_STEPS,
+  AUTHORITATIVE_HOOK,
   activate,
   previewActivation,
   registerOwnedHook,
 } from './lib/activation.mjs';
-import { createBoundedExecutor } from './lib/bounded-execution.mjs';
-import { createRunnerResolver } from './lib/command-descriptor.mjs';
+import {
+  COMMAND_ALIAS_NAME,
+  createTrustEstablishment,
+  selfTestAdapterSurface,
+  selfTestEvaluationDenial,
+} from './lib/activation-seams.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
   readRepositoryConfiguration,
 } from './lib/configuration.mjs';
-import { evaluate } from './lib/evaluate.mjs';
 import { openEvidenceStore } from './lib/evidence-store.mjs';
 import {
   EXECUTION_ROOT_PREFIXES,
@@ -356,57 +372,20 @@ const activationRequest = (root) => ({
   runtimeInputs: [{ name: 'APP_TOKEN', source: 'approved-environment-file' }],
 });
 
-/**
- * A real self-test of the evaluation process: it materializes the snapshot,
- * spawns the check, and requires a contract decision before Git may be enabled.
- */
-const selfTestEvaluation = async ({ repository }) => {
-  const collected = { checks: configured(repository.root).checks };
-  // The shipped resolution rule, not a fixture of one: a self-test that
-  // resolved differently from activation would prove the wrong program.
-  const resolve = createRunnerResolver({ repositoryRoot: repository.root });
-  const executor = createBoundedExecutor({
-    resolveExecutable: (command) => resolve(command.runner, command),
-  });
-  const decision = await evaluate({
-    protocolVersion: '1.0',
-    operation: 'evaluate',
-    repository: { root: repository.root },
-    change: { kind: 'worktree', baseRevision: 'HEAD' },
-    evaluation: { purpose: 'regression-only', contractRef: null },
-    invocation: {
-      role: 'preflight',
-      trigger: 'work-complete',
-      adapter: { id: 'git', surface: 'git-pre-commit', version: '1.0.0', capabilities: { nativeBlocking: true } },
-      sessionId: `${CAPABILITY}-self-test`,
-    },
-  }, {
-    executionRoot: await temporaryDirectory('gate-activation-smoke-exec-'),
-    runnerVersion: `${CAPABILITY}/1.0.0`,
-    providerVersions: { laravel: '1.0.0' },
-    resolvePrerequisite: () => true,
-    checks: collected.checks,
-    execute: executor.execute,
-  });
-
-  return {
-    ok: typeof decision?.outcome === 'string',
-    detail: `the evaluation process reached ${decision?.outcome}`,
-  };
-};
-
 // No `resolveExecutable` is injected. Activation resolves through the shipped
 // rule, so this capability observes the executables a real clone would run
 // rather than the ones a fixture asserted (TB-024).
-const dependencies = (overrides = {}) => ({
+//
+// The three seams `runActivation` leaves abstract are the SHIPPED ones
+// (`TB-042`). This capability used to supply its own: a trust grant it wrote
+// itself, an evaluation self-test that accepted any outcome as an answer, and
+// an adapter self-test that reported `{ ok: true }` without driving anything.
+// A capability whose fixtures are the only implementations proves the fixtures.
+const dependencies = ({ consent = null, ...overrides } = {}) => ({
   runGit,
-  establishTrust: async () => ({
-    established: true,
-    grantedBy: 'gate-activation-smoke',
-    at: new Date().toISOString(),
-  }),
-  selfTestEvaluation,
-  selfTestAdapter: async (adapter) => ({ ok: true, detail: `${adapter.id} responded` }),
+  establishTrust: createTrustEstablishment({ consent }),
+  selfTestEvaluation: () => selfTestEvaluationDenial({ runnerVersion: `${CAPABILITY}/1.0.0` }),
+  selfTestAdapter: selfTestAdapterSurface,
   ...overrides,
 });
 
@@ -430,6 +409,7 @@ const activateFixture = async (root, store, overrides = {}, requestOverrides = {
     grantedAt: new Date().toISOString(),
   };
   const result = await activate({ ...request, consent }, dependencies({
+    consent,
     evidenceStore: store,
     ...overrides,
   }));
@@ -573,6 +553,241 @@ const packagedActivation = async () => {
   );
 
   return { name: 'packaged-activation', ok: findings.length === 0, findings, root, store, hookPath };
+};
+
+/** The packaged operator command, run the way a maintainer or an agent runs it. */
+const PACKAGED_COMMAND = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'gate.mjs',
+);
+
+const runPackagedCommand = async (root, args) => {
+  try {
+    const { stdout, stderr } = await runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
+      cwd: root,
+      env: gitEnvironment(),
+    });
+
+    return { exitCode: 0, stdout, stderr };
+  } catch (error) {
+    return {
+      exitCode: error.code ?? 1,
+      stdout: error.stdout ?? '',
+      stderr: error.stderr ?? '',
+    };
+  }
+};
+
+/**
+ * A real clone activated through the PACKAGED COMMAND, and the real commits it
+ * then decides.
+ *
+ * Every other scenario in this capability calls `activate()` in-process, which
+ * is exactly the shape of the defect `TB-042` fixes: the transaction was proved
+ * and the way anybody reaches it was not. This drives `gate.mjs` as two
+ * separate child processes — a preview and a confirmation carrying the token
+ * that preview printed — and then makes real commits against the clone the
+ * command activated (`AC-LIFE-002`, `FR-LIFE-004`).
+ */
+const commandDrivenActivation = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const cloneConfiguration = () => readFile(path.join(root, '.git', 'config'), 'utf8');
+  const beforeConfiguration = await cloneConfiguration();
+  const preview = await runPackagedCommand(root, ['activate', '--json']);
+  const previewDocument = JSON.parse(preview.stdout || '{}');
+
+  check(findings, preview.exitCode === 0, `The activation preview exited ${preview.exitCode}: ${preview.stderr}`);
+  check(
+    findings,
+    previewDocument.observation?.state === 'configured' && previewDocument.mutation === null,
+    `The preview did not describe a configured clone: ${preview.stdout}`,
+  );
+  check(
+    findings,
+    await stat(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK)).then(() => false, () => true),
+    'The activation preview registered a hook.',
+  );
+  check(
+    findings,
+    await cloneConfiguration() === beforeConfiguration,
+    "The activation preview changed this clone's own Git configuration.",
+  );
+
+  // A confirmation naming a preview this clone does not match performs nothing.
+  const mismatched = await runPackagedCommand(root, [
+    'activate', '--confirm', `sha256:${'f'.repeat(64)}`, '--json',
+  ]);
+  const mismatchedDocument = JSON.parse(mismatched.stdout || '{}');
+
+  check(
+    findings,
+    mismatchedDocument.mutation?.performed === false
+      && mismatchedDocument.mutation?.reasonCode === 'preview-mismatch',
+    `A confirmation naming another preview was not refused: ${mismatched.stdout}`,
+  );
+  check(
+    findings,
+    await stat(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK)).then(() => false, () => true),
+    'A refused confirmation registered a hook.',
+  );
+
+  const confirmed = await runPackagedCommand(root, [
+    'activate', '--confirm', previewDocument.observation.confirmationToken, '--json',
+  ]);
+  const confirmedDocument = JSON.parse(confirmed.stdout || '{}');
+
+  check(findings, confirmed.exitCode === 0, `The confirmed activation exited ${confirmed.exitCode}: ${confirmed.stderr}`);
+  check(
+    findings,
+    confirmedDocument.mutation?.performed === true,
+    `The command did not activate the clone: ${confirmed.stdout}`,
+  );
+  check(
+    findings,
+    JSON.stringify(confirmedDocument.mutation?.order) === JSON.stringify([...ACTIVATION_STEPS]),
+    `The command-driven transaction did not run its declared steps: ${JSON.stringify(confirmedDocument.mutation?.order)}.`,
+  );
+
+  // The receipt claims only what a command surface can prove.
+  const trust = confirmedDocument.mutation?.trust ?? null;
+
+  check(
+    findings,
+    trust?.grantedBy?.mechanism === 'repository-bound-consent'
+      && trust?.grantedBy?.observed?.confirmationInSeparateInvocation === true
+      && trust?.grantedBy?.actor === null,
+    `The receipt's trust record is not the provable one: ${JSON.stringify(trust)}.`,
+  );
+
+  // The shortcut is in this clone's own Git configuration, and nowhere else.
+  const alias = await runGit(root, ['config', '--local', '--get', `alias.${COMMAND_ALIAS_NAME}`])
+    .then((stdout) => stdout.trim(), () => '');
+
+  check(
+    findings,
+    alias.includes('gate.mjs'),
+    `The activation did not register the clone-local shortcut: ${JSON.stringify(alias)}.`,
+  );
+  check(
+    findings,
+    (await runGit(root, ['status', '--porcelain'])).trim() === '',
+    'The activation changed a tracked project file.',
+  );
+
+  // And the clone the COMMAND activated really decides real commits.
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'a change the command-activated gate must refuse');
+
+  check(findings, blocked.failed === true, 'The command-activated clone allowed a failing change to commit.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A blocked commit still moved HEAD on the command-activated clone.',
+  );
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await attemptCommit(root, 'a change the command-activated gate must allow');
+
+  check(findings, allowed.failed === false, `The command-activated clone blocked a passing change: ${allowed.output}`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'An allowed commit did not move HEAD on the command-activated clone.',
+  );
+
+  // The observation surface agrees, from the same clone, without being told.
+  const status = await runPackagedCommand(root, ['status', '--json']);
+  const statusDocument = JSON.parse(status.stdout || '{}');
+
+  check(
+    findings,
+    statusDocument.observation?.state === 'activated' && statusDocument.observation?.health === 'healthy',
+    `The command-activated clone does not observe as healthy: ${status.stdout}`,
+  );
+
+  return { name: 'command-driven-activation', ok: findings.length === 0, findings };
+};
+
+/**
+ * A failed activation driven through the command leaves the clone committing
+ * exactly as it did while configured, and leaves no shortcut behind.
+ *
+ * The clone already has a `pre-commit` the gate can neither own nor compose
+ * into, so the transaction refuses at `hook-chain-validation` — a real refusal
+ * on a real chain, not an injected one (`SG-LIFE-001`, `SG-HOOK-001`).
+ */
+const commandDrivenActivationFailure = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+  await writeFile(
+    path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK),
+    '#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n',
+    { encoding: 'utf8', mode: 0o755 },
+  );
+
+  const cloneConfiguration = () => readFile(path.join(root, '.git', 'config'), 'utf8');
+  const beforeConfiguration = await cloneConfiguration();
+  const beforeHook = await readFile(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK), 'utf8');
+  const preview = await runPackagedCommand(root, ['activate', '--json']);
+  const token = JSON.parse(preview.stdout || '{}').observation?.confirmationToken ?? null;
+  const failed = await runPackagedCommand(root, ['activate', '--confirm', token, '--json']);
+  const document = JSON.parse(failed.stdout || '{}');
+
+  check(
+    findings,
+    document.mutation?.performed === false && document.mutation?.step === 'hook-chain-validation',
+    `The activation did not refuse on the existing chain: ${failed.stdout}`,
+  );
+  check(
+    findings,
+    document.mutation?.state === 'configured' && document.mutation?.receiptId === null,
+    `A refused activation did not leave the clone configured: ${JSON.stringify(document.mutation?.state)}.`,
+  );
+  check(
+    findings,
+    document.mutation?.shortcut?.registered === false,
+    'A refused activation registered the convenience shortcut.',
+  );
+  check(
+    findings,
+    await cloneConfiguration() === beforeConfiguration,
+    "A refused activation changed this clone's own Git configuration.",
+  );
+  check(
+    findings,
+    await readFile(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK), 'utf8') === beforeHook,
+    "A refused activation changed the hook it found.",
+  );
+
+  // And the clone still commits exactly as it did while merely configured —
+  // including a change a gate would have refused.
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const committed = await attemptCommit(root, 'still merely configured');
+
+  check(findings, committed.failed === false, `A configured clone refused a commit: ${committed.output}`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'A configured clone did not move HEAD.',
+  );
+
+  return { name: 'command-driven-activation-failure', ok: findings.length === 0, findings };
 };
 
 /** The activated clone really blocks and really allows real commits. */
@@ -1915,6 +2130,8 @@ const main = async () => {
           ok: false,
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
+      await commandDrivenActivation(),
+      await commandDrivenActivationFailure(),
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),

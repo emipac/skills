@@ -565,8 +565,7 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
   const token = `sha256:${'f'.repeat(64)}`;
 
   const refusals = [
-    // Two operations this surface still does not perform, refused by name.
-    [['activate'], 'gate activate'],
+    // The one operation this surface still does not perform, refused by name.
     [['fix'], 'gate fix'],
     // A selector that names another command's work. `gate status` never
     // repairs as a side effect, whatever it is asked with.
@@ -607,13 +606,16 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
 
   // The refusals stayed data, and TB-041 moved entries OUT of these tables and
   // into the command registry rather than adding a second parser beside them.
-  assert.deepEqual(CONFIRMED_COMMANDS, { activate: 'gate activate', fix: 'gate fix' });
+  // `TB-042` moved `activate` out in turn, once the three seams `runActivation`
+  // leaves abstract had real implementations to bind.
+  assert.deepEqual(CONFIRMED_COMMANDS, { fix: 'gate fix' });
   assert.deepEqual(CONFIRMED_SELECTORS, { '--repair': 'gate repair', '--fix': 'gate fix' });
   assert.equal(CONFIRMED_SELECTORS['--recover'], undefined);
   assert.equal(CONFIRMED_COMMANDS.repair, undefined);
+  assert.equal(CONFIRMED_COMMANDS.activate, undefined);
   assert.deepEqual(
     [...COMMANDS],
-    ['status', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup'],
+    ['activate', 'status', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup'],
   );
 
   // Exactly one command has no confirmed form, and it is the one that must go

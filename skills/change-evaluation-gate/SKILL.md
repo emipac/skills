@@ -1,6 +1,6 @@
 ---
 name: change-evaluation-gate
-description: Install or explicitly configure the optional Change Evaluation Gate module while keeping repository configuration separate from clone-local activation. Use when a maintainer wants to adopt Gate policy, inspect whether the Gate is configured, or confirm that distribution remains dormant.
+description: Install and configure the optional Change Evaluation Gate module, activate a configured clone through its two-invocation command, and diagnose, repair, update, or recover an activated one. Use when a maintainer wants to adopt Gate policy, activate or deactivate commit enforcement in one clone, or find out why a clone is unhealthy.
 ---
 
 # Change Evaluation Gate
@@ -85,7 +85,9 @@ program it is about to register — by running it against a change it must deny
 and requiring a refusal — pins a receipt,
 and enables authoritative Git last. Configuring policy never starts it, and a
 failed transaction leaves the clone configured with no receipt and no
-registration.
+registration. That transaction is reached by `gate activate`, described below,
+and by nothing else — never as a side effect of installing, configuring, or
+opening a client.
 
 Everything that happens to a clone *after* it is activated — taking a candidate
 release through an explicit atomic `gate update`, observing health without
@@ -101,9 +103,11 @@ All of that lifecycle is reachable as one command. Run
 this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
 beside the `SKILL.md` you are reading rather than assuming a path: an installed
 skill sits wherever the client placed it, so the same literal path does not hold
-across projects. The command is `status`, `locks`, `prune`, `repair`, `update`,
-`deactivate`, `uninstall`, or `cleanup`. Add `--json` for the same document a
-person is shown.
+across projects. The command is `activate`, `status`, `locks`, `prune`,
+`repair`, `update`, `deactivate`, `uninstall`, or `cleanup`. Add `--json` for
+the same document a person is shown. An activated clone also carries `git gate`,
+a shortcut this activation wrote into that clone's own `.git/config` and
+nowhere else.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
@@ -113,9 +117,20 @@ naming the token the preview printed: `gate repair --confirm <token>`,
 `gate locks --recover <token>`, and so on. No flag previews and confirms in one
 invocation, no `--yes` or `--force` exists, and a confirmation naming a preview
 the clone no longer matches performs nothing and says so. Use this surface to
-diagnose *and* to recover a clone, instead of importing the lifecycle library or
-re-activating. `gate activate` and `gate fix` are separate contracts and are
-refused here by name.
+activate, to diagnose, *and* to recover a clone, instead of importing the
+lifecycle library or writing a script against it. `gate fix` is a separate
+contract and is refused here by name.
+
+`gate activate` is the same two invocations. `gate activate` previews exactly
+what the transaction would change and writes nothing; `gate activate --confirm
+<token>` performs it. Name the client with `--client <adapter-id>` when it is
+not authoritative Git; a desktop client that has not granted trust pauses the
+transaction, leaves no integration active, and prints the
+`gate activate --resume <transaction-id> --confirm <token>` that resumes it.
+A configured clone is a prerequisite: activation never configures one on the way
+past. `--actor <name>` is carried into the receipt as **self-declared** and
+never as proven — this command cannot see who ran it, and its receipt does not
+pretend otherwise.
 
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When
