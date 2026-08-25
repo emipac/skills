@@ -56,6 +56,7 @@ export const PORTABILITY_FIXTURES = Object.freeze([
   'materialized-root-declared-write',
   'source-immutability',
   'non-interactive-shell',
+  'linked-temporary-root',
 ]);
 
 /**

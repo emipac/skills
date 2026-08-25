@@ -179,13 +179,41 @@ const installSignalDisposition = () => {
 };
 
 /**
+ * One temporary path under the name the operating system considers canonical.
+ *
+ * A temporary directory is commonly reached through a symbolic link — macOS
+ * publishes `/var/folders/…` for `/private/var/folders/…` — and a tool that
+ * resolves the path it was handed then reaches a directory the gate never
+ * named. This is the single definition of that resolution: the execution root
+ * is created under it, and the orphan sweep bounds itself with it, so the two
+ * can never drift apart and a third caller cannot reintroduce the split
+ * (`TB-043`).
+ *
+ * It is unconditional, not platform-conditional. Where the two spellings
+ * already agree, resolving returns the path unchanged and nothing behaves
+ * differently (`NFR-PORT-002`). A path that cannot be resolved at all — it may
+ * not exist yet — falls back to its absolute form, which is what a caller
+ * would otherwise have held.
+ *
+ * @param {string} [candidate] defaults to the system temporary directory
+ * @returns {Promise<string>} the canonical absolute path
+ */
+export const canonicalTemporaryPath = async (candidate = tmpdir()) => (
+  realpath(candidate).catch(() => path.resolve(candidate))
+);
+
+/**
  * Materialize a fresh execution root and take responsibility for it.
+ *
+ * Created inside the canonical temporary directory, so the root has exactly one
+ * name: the one the decision records, the one materialization writes to, and
+ * the one a check resolves from inside it (`AC-EVAL-004`, `AC-EVAL-006`).
  *
  * @param {string} prefix one of `EXECUTION_ROOT_PREFIXES`
  * @returns {Promise<string>} the created root
  */
 export const createExecutionRoot = async (prefix) => {
-  const root = await mkdtemp(path.join(tmpdir(), prefix));
+  const root = await mkdtemp(path.join(await canonicalTemporaryPath(), prefix));
 
   liveExecutionRoots.add(root);
   installSignalDisposition();
@@ -241,8 +269,8 @@ export const sweepOrphanedExecutionRoots = async ({
   let considered = 0;
 
   try {
-    const systemRoot = await realpath(tmpdir()).catch(() => path.resolve(tmpdir()));
-    const sweepRoot = await realpath(temporaryRoot).catch(() => path.resolve(temporaryRoot));
+    const systemRoot = await canonicalTemporaryPath();
+    const sweepRoot = await canonicalTemporaryPath(temporaryRoot);
 
     // SG-LIFE-001: the gate reclaims inside the directory it was given to
     // create workspaces in, and nowhere else. Never the repository, never the

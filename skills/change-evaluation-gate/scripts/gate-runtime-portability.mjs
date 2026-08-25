@@ -2,7 +2,7 @@
 /**
  * `gate-runtime-portability` — the release qualification matrix.
  *
- * This capability executes the eleven runtime portability fixtures `AC-PORT-001`
+ * This capability executes the twelve runtime portability fixtures `AC-PORT-001`
  * names against throwaway Git repositories on the environment it is running on,
  * runs the shared compatibility baseline for every declared adapter, gathers the
  * timing and attempt evidence `RISK-003` and `RISK-007` stay open against, and
@@ -42,7 +42,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,7 @@ import {
   validateCommandDescriptor,
 } from './lib/command-descriptor.mjs';
 import { evaluate } from './lib/evaluate.mjs';
+import { createExecutionRoot, releaseExecutionRoot } from './lib/hook-runner.mjs';
 import { PROTOCOL_VERSION } from './lib/evaluation-contract.mjs';
 import { openEvidenceStore, resolveGitCommonDirectory } from './lib/evidence-store.mjs';
 import {
@@ -187,7 +188,7 @@ const executeCheck = async ({
 };
 
 /* ------------------------------------------------------------------ *
- * The eleven fixtures AC-PORT-001 names.
+ * The twelve fixtures AC-PORT-001 names.
  * ------------------------------------------------------------------ */
 
 /**
@@ -750,6 +751,100 @@ const nonInteractiveFixture = async () => {
   };
 };
 
+/**
+ * `linked-temporary-root` — the execution root the gate creates has exactly one
+ * name. A check executing inside it observes the path the gate holds, and
+ * resolving that path reaches the same directory, on a machine whose temporary
+ * directory is reached through a symbolic link (TB-043, AC-EVAL-004,
+ * AC-EVAL-006, NFR-PORT-002).
+ *
+ * The link is built by the fixture rather than detected, so the condition that
+ * produced the preserved real-project failure is reproduced on every filesystem
+ * instead of only on the one that happens to publish it. Nothing here is
+ * labelled by operating system.
+ */
+const linkedTemporaryRootFixture = async () => {
+  const canonical = await temporaryDirectory('gate-portability-temporary-');
+  const link = path.join(
+    await temporaryDirectory('gate-portability-temporary-link-'),
+    'temporary',
+  );
+
+  await symlink(canonical, link, 'dir');
+
+  const previousTemporary = process.env.TMPDIR;
+  let executionRoot;
+
+  // The runner reads the temporary directory from the environment it was
+  // started in; this is the fixture standing in for a machine that publishes
+  // its temporary directory under a linked name.
+  process.env.TMPDIR = link;
+
+  try {
+    executionRoot = await createExecutionRoot('gate-hook-runner-exec-');
+  } finally {
+    if (previousTemporary === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = previousTemporary;
+    }
+  }
+
+  await writeFile(
+    path.join(executionRoot, 'grade.mjs'),
+    [
+      "import { realpathSync } from 'node:fs';",
+      'const observed = process.cwd();',
+      'process.stdout.write(JSON.stringify({ observed, resolved: realpathSync(observed) }));',
+    ].join('\n'),
+  );
+
+  const attempt = await executeCheck({
+    command: descriptorFor({ args: ['grade.mjs'] }),
+    executionRoot,
+  });
+  const findings = [];
+  let report = null;
+
+  if (link === canonical) {
+    findings.push('the fixture did not actually reach its temporary directory through a link.');
+  }
+
+  try {
+    report = JSON.parse(attempt.output ?? '');
+  } catch (error) {
+    findings.push(`the check could not report the directory it ran in: ${error.message}`);
+  }
+
+  if (report !== null) {
+    if (report.observed !== executionRoot) {
+      findings.push(`the check ran in ${report.observed}, which is not the ${executionRoot} the gate named.`);
+    }
+
+    if (report.resolved !== executionRoot) {
+      findings.push(`resolving the execution root reached ${report.resolved} rather than ${executionRoot}.`);
+    }
+  }
+
+  if (!isInside(canonical, executionRoot)) {
+    findings.push(`the execution root landed at ${executionRoot}, outside the temporary directory it was created in.`);
+  }
+
+  // FR-EVAL-005: the root is still removed, by the release that owns it.
+  await releaseExecutionRoot(executionRoot);
+
+  if (await stat(executionRoot).then(() => true, () => false)) {
+    findings.push('the execution root survived its release.');
+  }
+
+  return {
+    ok: findings.length === 0,
+    detail: findings.length === 0
+      ? 'A temporary directory reached through a symbolic link still produced one execution root with one name: the check observed the path the gate created, resolving it reached the same directory, and the root was removed afterwards.'
+      : findings.join(' '),
+  };
+};
+
 const FIXTURES = Object.freeze({
   executable: executableFixture,
   stream: streamFixture,
@@ -762,6 +857,7 @@ const FIXTURES = Object.freeze({
   'materialized-root-declared-write': declaredWriteFixture,
   'source-immutability': sourceImmutabilityFixture,
   'non-interactive-shell': nonInteractiveFixture,
+  'linked-temporary-root': linkedTemporaryRootFixture,
 });
 
 /* ------------------------------------------------------------------ *

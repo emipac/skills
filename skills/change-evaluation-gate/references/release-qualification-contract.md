@@ -39,7 +39,7 @@ Every environment is `claimed` or `unverified`. There is no third value, and in
 particular there is no `denied`: evidence proves what was tested, and it cannot
 refuse what was not.
 
-A **claimed** environment owes an outcome for all eleven runtime portability
+A **claimed** environment owes an outcome for all twelve runtime portability
 fixtures `AC-PORT-001` names. Missing one fails qualification, recording an
 outcome the contract does not name fails qualification, and reporting a real
 failure honestly and claiming the environment anyway fails qualification. The
@@ -58,6 +58,7 @@ required set is the contract's, never the set a manifest happens to carry.
 | `materialized-root-declared-write` | A check writes inside the materialized execution root it was given, and the source repository is untouched. |
 | `source-immutability` | The source repository's Git state and tracked content are byte-identical before and after an evaluation. |
 | `non-interactive-shell` | A check runs with no controlling terminal, reads end-of-file from standard input immediately, and sees only the environment names its descriptor declared. |
+| `linked-temporary-root` | A temporary directory reached through a symbolic link still yields one execution root with one name: a check executing inside it observes the path the gate created, resolving that path reaches the same directory, and the root is removed afterwards. |
 
 An **unverified** environment must say why it was not tested. It is not a
 refusal and not a defect; it is an environment this run had no access to. The
