@@ -354,7 +354,7 @@
   .p-warn  { color: var(--warn);   background: var(--warn-soft); }
   .p-unver { color: var(--unver);  background: var(--unver-soft); }
 
-  /* Who does the work — tool-derived, your decision, or agent-operated */
+  /* Who does the work — tool-derived, your decision, or two invocations */
   .who {
     display: inline-block;
     font-family: var(--mono);
@@ -885,17 +885,18 @@
           </p>
         </div>
         <div class="legend-row">
-          <span class="who w-agent">agent-operated</span>
+          <span class="who w-agent">two invocations</span>
           <p>
-            No CLI exists. You ask your agent to follow the
-            <code>change-evaluation-gate</code> skill, and it calls the library functions.
+            A command that previews first and writes nothing, then performs exactly that preview
+            when you run it again naming the token it printed. You can type both, and so can an
+            agent following the <code>change-evaluation-gate</code> skill.
           </p>
         </div>
       </div>
 
       <p>
         Steps 1 and 2 are mostly mechanical. Step 3 is where your real decisions live. Step 4 is
-        the only one you cannot type yourself.
+        the only one that changes your machine rather than your repository.
       </p>
 
       <h3>Step 1 — Install the module <span class="who w-you">your decision</span></h3>
@@ -1165,11 +1166,26 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
               <td>Which advisory checks may be dropped when time runs short. It may never name anything in <code>required</code>.</td>
             </tr>
             <tr>
+              <td><code>execution.dependency_roots</code></td>
+              <td>Repository-relative directories your checks need but Git does not track — <code>vendor</code>, <code>node_modules</code>, and anything a build step generates. They are linked beside the snapshot rather than copied, and are never graded.</td>
+            </tr>
+            <tr>
               <td><code>evidence</code></td>
               <td>Whether to lower any retention ceiling. Leaving it empty keeps the built-in bounds, which is usually right.</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">Untracked does not mean unnecessary</span>
+        <p>
+          A snapshot holds what Git tracks, and nothing your <code>.gitignore</code> excludes. So a
+          tool that reads an installed dependency, or an import path some build step generates,
+          finds nothing there unless you name its directory in
+          <code>execution.dependency_roots</code>. This is the single most likely reason a check
+          that passes in your terminal does not pass in the Gate.
+        </p>
       </div>
 
       <div class="note note-caution">
@@ -1360,16 +1376,30 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         </p>
       </div>
 
-      <h3>Step 4 — Activate on your machine <span class="who w-agent">agent-operated</span></h3>
+      <h3>Step 4 — Activate on your machine <span class="who w-agent">two invocations</span></h3>
 
-      <div class="note note-critical">
-        <span class="note-tag">There is no gate activate command yet</span>
+      <p>
+        Activation is a command. The first invocation previews exactly what the transaction would
+        change and writes nothing; the second performs that exact preview:
+      </p>
+
+      <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code></pre>
+
+      <p>
+        Read the preview, then run it again naming the token it printed —
+        <code>gate activate --confirm PASTE_THE_TOKEN_HERE</code>. If the executable is on your path
+        it is simply <code>change-evaluation-gate activate</code>. The path form is
+        installation-specific: the script sits wherever your client placed the skill, so resolve it
+        beside the skill's own <code>SKILL.md</code> rather than copying a path from here.
+      </p>
+
+      <div class="note">
+        <span class="note-tag">The token binds the confirmation to that exact preview</span>
         <p>
-          In release 0.9.0 the Gate is <strong>agent-operated</strong>. There is no <code>bin</code>
-          entry and no CLI: activation, status, repair, update, and removal exist as library functions
-          that your agent calls by following the <code>change-evaluation-gate</code> skill. Ask your
-          agent to use that skill rather than looking for a command to type. A typed
-          <code>gate</code> command is a reasonable future addition, but it does not exist today.
+          Exactly like the migration confirmation in Step 2. If your configuration changes between
+          the two invocations, the token stops matching and nothing is written. Note also what the
+          receipt can honestly record: the command cannot see who typed the confirmation, so
+          <code>--actor</code> is stored as <em>self-declared</em> and never as proven.
         </p>
       </div>
 
@@ -1447,7 +1477,15 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         <h2>Status, repair, turning it off</h2>
       </div>
 
-      <p>All of these are agent-driven through the Gate skill, for the reason given in Section 08.</p>
+      <p>
+        All of these are subcommands of the same command Step 4 used, and all follow the same rule:
+        <strong>every one previews and writes nothing</strong> until you run it again naming the
+        token the preview printed. No flag previews and performs in one invocation, and there is no
+        <code>--yes</code> or <code>--force</code>. An activated clone also carries
+        <code>git gate</code> — a shortcut activation wrote into that clone's own
+        <code>.git/config</code> and nowhere else, so <code>git gate status</code> works from any
+        subdirectory and never follows the repository to anyone else.
+      </p>
 
       <div class="table-wrap">
         <table>
@@ -1459,6 +1497,8 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
             <tr><td><strong>deactivate</strong></td><td>Removes the hook and receipt. Keeps your configuration and all historical evidence.</td></tr>
             <tr><td><strong>uninstall</strong></td><td>Removes project-installed assets. Requires deactivation first.</td></tr>
             <tr><td><strong>cleanup</strong></td><td>Removes only Gate keys from <code>.agent-framework.yaml</code>. Never deletes the file.</td></tr>
+            <tr><td><strong>prune</strong></td><td>Removes evidence output blobs you selected by evaluation, age, or reclaimed size. Envelopes, decisions, events, and a tombstone for every removed blob are always kept.</td></tr>
+            <tr><td><strong>locks</strong></td><td>Inspects the coordination lock. Reports a free lock, a live holder, or a stale one; recovers a stale holder only against its own token, and never takes a live one.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1514,6 +1554,17 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         <code>git commit</code> still grades the isolated snapshot. Claude Code Desktop and Codex
         Desktop do not currently send a follow-up — they have no declared channel to answer
         through — so silence from those clients is not a pass.
+      </p>
+
+      <h3>The snapshot is not your terminal</h3>
+      <p>
+        Checks run against a materialized copy in a temporary directory, not your working tree. That
+        copy has no <code>.git</code>, holds nothing your <code>.gitignore</code> excludes, and gets
+        only the dependency roots you declared. A command that expects any of those finds them
+        missing. When a check declares what it needs and the snapshot cannot supply it, the Gate
+        reports <span class="pill p-unver">unverified</span> naming the unmet requirement — never a
+        verdict about your code. Treat that as a message about the evaluation environment, and do
+        not change your project to satisfy it.
       </p>
 
       <h3>One environment is claimed</h3>

@@ -5,8 +5,10 @@ description: Install and configure the optional Change Evaluation Gate module, a
 
 # Change Evaluation Gate
 
-Make the optional Gate module available and configure its repository policy
-without activating commit enforcement. Configuration does not activate the Gate.
+Make the optional Gate module available, configure its repository policy, and —
+as a separate explicit act — activate, observe, or recover one clone through the
+Gate's own command. Installing does not configure, and configuring does not
+activate.
 
 ## 1. Confirm the lifecycle state
 
@@ -73,9 +75,10 @@ activation state.
 
 ## 3. Never activate implicitly, and operate an activated clone by command
 
-Do not create or modify Git hooks, `core.hooksPath`, trust settings, runtime
-inputs, activation receipts, active-release pointers, or evidence storage.
-Those belong to the separate, explicitly requested, clone-local Activation
+Never write Git hooks, `core.hooksPath`, trust settings, runtime inputs,
+activation receipts, active-release pointers, or evidence storage yourself — not
+by editing them, and not by importing the activation library and driving it. All
+of it belongs to the separate, explicitly requested, clone-local Activation
 transaction defined by the
 [Activation transaction contract](references/activation-transaction-contract.md):
 it previews exact changes and commands, obtains repository-bound consent,
@@ -87,7 +90,8 @@ and enables authoritative Git last. Configuring policy never starts it, and a
 failed transaction leaves the clone configured with no receipt and no
 registration. That transaction is reached by `gate activate`, described below,
 and by nothing else — never as a side effect of installing, configuring, or
-opening a client.
+opening a client. Running that command when the maintainer asked for activation
+is not a violation of the paragraph above; it is the only way to satisfy it.
 
 Everything that happens to a clone *after* it is activated — taking a candidate
 release through an explicit atomic `gate update`, observing health without
@@ -183,8 +187,10 @@ including this paragraph.
 Installing an adapter never registers it. Adapters are dormant assets until the
 Activation transaction self-tests and registers them.
 
-Completion criterion: repository policy may be configured, but the clone has
-no Gate-owned operational state and commit behavior is unchanged.
+Completion criterion: installing or configuring leaves the clone with no
+Gate-owned operational state and commit behavior unchanged; only a confirmed
+`gate activate` registers an adapter, and it registers exactly the ones the
+maintainer confirmed in its preview.
 
 ## Release qualification
 
