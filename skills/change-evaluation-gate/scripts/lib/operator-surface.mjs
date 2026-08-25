@@ -861,10 +861,27 @@ const activationRequestFor = async ({ repositoryRoot, selector }) => {
   };
 };
 
+/**
+ * What a client will do with a registration this activation only wrote.
+ *
+ * `activated` must not be read as "this client is already running it". Where a
+ * client reviews the registration afterwards, the receipt already carries that
+ * fact in the adapter's own declared words; this restates the same sentence
+ * where the maintainer meets it, so nobody has to open the receipt to learn
+ * that one more step belongs to them (`SG-TRUST-001`, `TB-046`).
+ */
+const pendingClientReviews = (result) => (result.receipt?.adapters ?? [])
+  .filter((adapter) => adapter.clientReview !== null && adapter.clientReview !== undefined)
+  .map((adapter) => adapter.clientReview.detail);
+
 /** What one activation invocation did, in the transaction's own terms. */
 const activationSummary = (result, shortcut) => {
   if (result.activated === true) {
-    return `This clone is activated: every step ran in the settled order, the receipt ${result.receipt.receiptId} was published and confirmed, and authoritative Git was enabled last. ${shortcut.detail}`;
+    return [
+      `This clone is activated: every step ran in the settled order, the receipt ${result.receipt.receiptId} was published and confirmed, and authoritative Git was enabled last.`,
+      shortcut.detail,
+      ...pendingClientReviews(result),
+    ].join(' ');
   }
 
   if (result.state === 'paused') {

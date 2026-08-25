@@ -11,6 +11,7 @@ import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.
 import {
   ADAPTER_CAPABILITY_CATEGORIES,
   ADAPTER_IDS,
+  ADAPTER_TRUST_MODELS,
   BASELINE_CHECKS,
   classifySupport,
   describeAdapter,
@@ -1372,4 +1373,92 @@ test('FR-ADAPT-008: every adapter declares its own registration surface, and an 
   // An adapter is free to declare that it does not register in a client file at
   // all, and that declaration is complete on its own terms.
   assert.deepEqual(validateRegistrationDeclaration({ kind: 'repository-hook-chain' }), []);
+});
+
+/**
+ * `AC-ADAPT-003`, `FR-ADAPT-008`, `FR-LIFE-016`, `TB-046`.
+ *
+ * The check whose absence let three adapters declare a trust model nothing
+ * defined and nothing could issue. The contract now says what a model asserts
+ * and what proves it, and a declaration that names anything else is rejected at
+ * declaration time rather than becoming a pause nothing can clear.
+ */
+test('every declared trust model is defined by the contract, and a model it does not define is rejected', () => {
+  const REQUIRED = ['id', 'asserts', 'provenBy', 'mechanism', 'requiresClientGrantReader', 'declarable', 'rationale'];
+
+  for (const [id, model] of Object.entries(ADAPTER_TRUST_MODELS)) {
+    assert.equal(model.id, id, 'A trust model must name itself.');
+
+    for (const field of REQUIRED) {
+      assert.ok(
+        field in model,
+        `The trust model ${id} must state ${field}; a model that does not is not defined, only named.`,
+      );
+    }
+  }
+
+  for (const adapterId of ADAPTER_IDS) {
+    const declared = describeAdapter(adapterId).capabilities.trust.model;
+    const model = ADAPTER_TRUST_MODELS[declared] ?? null;
+
+    assert.notEqual(
+      model,
+      null,
+      `${adapterId} declares the trust model ${JSON.stringify(declared)}, which this contract does not define.`,
+    );
+    assert.equal(
+      model.declarable,
+      true,
+      `${adapterId} declares ${declared}, which no activation can establish before it registers anything: it would pause with nothing able to clear the pause.`,
+    );
+  }
+
+  const complete = describeAdapter('cursor').capabilities;
+  const withTrust = (trust) => ({ ...complete, trust: { ...complete.trust, ...trust } });
+
+  // The exact values three adapters used to declare.
+  for (const invented of ['explicit-workspace-grant', 'explicit-project-grant', 'a-model-nobody-wrote-down']) {
+    assert.equal(
+      validateAdapterDeclaration(withTrust({ model: invented }))
+        .some((error) => error.code === 'adapter-trust-model-undefined'),
+      true,
+      `A declaration naming the undefined trust model ${invented} must be rejected.`,
+    );
+  }
+
+  // A model that IS defined but that an activation cannot establish before it
+  // registers anything is rejected too. It exists so `FR-LIFE-016`'s pause and
+  // resumption stay reachable for a client that grants first; no v1 adapter may
+  // declare it.
+  assert.equal(ADAPTER_TRUST_MODELS['client-grant-before-registration'].declarable, false);
+  assert.equal(
+    validateAdapterDeclaration(withTrust({ model: 'client-grant-before-registration' }))
+      .some((error) => error.code === 'adapter-trust-model-undeclarable'),
+    true,
+    'A model no activation can establish before registration must not be declarable by an adapter.',
+  );
+
+  // A post-registration client review is stated, never inferred, and a partial
+  // statement is not a statement.
+  const withoutReview = { ...complete, trust: { model: complete.trust.model, failureIsUnverified: true } };
+
+  assert.equal(
+    validateAdapterDeclaration(withoutReview)
+      .some((error) => error.path === 'capabilities.trust.clientReview'),
+    true,
+    'An adapter that says nothing about a client review has not declared that there is none.',
+  );
+  assert.equal(
+    validateAdapterDeclaration(withTrust({ clientReview: { when: 'after-registration' } }))
+      .some((error) => error.code === 'adapter-client-review-incomplete'),
+    true,
+  );
+  assert.equal(
+    validateAdapterDeclaration(withTrust({ clientReview: 'reviewed somewhere' }))
+      .some((error) => error.code === 'adapter-client-review-invalid'),
+    true,
+  );
+
+  // The declaration every v1 adapter actually carries is still valid.
+  assert.deepEqual(validateAdapterDeclaration(complete), []);
 });

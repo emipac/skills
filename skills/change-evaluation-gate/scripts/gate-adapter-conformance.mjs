@@ -70,6 +70,7 @@ import { promisify } from 'node:util';
 
 import { activate, configurationIdentity, previewActivation } from './lib/activation.mjs';
 import {
+  ADAPTER_TRUST_MODELS,
   DESKTOP_ADAPTER_IDS,
   buildNativePayload,
   classifySupport,
@@ -609,11 +610,35 @@ const supportedDesktopBaseline = async () => {
       `${adapterId} claimed support for a chat-only or hosted context.`,
     );
 
+    // NFR-COMP-001, FR-LIFE-016, TB-046. The baseline already proves that a
+    // REVOKED grant reports `unverified`, which says nothing about whether a
+    // grant can be obtained at all — the one question that let two surfaces
+    // ship permanently unactivatable. A declared model this contract does not
+    // define, or one no activation can establish before it registers anything,
+    // is a surface no maintainer can ever activate.
+    const trust = describeAdapter(adapterId).capabilities.trust;
+    const trustModel = ADAPTER_TRUST_MODELS[trust.model] ?? null;
+
+    check(
+      findings,
+      trustModel !== null,
+      `${adapterId} declares the trust model ${JSON.stringify(trust.model)}, which the adapter conformance contract does not define.`,
+    );
+    check(
+      findings,
+      trustModel?.declarable === true,
+      `${adapterId} declares ${trust.model}, which no activation can establish before it registers anything: it would pause with nothing able to clear the pause.`,
+    );
+
     recorded.push({
       adapterId,
       surface: baseline.surface,
       tier: classified.tier,
       tierReason: classified.reason,
+      trustModel: trust.model,
+      // Recorded, never awaited: where the client reviews the registration it
+      // was given, that happens after the Gate wrote it.
+      clientReview: trust.clientReview === null ? null : trust.clientReview.when,
       payloadSource: baseline.evidence.payloadSource,
       unverifiedTriggers: [...describeAdapter(adapterId).unverifiedTriggers],
       versions: baseline.versions,

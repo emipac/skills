@@ -161,6 +161,16 @@ const hookDirectory = async (root) => (
   await readdir(path.join(root, '.git', 'hooks')).catch(() => [])
 ).filter((entry) => !entry.endsWith('.sample'));
 
+/** The activation receipt this clone published, wherever its Git dir lives. */
+const activationReceipt = async (root) => readFile(
+  path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
+  'utf8',
+).catch(async () => {
+  const common = (await git(root, ['rev-parse', '--git-common-dir'])).stdout.trim();
+
+  return readFile(path.resolve(root, common, 'change-evaluation-gate/evidence/activation/receipt.json'), 'utf8');
+});
+
 const tokenOf = (result) => {
   assert.match(
     result.document.observation.confirmationToken,
@@ -219,14 +229,7 @@ test('a configured clone is activated by two invocations of the command, and Git
 
   // The self-tests recorded in the receipt are the ones the command supplied,
   // and each names the per-run subject it answered.
-  const receipt = JSON.parse(await readFile(
-    path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
-    'utf8',
-  ).catch(async () => {
-    const common = (await git(root, ['rev-parse', '--git-common-dir'])).stdout.trim();
-
-    return readFile(path.resolve(root, common, 'change-evaluation-gate/evidence/activation/receipt.json'), 'utf8');
-  }));
+  const receipt = JSON.parse(await activationReceipt(root));
   const named = Object.fromEntries(receipt.selfTests.map((entry) => [entry.name, entry]));
 
   assert.deepEqual(
@@ -294,39 +297,137 @@ test('a single invocation that would preview and activate together is refused, a
 });
 
 /**
- * `AC-LIFE-009`, `FR-LIFE-016`. A desktop client's grant is the client's to
- * give. With none, the transaction pauses, leaves the clone untouched, and
- * states the identity a resumption must reproduce.
+ * THE FIRST RED TEST OF `TB-046`.
+ *
+ * `AC-LIFE-009`, `FR-LIFE-004`. Activating a desktop client on a configured
+ * clone completes and registers exactly its declared surface. Before this slice
+ * it paused at `trust-pending` forever: the adapter declared a trust model no
+ * contract defined and no surface could issue, and the client-side review it
+ * named could only ever have happened AFTER the registration the trust step was
+ * blocking.
  */
-test('a desktop client that has not granted trust pauses, leaves nothing active, and resumes only on its recorded identity', async (t) => {
+test('a desktop client activates on a configured clone and registers exactly its declared surface', async (t) => {
+  for (const clientId of ['cursor', 'claude-code-desktop', 'codex-desktop']) {
+    const declaration = describeAdapter(clientId);
+    const surface = declaration.registration.file;
+    // The Gate never CREATES a client's configuration file, so the clone that
+    // proves a real registration is one where the client already has one.
+    const root = await configuredClone(t, {
+      files: {
+        [surface]: {
+          contents: `${JSON.stringify(
+            declaration.registration.schemaVersion === null
+              ? { hooks: {} }
+              : {
+                [declaration.registration.schemaVersion.key]: declaration.registration.schemaVersion.value,
+                hooks: {},
+              },
+            null,
+            2,
+          )}\n`,
+        },
+      },
+    });
+    const preview = await gate(root, ['activate', '--client', clientId]);
+
+    assert.equal(
+      preview.document.observation.trustModel,
+      'repository-hook-registration',
+      `${clientId} must declare a trust model this Gate can establish.`,
+    );
+
+    const activated = await gate(root, ['activate', '--client', clientId, '--confirm', tokenOf(preview)]);
+
+    assert.equal(activated.exitCode, EXIT_OBSERVED, `${clientId}: ${activated.document.mutation.summary}`);
+    assert.equal(activated.document.mutation.performed, true);
+    assert.equal(activated.document.mutation.state, 'activated');
+    assert.equal(activated.document.mutation.reasonCode, null);
+    assert.match(activated.document.mutation.receiptId, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(activated.document.mutation.trust.grantedBy.trustModel, 'repository-hook-registration');
+
+    // Exactly its declared surface, and the authoritative hook.
+    const registered = JSON.parse(await readFile(path.join(root, surface), 'utf8'));
+    const entries = registered.hooks[declaration.nativeEvents[declaration.registration.trigger]];
+
+    assert.equal(Array.isArray(entries), true, `${clientId} registered nothing under its declared event.`);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(await hookDirectory(root), ['pre-commit']);
+  }
+});
+
+/**
+ * `FR-LIFE-016`, `AC-LIFE-009`. The pause capability stays, and stays proved.
+ *
+ * No v1 adapter may declare a model whose grant the Gate cannot establish, so
+ * the client that pauses here is a hypothetical one supplied through the
+ * declaration seam — which is exactly the client `FR-LIFE-016` retains the
+ * capability for. Without a bound reader it pauses; with one that grants, it
+ * establishes and records the grant as READ rather than as a person. The
+ * transaction-level pause, its resumption identities, and its refusal of a
+ * changed identity are proved against `runActivation` in
+ * `gate-hook-conformance.test.mjs`, which is the one place that owns them.
+ */
+test('a client that grants before registration still pauses without a reader and establishes with one', async () => {
+  const repository = { root: '/nowhere', identity: `sha256:${'c'.repeat(64)}` };
+  const consent = {
+    previewId: `sha256:${'d'.repeat(64)}`,
+    repositoryIdentity: repository.identity,
+    configurationIdentity: `sha256:${'e'.repeat(64)}`,
+    grantedAt: '2026-08-25T00:00:00.000Z',
+  };
+  // A client that grants BEFORE registration. Nothing in v1 is one.
+  const pendingClient = {
+    ...describeAdapter('cursor'),
+    id: 'grants-first-desktop',
+    capabilities: {
+      ...describeAdapter('cursor').capabilities,
+      trust: {
+        model: 'client-grant-before-registration',
+        failureIsUnverified: true,
+        clientReview: null,
+      },
+    },
+  };
+  const describe = (id) => (id === pendingClient.id ? pendingClient : describeAdapter(id));
+
+  const paused = await createTrustEstablishment({ consent, describe })({
+    client: { id: pendingClient.id },
+    repository,
+  });
+
+  assert.equal(paused.established, false);
+  assert.equal(paused.pending, true, 'A grant the client has not given is a pause, not a refusal.');
+  assert.equal(paused.reason, 'client-grant-before-registration-not-granted');
+
+  const seen = [];
+  const granted = await createTrustEstablishment({
+    consent,
+    describe,
+    actor: 'a-maintainer',
+    readClientGrant: async (asked) => {
+      seen.push(asked);
+
+      return { granted: true, at: '2026-08-25T01:00:00.000Z' };
+    },
+  })({ client: { id: pendingClient.id }, repository });
+
+  assert.equal(granted.established, true);
+  assert.equal(granted.pending, false);
+  assert.equal(granted.grantedBy.mechanism, TRUST_MECHANISMS['client-grant-before-registration']);
+  assert.equal(granted.grantedBy.observed.clientGrantRead, true);
+  assert.deepEqual(granted.grantedBy.actor, { name: 'a-maintainer', provenance: SELF_DECLARED });
+  assert.equal(seen[0].trustModel, 'client-grant-before-registration');
+});
+
+/**
+ * `SG-HOOK-001`, `FR-LIFE-016`. `--resume` still reaches the transaction, and a
+ * resumption naming a transaction this clone never paused is refused before
+ * anything is written.
+ */
+test('a resumption naming a transaction this clone never paused is refused and writes nothing', async (t) => {
   const root = await configuredClone(t);
   const beforeConfiguration = await cloneConfiguration(root);
   const preview = await gate(root, ['activate', '--client', 'cursor']);
-
-  assert.equal(preview.document.observation.trustModel, 'explicit-workspace-grant');
-
-  const paused = await gate(root, ['activate', '--client', 'cursor', '--confirm', tokenOf(preview)]);
-
-  assert.equal(paused.exitCode, EXIT_UNHEALTHY);
-  assert.equal(paused.document.mutation.performed, false);
-  assert.equal(paused.document.mutation.state, 'paused');
-  assert.equal(paused.document.mutation.reasonCode, 'trust-pending');
-
-  // Nothing is active anywhere: no hook, no shortcut, no byte of the clone's
-  // own Git configuration.
-  assert.deepEqual(await hookDirectory(root), []);
-  assert.equal(await cloneConfiguration(root), beforeConfiguration);
-  assert.equal(paused.document.mutation.shortcut.registered, false);
-
-  const resumption = paused.document.mutation.resumption;
-
-  assert.match(resumption.transactionId, /^sha256:[0-9a-f]{64}$/);
-  assert.equal(resumption.previewId, preview.document.observation.confirmationToken);
-  assert.equal(resumption.client, 'cursor');
-  assert.match(paused.document.mutation.summary, /--resume sha256:[0-9a-f]{64}/);
-
-  // A resumption of a transaction this clone never paused is refused before
-  // anything is read, let alone written.
   const foreign = await gate(root, [
     'activate', '--client', 'cursor',
     '--resume', `sha256:${'b'.repeat(64)}`,
@@ -335,18 +436,59 @@ test('a desktop client that has not granted trust pauses, leaves nothing active,
 
   assert.equal(foreign.document.mutation.performed, false);
   assert.equal(foreign.document.mutation.reasonCode, 'resume-transaction-mismatch');
-
-  // The identity it recorded is accepted, and pauses again — because the client
-  // still has not granted, which is the only honest answer available here.
-  const resumed = await gate(root, [
-    'activate', '--client', 'cursor',
-    '--resume', resumption.transactionId,
-    '--confirm', tokenOf(preview),
-  ]);
-
-  assert.equal(resumed.document.mutation.reasonCode, 'trust-pending');
-  assert.equal(resumed.document.mutation.state, 'paused');
+  assert.deepEqual(await hookDirectory(root), []);
   assert.equal(await cloneConfiguration(root), beforeConfiguration);
+});
+
+/**
+ * `SG-TRUST-001`, `FR-LIFE-004`. A client that reviews a registration only after
+ * reading it has that recorded — never awaited, and never as something the Gate
+ * observed. "Activated" must not be read as "this client is already running it".
+ */
+test('a client review that happens after registration is recorded as a pending fact, not as an acceptance', async (t) => {
+  const codex = describeAdapter('codex-desktop');
+
+  assert.notEqual(
+    codex.capabilities.trust.clientReview,
+    null,
+    'Codex reviews a registration after reading it, and the declaration must say so.',
+  );
+  assert.equal(codex.capabilities.trust.clientReview.when, 'after-registration');
+
+  // Every other v1 surface declares that there is none, rather than staying
+  // silent about it.
+  for (const clientId of ['git', 'claude-code-desktop', 'cursor']) {
+    assert.equal(describeAdapter(clientId).capabilities.trust.clientReview, null);
+  }
+
+  const root = await configuredClone(t, {
+    files: { '.codex/hooks.json': { contents: '{\n  "hooks": {}\n}\n' } },
+  });
+  const preview = await gate(root, ['activate', '--client', 'codex-desktop']);
+  const activated = await gate(root, ['activate', '--client', 'codex-desktop', '--confirm', tokenOf(preview)]);
+
+  assert.equal(activated.document.mutation.performed, true);
+
+  // The receipt carries it beside the registration it is about, and says the
+  // Gate did not observe it.
+  const receipt = JSON.parse(await activationReceipt(root));
+  const recorded = (receipt.adapters ?? []).find((adapter) => adapter.id === 'codex-desktop') ?? null;
+
+  assert.notEqual(recorded, null, 'The receipt must carry the adapter whose surface was registered.');
+  assert.equal(recorded.registration.registered, true);
+  assert.equal(recorded.clientReview.when, 'after-registration');
+  assert.equal(
+    recorded.clientReview.observedByGate,
+    false,
+    'The Gate wrote a registration; whether the client reviewed it is the client\'s to know.',
+  );
+
+  // And the maintainer meets it without opening the receipt.
+  assert.match(activated.document.mutation.summary, /review and trust it in Codex/);
+  assert.match(activated.stdout, /review and trust it in Codex/);
+
+  // Nothing anywhere claims the client accepted anything.
+  assert.equal(/accepted|approved by the client|is running/i.test(activated.document.mutation.summary), false);
 });
 
 /**
@@ -491,15 +633,12 @@ test('every declared trust model is handled, and an unrecognized one is refused 
 
     const result = await establish({ client: { id: adapterId }, repository });
 
-    if (declared === 'repository-hook-registration') {
-      assert.equal(result.established, true);
-      assert.equal(result.grantedBy.trustModel, declared);
-    } else {
-      // Only the client can grant, and it has not.
-      assert.equal(result.established, false);
-      assert.equal(result.pending, true);
-      assert.equal(result.reason, `${declared}-not-granted`);
-    }
+    // Every v1 adapter declares a model this activation can establish. An
+    // adapter that paused here would be one no maintainer could ever activate
+    // (`TB-046`, `FR-LIFE-016`).
+    assert.equal(result.established, true, `${adapterId} could not be trusted: ${result.detail}`);
+    assert.equal(result.pending, false);
+    assert.equal(result.grantedBy.trustModel, declared);
   }
 
   // A model this dispatch does not recognize is refused, and refused as a
@@ -523,18 +662,23 @@ test('every declared trust model is handled, and an unrecognized one is refused 
   assert.equal(foreign.pending, false);
   assert.equal(foreign.reason, 'consent-repository-mismatch');
 
-  // A desktop client that HAS granted is established, and its grant is recorded
-  // as read rather than as a person.
-  const granted = await createTrustEstablishment({
+  // A declared model that the adapter contract does not define is refused here
+  // too, not paused — the exact value three adapters used to declare.
+  const undefinedModel = await createTrustEstablishment({
     consent,
-    actor: 'a-maintainer',
-    readClientGrant: async () => ({ granted: true, at: '2026-08-25T01:00:00.000Z' }),
-  })({ client: { id: 'cursor' }, repository });
+    describe: (id) => ({
+      ...describeAdapter('cursor'),
+      id,
+      capabilities: {
+        ...describeAdapter('cursor').capabilities,
+        trust: { model: 'explicit-workspace-grant', failureIsUnverified: true, clientReview: null },
+      },
+    }),
+  })({ client: { id: 'invented-surface' }, repository });
 
-  assert.equal(granted.established, true);
-  assert.equal(granted.grantedBy.mechanism, TRUST_MECHANISMS['explicit-workspace-grant']);
-  assert.equal(granted.grantedBy.observed.clientGrantRead, true);
-  assert.deepEqual(granted.grantedBy.actor, { name: 'a-maintainer', provenance: SELF_DECLARED });
+  assert.equal(undefinedModel.established, false);
+  assert.equal(undefinedModel.pending, false);
+  assert.equal(undefinedModel.reason, 'trust-model-unrecognized');
 });
 
 /**
@@ -658,6 +802,35 @@ test('a failed activation leaves no shortcut, no registration, and a clone that 
   ]);
 
   assert.equal((await git(root, ['rev-list', '--count', 'HEAD'])).stdout.trim(), '2');
+});
+
+/**
+ * `AC-LIFE-002`. The same proof for a DESKTOP adapter, which until this slice
+ * could never reach a step after trust at all: the client configuration file is
+ * byte-for-byte what its owner wrote, and no receipt exists.
+ */
+test('an activation that fails after trust leaves a desktop client\'s own file untouched and no receipt', async (t) => {
+  const surface = '.cursor/hooks.json';
+  const owned = '{\n  "version": 1,\n  "hooks": {}\n}\n';
+  const root = await configuredClone(t, { files: { [surface]: { contents: owned } } });
+
+  await writeFile(
+    path.join(root, '.git', 'hooks', 'pre-commit'),
+    '#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n',
+    { encoding: 'utf8', mode: 0o755 },
+  );
+
+  const preview = await gate(root, ['activate', '--client', 'cursor']);
+  const failed = await gate(root, ['activate', '--client', 'cursor', '--confirm', tokenOf(preview)]);
+
+  // It got past trust — which is the whole point — and stopped at the chain.
+  assert.equal(failed.document.mutation.performed, false);
+  assert.equal(failed.document.mutation.step, 'hook-chain-validation');
+  assert.ok(failed.document.mutation.order.includes('trust'));
+  assert.equal(failed.document.mutation.state, 'configured');
+  assert.equal(failed.document.mutation.receiptId, null);
+  assert.equal(await readFile(path.join(root, surface), 'utf8'), owned);
+  assert.equal(await activationReceipt(root).catch(() => null), null);
 });
 
 test('a clone that is not configured is refused rather than configured on the way past', async (t) => {

@@ -46,11 +46,67 @@ export const ADAPTER_CAPABILITY_CATEGORIES = Object.freeze([
   'feedback',
 ]);
 
+/**
+ * The trust models an adapter may declare, what each one asserts, and what
+ * proves it.
+ *
+ * This registry exists because it did not. The contract required every adapter
+ * to declare `trust.model` and never said what a model was, so three adapters
+ * declared values nothing defined and nothing could establish, and activation
+ * paused at `trust-pending` forever on a clone with nothing wrong with it
+ * (`TB-046`). A declared value naming nothing is not a weaker declaration than
+ * a defined one; it is the absence of one, wearing its shape.
+ *
+ * A model is defined here and satisfied by exactly one branch of
+ * `createTrustEstablishment`'s dispatch, which reads `provenBy` rather than a
+ * model name. `mechanism` is the single source for what a receipt records, so
+ * the dispatch keeps no second table that could disagree with this one.
+ *
+ * `declarable` is the rule `FR-LIFE-016` states. Trust is step 5 of
+ * `ACTIVATION_STEPS` and adapter registration is step 7, so a model whose proof
+ * can only exist AFTER something is registered can never be established by the
+ * step that blocks that registration. An adapter may therefore declare only a
+ * model an activation can establish before it registers anything.
+ *
+ * WHAT A FUTURE MODEL MUST SUPPLY TO BE ADDABLE. An entry here stating (1) what
+ * being trusted under it asserts, (2) `provenBy` — the observation that proves
+ * it, which must be one this process can make for itself before registration,
+ * (3) the `mechanism` a receipt records, (4) whether it needs a client grant
+ * reader, and (5) whether an adapter may declare it. A `provenBy` this dispatch
+ * has no branch for is not addable by declaration alone: the branch that makes
+ * the observation is part of the model, not a consequence of naming it
+ * (`FR-ADAPT-008`, `SG-TRUST-001`, `RISK-004`).
+ */
+export const ADAPTER_TRUST_MODELS = Object.freeze({
+  'repository-hook-registration': Object.freeze({
+    id: 'repository-hook-registration',
+    asserts: 'The maintainer gave repository-bound consent to a preview naming the exact surface this adapter would register, and the Gate registers only a surface it owns.',
+    provenBy: 'repository-bound-consent',
+    mechanism: 'repository-bound-consent',
+    requiresClientGrantReader: false,
+    declarable: true,
+    rationale: 'The proof is the two-invocation confirmation the command already required, bound to this clone. It exists before anything is registered, so the trust step can establish it.',
+  }),
+  'client-grant-before-registration': Object.freeze({
+    id: 'client-grant-before-registration',
+    asserts: 'The client has already recorded a grant for THIS clone that a process can read before the Gate registers anything.',
+    provenBy: 'client-grant-read',
+    mechanism: 'client-grant-read',
+    requiresClientGrantReader: true,
+    declarable: false,
+    rationale: 'No v1 client offers a grant a process can read before registration: all three desktop surfaces register into a project-local file the Gate itself writes, so any client-side review of it happens afterwards. The model is defined and its dispatch kept because `FR-LIFE-016` requires the pause-and-resume capability for a client that one day grants first; it becomes declarable when such a client exists and a grant reader is bound to read it.',
+    grantDescription: 'only the client itself can record this grant for this clone, and it has not. Grant it in the client for this clone, then resume.',
+  }),
+});
+
 /** The fields each category must state. An empty category declares nothing. */
 const CAPABILITY_FIELDS = Object.freeze({
   event: Object.freeze(['deterministic', 'normalizedTriggers']),
   blocking: Object.freeze(['native']),
-  trust: Object.freeze(['model', 'failureIsUnverified']),
+  // `clientReview` is stated, never inferred: a client that reviews a
+  // registration AFTER reading it is a fact about what happens next, and an
+  // adapter that says nothing about it has not declared that there is none.
+  trust: Object.freeze(['model', 'failureIsUnverified', 'clientReview']),
   repository: Object.freeze(['localFilesystemRoot', 'worktreeAware']),
   session: Object.freeze(['identity', 'parallelIsolation']),
   filesystem: Object.freeze(['sameFilesAsClient']),
@@ -65,6 +121,64 @@ const TIMED_OUT = Symbol('adapter-invocation-timed-out');
 const isPlainObject = (value) => typeof value === 'object'
   && value !== null
   && !Array.isArray(value);
+
+/** The fields a declared post-registration client review must state. */
+const CLIENT_REVIEW_FIELDS = Object.freeze(['when', 'mechanism', 'detail']);
+
+/**
+ * Check what an adapter declared about trust against what a trust model is.
+ *
+ * This is the check whose absence let `explicit-workspace-grant` pass every
+ * review this project has: the categories were validated and the value inside
+ * one of them was not. A model nothing defines is rejected here, at declaration
+ * time, rather than becoming a pause nothing can clear at activation time
+ * (`TB-046`, `FR-LIFE-016`).
+ */
+const trustDeclarationErrors = (trust) => {
+  if (!isPlainObject(trust) || !('model' in trust)) {
+    // The missing-category and missing-field checks already said so.
+    return [];
+  }
+
+  const errors = [];
+  const declared = ADAPTER_TRUST_MODELS[trust.model] ?? null;
+
+  if (declared === null) {
+    errors.push({
+      code: 'adapter-trust-model-undefined',
+      path: 'capabilities.trust.model',
+      message: `${JSON.stringify(trust.model)} is not a trust model this contract defines, so nothing states what it asserts or what would prove it.`,
+    });
+  } else if (declared.declarable !== true) {
+    errors.push({
+      code: 'adapter-trust-model-undeclarable',
+      path: 'capabilities.trust.model',
+      message: `${JSON.stringify(trust.model)} is defined but cannot be established before an activation registers anything, so an adapter declaring it would pause at trust with nothing able to clear the pause: ${declared.rationale}`,
+    });
+  }
+
+  if ('clientReview' in trust && trust.clientReview !== null) {
+    if (!isPlainObject(trust.clientReview)) {
+      errors.push({
+        code: 'adapter-client-review-invalid',
+        path: 'capabilities.trust.clientReview',
+        message: 'A declared client review must be an object, or null where the client performs none.',
+      });
+    } else {
+      for (const field of CLIENT_REVIEW_FIELDS) {
+        if (!(field in trust.clientReview)) {
+          errors.push({
+            code: 'adapter-client-review-incomplete',
+            path: `capabilities.trust.clientReview.${field}`,
+            message: `A declared client review must state ${field}.`,
+          });
+        }
+      }
+    }
+  }
+
+  return errors;
+};
 
 /**
  * Validate one adapter capability declaration.
@@ -117,6 +231,8 @@ export const validateAdapterDeclaration = (capabilities) => {
     }
   }
 
+  errors.push(...trustDeclarationErrors(capabilities.trust));
+
   return errors;
 };
 
@@ -163,7 +279,14 @@ const ADAPTER_REGISTRY = Object.freeze({
     capabilities: Object.freeze({
       event: Object.freeze({ deterministic: true, normalizedTriggers: Object.freeze(['commit-attempt']) }),
       blocking: Object.freeze({ native: true }),
-      trust: Object.freeze({ model: 'repository-hook-registration', failureIsUnverified: true }),
+      // Nothing reviews this registration afterwards: Git has no per-hook
+      // review or hash-trust workflow at all, so there is no later fact to
+      // record and this adapter says so rather than leaving it absent.
+      trust: Object.freeze({
+        model: 'repository-hook-registration',
+        failureIsUnverified: true,
+        clientReview: null,
+      }),
       repository: Object.freeze({ localFilesystemRoot: true, worktreeAware: true }),
       session: Object.freeze({ identity: 'commit-process', parallelIsolation: true }),
       filesystem: Object.freeze({ sameFilesAsClient: true }),
@@ -239,7 +362,18 @@ const ADAPTER_REGISTRY = Object.freeze({
         normalizedTriggers: Object.freeze(['work-complete']),
       }),
       blocking: Object.freeze({ native: false }),
-      trust: Object.freeze({ model: 'explicit-workspace-grant', failureIsUnverified: true }),
+      // This surface's registration is an entry the Gate merges into
+      // `.claude/settings.local.json`, a file this activation writes at step 7.
+      // Its trust is therefore the repository-bound consent granted at step 3
+      // against a preview naming that exact surface, and nothing else: this
+      // client documents settings and policy precedence rather than a
+      // per-definition review flow, so there is no later client review to
+      // record either (`TB-046`).
+      trust: Object.freeze({
+        model: 'repository-hook-registration',
+        failureIsUnverified: true,
+        clientReview: null,
+      }),
       repository: Object.freeze({ localFilesystemRoot: true, worktreeAware: true }),
       session: Object.freeze({ identity: 'client-session', parallelIsolation: true }),
       filesystem: Object.freeze({ sameFilesAsClient: true }),
@@ -307,7 +441,27 @@ const ADAPTER_REGISTRY = Object.freeze({
         normalizedTriggers: Object.freeze(['work-complete']),
       }),
       blocking: Object.freeze({ native: false }),
-      trust: Object.freeze({ model: 'explicit-project-grant', failureIsUnverified: true }),
+      // Same registration surface reasoning as the other desktop clients: the
+      // Gate writes `.codex/hooks.json` at step 7, so the grant that trust can
+      // establish at step 5 is the repository-bound consent to that exact
+      // registration.
+      //
+      // This client is the one v1 surface with a REAL review of its own, and it
+      // is a post-registration one: a non-managed command hook is skipped until
+      // its exact definition is reviewed and trusted in Codex, which happens the
+      // next time Codex reads this file — after this activation wrote it. It is
+      // recorded here as a fact about what happens next and never waited for,
+      // because waiting for it could never succeed (`FR-LIFE-004`,
+      // `SG-TRUST-001`).
+      trust: Object.freeze({
+        model: 'repository-hook-registration',
+        failureIsUnverified: true,
+        clientReview: Object.freeze({
+          when: 'after-registration',
+          mechanism: 'definition-review',
+          detail: 'Codex skips a non-managed command hook until its exact definition is reviewed and trusted in Codex; that review happens the next time Codex reads .codex/hooks.json, so this registration is written but is not yet running — review and trust it in Codex.',
+        }),
+      }),
       repository: Object.freeze({ localFilesystemRoot: true, worktreeAware: true }),
       session: Object.freeze({ identity: 'client-session', parallelIsolation: true }),
       filesystem: Object.freeze({ sameFilesAsClient: true }),
@@ -399,7 +553,17 @@ const ADAPTER_REGISTRY = Object.freeze({
         normalizedTriggers: Object.freeze(['work-complete']),
       }),
       blocking: Object.freeze({ native: false }),
-      trust: Object.freeze({ model: 'explicit-workspace-grant', failureIsUnverified: true }),
+      // The surface whose declaration produced the defect. `.cursor/hooks.json`
+      // is written by this activation at step 7; this client documents project
+      // and user hook configuration and a plugin marketplace review, and the
+      // framework installs Agent Skills rather than a Cursor plugin, so no
+      // marketplace review applies and nothing describes a per-workspace grant
+      // a process could read before registration (`TB-046`).
+      trust: Object.freeze({
+        model: 'repository-hook-registration',
+        failureIsUnverified: true,
+        clientReview: null,
+      }),
       repository: Object.freeze({ localFilesystemRoot: true, worktreeAware: true }),
       session: Object.freeze({ identity: 'client-session', parallelIsolation: true }),
       filesystem: Object.freeze({ sameFilesAsClient: true }),

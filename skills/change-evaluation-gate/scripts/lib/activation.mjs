@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
+import { describeAdapter } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
@@ -1321,6 +1322,37 @@ const withdrawDeclaredSurface = async (adapter, { repository, registration }) =>
 );
 
 /**
+ * The client review that follows a registration this transaction just wrote.
+ *
+ * Some clients review a registration only AFTER reading it — one v1 surface
+ * skips a non-managed command hook until its exact definition is reviewed and
+ * trusted in that client — which is after the write the trust step would have
+ * been blocking. So it is recorded rather than awaited, and here, on the entry
+ * for the registration it is about, because that is what `gate status` re-reads
+ * and what a maintainer opens to find out what this activation actually did.
+ *
+ * Every word of it comes from the adapter's own declaration: this function
+ * names no client and reads no client-specific field (`SG-OWNER-001`). It
+ * states what the client will do next and claims nothing about whether the
+ * client has accepted anything — the Gate only wrote the entry (`SG-TRUST-001`,
+ * `FR-LIFE-004`).
+ */
+const pendingClientReview = (adapterId) => {
+  const declared = describeAdapter(adapterId)?.capabilities?.trust?.clientReview ?? null;
+
+  return declared === null
+    ? null
+    : {
+      when: declared.when,
+      mechanism: declared.mechanism,
+      // Nothing observed it. The Gate wrote a registration; whether the client
+      // has reviewed it is the client's to know.
+      observedByGate: false,
+      detail: declared.detail,
+    };
+};
+
+/**
  * What a receipt pins about one adapter registration.
  *
  * Only a registration in a client-owned configuration file is pinned here. An
@@ -1814,7 +1846,14 @@ const runActivation = async (request, dependencies, transaction) => {
     });
     const pinned = pinnedRegistration(registration);
 
-    adapters.push({ ...adapter, selfTest, ...(pinned === null ? {} : { registration: pinned }) });
+    adapters.push({
+      ...adapter,
+      selfTest,
+      ...(pinned === null ? {} : { registration: pinned }),
+      ...(pinned?.registered === true
+        ? { clientReview: pendingClientReview(adapter.id) }
+        : {}),
+    });
 
     // An adapter that registers nothing has nothing to compensate. Journalling
     // it anyway would claim a rollback action that never had anything to undo.

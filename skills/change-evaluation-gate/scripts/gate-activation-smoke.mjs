@@ -99,6 +99,7 @@ import {
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
 } from './lib/activation-seams.mjs';
+import { describeAdapter } from './lib/adapters.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -716,6 +717,95 @@ const commandDrivenActivation = async () => {
   );
 
   return { name: 'command-driven-activation', ok: findings.length === 0, findings };
+};
+
+/**
+ * A real clone activated for a DESKTOP client through the packaged command.
+ *
+ * Until `TB-046` this could not happen at all: two of the three desktop
+ * adapters declared a trust model no contract defined and no surface could
+ * issue, so `gate activate --client cursor` on a real clone paused at
+ * `trust-pending` with nothing able to clear the pause. Every fixture missed it
+ * because every fixture injected its own trust implementation — the declared
+ * model never selected anything.
+ *
+ * So this drives the packaged command, for two surfaces with different declared
+ * block schemas, and requires each to complete, register exactly its own
+ * declared entry, and publish a receipt (`AC-LIFE-009`, `FR-LIFE-004`,
+ * `AC-ADAPT-003`).
+ */
+const commandDrivenDesktopActivation = async () => {
+  const findings = [];
+
+  for (const adapterId of ['cursor', 'codex-desktop']) {
+    const declared = describeAdapter(adapterId);
+    const surface = declared.registration.file;
+    const owner = declared.registration.schemaVersion === null
+      ? { hooks: {} }
+      : {
+        [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
+        hooks: {},
+      };
+    // The Gate never CREATES a client's configuration file, so a clone that
+    // proves a real registration is one where the client already has one.
+    const root = await fixtureRepository({
+      files: { [surface]: { contents: `${JSON.stringify(owner, null, 2)}\n` } },
+    });
+
+    await assertThrowawayRepository(root);
+
+    const preview = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
+    const previewDocument = JSON.parse(preview.stdout || '{}');
+
+    check(
+      findings,
+      previewDocument.observation?.trustModel === 'repository-hook-registration',
+      `${adapterId} previewed a trust model this Gate cannot establish: ${JSON.stringify(previewDocument.observation?.trustModel)}.`,
+    );
+
+    const confirmed = await runPackagedCommand(root, [
+      'activate', '--client', adapterId,
+      '--confirm', previewDocument.observation?.confirmationToken,
+      '--json',
+    ]);
+    const document = JSON.parse(confirmed.stdout || '{}');
+
+    check(
+      findings,
+      document.mutation?.performed === true && document.mutation?.state === 'activated',
+      `${adapterId} could not be activated through the packaged command: ${confirmed.stdout || confirmed.stderr}`,
+    );
+    check(
+      findings,
+      typeof document.mutation?.receiptId === 'string' && document.mutation.receiptId.startsWith('sha256:'),
+      `${adapterId} activated without publishing a receipt: ${JSON.stringify(document.mutation?.receiptId)}.`,
+    );
+
+    const registered = await readFile(path.join(root, surface), 'utf8')
+      .then((contents) => JSON.parse(contents))
+      .catch(() => null);
+    const entries = registered?.hooks?.[declared.nativeEvents[declared.registration.trigger]] ?? null;
+
+    check(
+      findings,
+      Array.isArray(entries) && entries.length === 1,
+      `${adapterId} did not register exactly its declared surface in ${surface}: ${JSON.stringify(entries)}.`,
+    );
+
+    // Where the client reviews the registration only after reading it, the
+    // maintainer is told so rather than left to read `activated` as "running".
+    const review = declared.capabilities.trust.clientReview;
+
+    check(
+      findings,
+      review === null
+        ? !/review/i.test(document.mutation?.summary ?? '')
+        : (document.mutation?.summary ?? '').includes(review.detail),
+      `${adapterId} did not report its declared post-registration review: ${JSON.stringify(document.mutation?.summary)}.`,
+    );
+  }
+
+  return { name: 'command-driven-desktop-activation', ok: findings.length === 0, findings };
 };
 
 /**
@@ -2131,6 +2221,7 @@ const main = async () => {
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
       await commandDrivenActivation(),
+      await commandDrivenDesktopActivation(),
       await commandDrivenActivationFailure(),
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
