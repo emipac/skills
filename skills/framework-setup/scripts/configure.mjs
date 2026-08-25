@@ -11,7 +11,8 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 
 const trackerAdapters = new Set([
   'local-markdown',
@@ -1938,9 +1939,6 @@ const runCli = async () => {
   console.log(JSON.stringify(result, null, 2));
 };
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
+if (isCliEntryPoint(import.meta.url)) {
   await runCli();
 }

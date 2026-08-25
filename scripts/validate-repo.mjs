@@ -114,6 +114,59 @@ for (const entry of skillDirectoryEntries) {
   releasedSkills.push(entry.name);
 }
 
+// Deciding whether a script was run as a command is one rule, and a skill that
+// ships a command carries a byte-for-byte copy of it: skills install
+// independently and must not import another skill's files, so the rule cannot
+// be shared at run time. Divergence between copies is what would let a fix
+// land in four scripts and miss the fifth, so it fails validation here.
+const canonicalEntryPointPath = path.join('scripts', 'lib', 'cli-entry-point.mjs');
+const canonicalEntryPoint = await readFile(path.join(root, canonicalEntryPointPath), 'utf8');
+
+for (const skill of releasedSkills) {
+  const vendoredPath = path.join('skills', skill, 'scripts', 'lib', 'cli-entry-point.mjs');
+
+  let scriptNames = [];
+
+  try {
+    scriptNames = (await readdir(path.join(root, 'skills', skill, 'scripts'), {
+      withFileTypes: true,
+    }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.mjs'))
+      .map((entry) => entry.name);
+  } catch {
+    continue;
+  }
+
+  let usesRule = false;
+
+  for (const scriptName of scriptNames) {
+    const source = await readFile(
+      path.join(root, 'skills', skill, 'scripts', scriptName),
+      'utf8',
+    );
+
+    if (source.includes('cli-entry-point.mjs')) {
+      usesRule = true;
+    }
+  }
+
+  let vendored;
+
+  try {
+    vendored = await readFile(path.join(root, vendoredPath), 'utf8');
+  } catch {
+    if (usesRule) {
+      errors.push(`${vendoredPath}: skill scripts import the rule but no copy is installed`);
+    }
+
+    continue;
+  }
+
+  if (vendored !== canonicalEntryPoint) {
+    errors.push(`${vendoredPath}: must match ${canonicalEntryPointPath} exactly`);
+  }
+}
+
 const claudeSkills = Array.isArray(claudeManifest.skills)
   ? claudeManifest.skills.map((skillPath) => skillPath.replace('./skills/', '')).sort()
   : [];
