@@ -83,7 +83,7 @@ const terminateTree = async (child) => {
  * project can widen what its own command reaches without ever being able to
  * hide the runtime's own entries behind it.
  */
-const environmentFor = (allowedEnvironment, source, runtimePath = '') => {
+export const environmentFor = (allowedEnvironment, source, runtimePath = '') => {
   const environment = {};
 
   for (const name of allowedEnvironment ?? []) {

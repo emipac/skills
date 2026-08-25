@@ -54,6 +54,7 @@ import {
   STORE_DIRECTORY,
 } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
+import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { createRedactor } from './redaction.mjs';
 
 const runFile = promisify(execFile);
@@ -844,7 +845,11 @@ const report = (decision) => {
       continue;
     }
 
-    lines.push(say(`  ${check?.id}: ${check?.outcome} (${check?.reasonCode ?? 'no reason recorded'})`));
+    // The check's own summary, which is what the decision records. A check
+    // that could not run states what it did not get there, and a maintainer
+    // reading `git commit` output must be given that rather than a shape they
+    // would read as a verdict about their code (`NFR-OPER-001`, `TB-044`).
+    lines.push(say(`  ${check?.summary ?? `${check?.id}: ${check?.outcome} (${check?.reasonCode ?? 'no reason recorded'})`}`));
   }
 
   for (const diagnostic of decision.diagnostics ?? []) {
@@ -958,6 +963,11 @@ export const runHook = async ({
   await sweepOrphanedExecutionRoots();
 
   const executionRoot = await createExecutionRoot('gate-hook-runner-exec-');
+  // What the pinned programs need in order to start at all (TB-028), computed
+  // once: the executor runs the checks with it, and the prerequisite resolver
+  // proves an executable against the same path rather than against a second
+  // idea of where a check would look (`TB-044`).
+  const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
   const executor = createBoundedExecutor({
     totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
     resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
@@ -966,8 +976,7 @@ export const runHook = async ({
     // what a check printed; capturing nothing would leave that purpose unmet
     // on the one path a maintainer actually reaches (FR-EVID-003).
     captureOutput: true,
-    // What the pinned programs need in order to start at all (TB-028).
-    runtimePath: runtimeSearchPath([...runners.resolved.values()]),
+    runtimePath,
   });
   let decision;
 
@@ -994,7 +1003,11 @@ export const runHook = async ({
       executionRoot,
       runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
       providerVersions: { configuration: '1.0.0' },
-      resolvePrerequisite: () => true,
+      // A check declares what it needs; this proves it or refuses. Asserting
+      // every declaration proved is a fail-open, and what it produced was an
+      // environment fault reported as a verdict about the maintainer's code
+      // (`TB-044`, `AC-EVAL-003`).
+      resolvePrerequisite: createPrerequisiteResolver({ searchPath: runtimePath, environment }),
       checks,
       policy: configuration.policy,
       execute: executor.execute,

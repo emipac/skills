@@ -721,7 +721,11 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
   if (view?.failure) {
     message = `Preflight (not a commit decision): unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`;
   } else if (failing.length > 0) {
-    message = `Preflight (not a commit decision): ${failing.map((check) => `${check.id} ${check.outcome}`).join('; ')}.`;
+    // Each failing check's own summary, so this channel says the same thing
+    // the decision says. A check that never ran names what it did not get,
+    // because this is the channel that told a maintainer's agent to go and
+    // change the project (`NFR-OPER-001`, `TB-044`).
+    message = `Preflight (not a commit decision): ${failing.map((check) => check.summary ?? `${check.id} ${check.outcome}`).join('; ')}.`;
   } else {
     message = `Preflight (not a commit decision): ${view?.outcome ?? 'unverified'}.`;
   }

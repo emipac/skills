@@ -35,6 +35,7 @@ import {
   resolveReceipt,
   sweepOrphanedExecutionRoots,
 } from './hook-runner.mjs';
+import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { listChangedPaths } from './snapshot.mjs';
 
 const adapterIdFromArgv = (argv) => {
@@ -297,19 +298,26 @@ export const runPreflight = async ({
     await sweepOrphanedExecutionRoots();
 
     const executionRoot = await createExecutionRoot('gate-preflight-exec-');
+    // Computed once and shared by execution and proof, for the reason the
+    // authoritative runner shares it: the path a check would find a program on
+    // is the path it runs with (`TB-044`).
+    const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
     const executor = createBoundedExecutor({
       totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
       resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
       environment,
       captureOutput: true,
-      runtimePath: runtimeSearchPath([...runners.resolved.values()]),
+      runtimePath,
     });
 
     try {
       return judged(await evaluateSeam(request, {
         ...gateInputs,
         executionRoot,
-        resolvePrerequisite: () => true,
+        // The same proof the authoritative runner binds, from the same owner:
+        // the surface a maintainer's agent reads must not describe an
+        // environment fault as a finding about their code (`TB-044`).
+        resolvePrerequisite: createPrerequisiteResolver({ searchPath: runtimePath, environment }),
         execute: executor.execute,
       }));
     } finally {

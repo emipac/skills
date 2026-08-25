@@ -1765,6 +1765,133 @@ const interruptedCommitLeavesNoRoot = async () => {
   return { name: 'interrupted-commit-leaves-no-root', ok: findings.length === 0, findings };
 };
 
+/**
+ * A requirement this evaluation environment cannot satisfy, declared by the
+ * clone the way it declares its commands.
+ *
+ * It names a property of the environment, never a tool: an evaluation
+ * materializes its subject away from the repository so the graded tree cannot
+ * move, and a tree of files is not a repository. A command whose arguments
+ * depend on one therefore cannot run — which is one of the three faults a real
+ * run reported as defects in the maintainer's project (`TB-044`).
+ */
+const UNSATISFIABLE_PREREQUISITE = Object.freeze({
+  kind: 'environment',
+  name: 'source-control-history',
+});
+
+/** Declare, in the clone's own configuration, what its configured check needs. */
+const declarePrerequisite = async (root, prerequisite) => {
+  const file = path.join(root, CONFIGURATION_FILE);
+  const lines = (await readFile(file, 'utf8')).split('\n');
+  const index = lines.findIndex((line) => /^\s+- \{.*"runner"/.test(line));
+
+  if (index === -1) {
+    throw new Error('the fixture configuration declares no command to require anything of.');
+  }
+
+  const marker = lines[index].indexOf('- ');
+  const declared = JSON.parse(lines[index].slice(marker + 2));
+
+  lines[index] = `${' '.repeat(marker)}- ${JSON.stringify({ ...declared, prerequisites: [prerequisite] })}`;
+  await writeFile(file, lines.join('\n'), 'utf8');
+
+  const configured = await readRepositoryConfiguration({ repositoryRoot: root });
+
+  if (!configured.ok) {
+    throw new Error(`the declared requirement made the configuration unreadable: ${configured.detail}`);
+  }
+
+  fixtureConfigurations.set(root, configured.configuration);
+};
+
+/**
+ * A real commit, in a real activated clone, whose required check declared
+ * something this environment does not provide.
+ *
+ * The commit is denied — a required `unverified` check denies exactly as it
+ * denied before (`FR-POL-003`) — and what the maintainer reads is what the
+ * check never got, not a verdict about their code. The distinction is the whole
+ * point: it was a denial phrased as a verdict that sent an agent off to rewrite
+ * a working project until the gate stopped complaining (`AC-EVAL-003`,
+ * `NFR-OPER-001`).
+ */
+const unprovedPrerequisiteNamesWhatWasMissing = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await declarePrerequisite(root, UNSATISFIABLE_PREREQUISITE);
+  await git(root, ['add', '--all']);
+  await commit(root, 'declare what the configured check needs');
+
+  const store = await storeFor(root);
+  const { result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+
+  if (result.activated !== true) {
+    return { name: 'unproved-prerequisite-names-what-was-missing', ok: false, findings };
+  }
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  // Content the check itself would reject. Before this, the check ran in an
+  // environment it could not work in and its failure was reported as a finding
+  // about this content.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'a change graded by a check that cannot run here');
+
+  check(findings, blocked.failed === true, 'A required check that could not run still authorized a commit.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A denied commit still moved HEAD.',
+  );
+  check(
+    findings,
+    blocked.output.includes('prerequisite-missing'),
+    `The denial does not say the check never ran: ${blocked.output}.`,
+  );
+  check(
+    findings,
+    blocked.output.includes(UNSATISFIABLE_PREREQUISITE.name),
+    `The denial does not name what was not proved: ${blocked.output}.`,
+  );
+  check(
+    findings,
+    !blocked.output.includes('grader-negative'),
+    `The denial reports an environment fault as a verdict about the code: ${blocked.output}.`,
+  );
+
+  const log = await store.readLog();
+  const envelope = log.length > 0 ? await store.readEnvelope(log[log.length - 1].evidenceId) : null;
+  const graded = envelope?.decision?.checks?.find((entry) => entry.id === REQUIRED_CHECK) ?? null;
+
+  check(
+    findings,
+    graded?.outcome === 'unverified' && graded?.reasonCode === 'prerequisite-missing',
+    `The recorded decision grades the check as ${graded?.outcome} (${graded?.reasonCode}).`,
+  );
+  check(
+    findings,
+    (graded?.summary ?? '').includes(UNSATISFIABLE_PREREQUISITE.name),
+    `The recorded decision does not name the unproved requirement: ${graded?.summary}.`,
+  );
+  check(
+    findings,
+    graded?.attempts?.[0]?.exitCode === null,
+    'The check whose requirement was not proved still ran its command.',
+  );
+
+  return {
+    name: 'unproved-prerequisite-names-what-was-missing',
+    ok: findings.length === 0,
+    findings,
+  };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1793,6 +1920,7 @@ const main = async () => {
       await vendorBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
+      await unprovedPrerequisiteNamesWhatWasMissing(),
     ];
   } finally {
     for (const root of temporaryRoots) {

@@ -34,6 +34,7 @@ import {
 import { withoutRunLocalValues } from './evidence-identity.mjs';
 import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
+import { describeMissingPrerequisites } from './prerequisites.mjs';
 import {
   authorizationFor,
   createBudgetLedger,
@@ -76,7 +77,10 @@ const canonical = (value) => {
 
 const identity = (value) => `sha256:${createHash('sha256').update(canonical(value)).digest('hex')}`;
 
-const summarize = (checkId, outcome, reasonCode) => `${checkId}: ${outcome} (${reasonCode})`;
+const summarize = (checkId, outcome, reasonCode, detail = null) => [
+  `${checkId}: ${outcome} (${reasonCode})`,
+  ...(typeof detail === 'string' && detail.length > 0 ? [detail] : []),
+].join(' — ');
 
 export { authorizationFor, decisionOutcome };
 
@@ -305,9 +309,13 @@ const assertionsFor = (descriptor, acceptanceIds, outcome, summary) => {
   }));
 };
 
-const resultFor = (descriptor, attempts, { override = null, acceptanceIds = new Set() } = {}) => {
+const resultFor = (
+  descriptor,
+  attempts,
+  { override = null, acceptanceIds = new Set(), detail = null } = {},
+) => {
   const { outcome, reasonCode } = override ?? reconcileAttempts(attempts);
-  const summary = summarize(descriptor.id, outcome, reasonCode);
+  const summary = summarize(descriptor.id, outcome, reasonCode, detail);
 
   return {
     id: descriptor.id,
@@ -443,6 +451,13 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     });
   }
 
+  // What the evaluated tree actually holds: the exact tracked content this
+  // evaluation materialized, and the declared dependency roots it provided
+  // beside it. Both were established by materialization; a check that declares
+  // it needs one of these paths is answered from that establishment rather
+  // than by reading the execution root a second time (`TB-030`, `TB-044`).
+  const evaluatedPaths = [...snapshot.paths, ...capture.dependencies.provided];
+
   const scope = await scopeOf(request, snapshot.executionRoot);
   // A change that edits what judges it is reported before any check runs, so
   // the surfaces are named even when execution later fails (FR-EVAL-009).
@@ -528,9 +543,19 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     // A prerequisite is proved or it is not. With no resolver bound, nothing is
     // proved, so a check that declares one is unverified rather than assumed
     // runnable.
+    //
+    // The resolver is bound by the runner, which knows the runtime the checks
+    // will run in; what only this evaluation knows is passed to it — the check
+    // being resolved and the environment this evaluation created. Neither side
+    // re-establishes the other's facts (`TB-044`).
     const missing = (descriptor.check.prerequisites ?? []).filter(
       (prerequisite) => typeof dependencies.resolvePrerequisite !== 'function'
-        || dependencies.resolvePrerequisite(prerequisite) !== true,
+        || dependencies.resolvePrerequisite(prerequisite, {
+          check: descriptor.check,
+          repositoryRoot: request.repository.root,
+          snapshot,
+          evaluatedPaths,
+        }) !== true,
     );
 
     if (missing.length > 0) {
@@ -540,7 +565,13 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
         reasonCode: 'prerequisite-missing',
         exitCode: null,
         durationMs: 0,
-      }], { acceptanceIds }));
+      }], {
+        acceptanceIds,
+        // NFR-OPER-001: what was not proved is named where the decision is
+        // read, so "this check never got what it needed" is never mistaken for
+        // "your code is wrong".
+        detail: describeMissingPrerequisites(missing),
+      }));
 
       continue;
     }
