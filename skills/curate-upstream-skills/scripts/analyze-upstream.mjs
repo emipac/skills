@@ -12,7 +12,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 
 const protectedMappings = new Map([
   ['ask-matt', 'framework-router'],
@@ -317,8 +317,7 @@ export const run = async ({ root = process.cwd(), applySafe = false } = {}) => {
   return report;
 };
 
-const isCli = process.argv[1]
-  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+const isCli = isCliEntryPoint(import.meta.url);
 
 if (isCli) {
   run({ applySafe: process.argv.includes('--apply-safe') }).catch((error) => {

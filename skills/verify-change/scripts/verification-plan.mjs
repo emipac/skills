@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 
 export const evidenceLadderStages = Object.freeze([
   'focused',
@@ -585,9 +585,6 @@ const runCli = async () => {
   }
 };
 
-if (
-  process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
+if (isCliEntryPoint(import.meta.url)) {
   await runCli();
 }

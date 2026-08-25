@@ -1,8 +1,46 @@
 import { execFileSync } from 'node:child_process';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+
+// Clients install a skill wherever they like, and some of them link: a project
+// that installs for both Claude and the shared agent layout ends up with
+// `.claude/skills/<skill>` pointing at `.agents/skills/<skill>`. An installed
+// command has to do its work through whichever path the caller used, so this
+// smoke installation runs one through a link and compares it against the same
+// command run through the path it was installed at.
+const installedCommands = [
+  { skill: 'framework-setup', script: 'configure.mjs', argv: ['--discover'] },
+  { skill: 'srs-modeling', script: 'audit-srs.mjs', argv: [] },
+  { skill: 'to-spec', script: 'audit-feature-spec.mjs', argv: [] },
+  { skill: 'to-tickets', script: 'audit-ticket-contracts.mjs', argv: [] },
+  { skill: 'verify-change', script: 'verification-plan.mjs', argv: [] },
+];
+
+const runInstalledCommand = (scriptPath, argv, cwd) => {
+  try {
+    return {
+      status: 0,
+      stdout: execFileSync(process.execPath, [scriptPath, ...argv], {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+      stderr: '',
+    };
+  } catch (error) {
+    if (typeof error.status !== 'number') {
+      throw error;
+    }
+
+    return {
+      status: error.status,
+      stdout: error.stdout ?? '',
+      stderr: error.stderr ?? '',
+    };
+  }
+};
 
 const sourceRoot = process.cwd();
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
@@ -428,6 +466,37 @@ try {
 
     if (!(await readFile(expressReviewProfile, 'utf8')).includes('Middleware ordering')) {
       throw new Error(`${agent}: Express review profile was not installed`);
+    }
+
+    const linkedClientRoot = path.join(temporaryRoot, '.linked-clients', agent);
+
+    await mkdir(path.dirname(linkedClientRoot), { recursive: true });
+    await rm(linkedClientRoot, { recursive: true, force: true });
+    await symlink(path.join(temporaryRoot, installedRoot), linkedClientRoot, 'dir');
+
+    for (const { skill, script, argv } of installedCommands) {
+      const installedScript = path.join(temporaryRoot, installedRoot, skill, 'scripts', script);
+      const linkedScript = path.join(linkedClientRoot, skill, 'scripts', script);
+
+      const throughInstalledPath = runInstalledCommand(installedScript, argv, temporaryRoot);
+      const throughLink = runInstalledCommand(linkedScript, argv, temporaryRoot);
+
+      // Both invocations being silent would satisfy an equality check while
+      // proving nothing, which is exactly the defect this asserts against.
+      if (`${throughInstalledPath.stdout}${throughInstalledPath.stderr}`.trim() === '') {
+        throw new Error(`${agent}: installed ${skill}/${script} produced no output at all`);
+      }
+
+      if (
+        throughLink.stdout !== throughInstalledPath.stdout
+        || throughLink.stderr !== throughInstalledPath.stderr
+        || throughLink.status !== throughInstalledPath.status
+      ) {
+        throw new Error(
+          `${agent}: installed ${skill}/${script} run through a linked client path did not do `
+          + `what it does through the path it was installed at`,
+        );
+      }
     }
   }
 
