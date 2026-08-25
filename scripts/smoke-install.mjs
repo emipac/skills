@@ -274,10 +274,15 @@ try {
     );
 
     const installedGate = await readFile(gateDocument, 'utf8');
+    // Prose in a Markdown document is wrapped, so a sentence a reader sees on
+    // one line is not one line on disk. Collapsing runs of whitespace lets these
+    // assertions test what the document says rather than where it happened to
+    // break, which is what made an earlier reflow read as a failed install.
+    const installedGateProse = installedGate.replace(/\s+/g, ' ');
 
     if (
       !installedGate.includes('name: change-evaluation-gate')
-      || !installedGate.includes('Configuration does not activate the Gate')
+      || !installedGateProse.includes('configuring does not activate')
     ) {
       throw new Error(`${agent}: dormant Change Evaluation Gate was not installed correctly`);
     }
@@ -285,8 +290,8 @@ try {
     // The three supported desktop preflight surfaces ship with the plugin and
     // are documented as dormant until an explicit Activation registers them.
     if (
-      !installedGate.includes('Supported preflight adapters')
-      || !installedGate.includes('Installing an adapter never registers it')
+      !installedGateProse.includes('Supported preflight adapters')
+      || !installedGateProse.includes('Installing an adapter never registers it')
     ) {
       throw new Error(`${agent}: installed Gate does not document its dormant preflight adapters`);
     }
