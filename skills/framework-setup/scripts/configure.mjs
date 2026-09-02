@@ -1265,6 +1265,7 @@ export const discoverVerification = async (
     lint: 'static_analysis',
     typecheck: 'static_analysis',
     'type-check': 'static_analysis',
+    types: 'static_analysis',
     test: 'test',
     smoke: 'smoke',
     build: 'build',
@@ -1275,6 +1276,7 @@ export const discoverVerification = async (
     lint: new Set(['check', 'server', 'backend', 'client', 'frontend']),
     typecheck: new Set(['server', 'backend', 'client', 'frontend']),
     'type-check': new Set(['server', 'backend', 'client', 'frontend']),
+    types: new Set(['check', 'server', 'backend', 'client', 'frontend']),
     test: new Set([
       'unit',
       'integration',
@@ -1357,43 +1359,58 @@ export const discoverVerification = async (
 
     return frontend === 'none' ? 'backend' : 'frontend';
   };
-  const categoryForScript = (script) => {
+  const classifyScript = (script) => {
     const parts = script.split(':');
     const base = parts[0];
     const qualifiers = parts.slice(1);
+    const accepted = {
+      category: qualifiers.includes('e2e') ? 'e2e' : scriptCategories[base],
+      reason: null,
+    };
 
     if (!Object.hasOwn(scriptCategories, base)) {
-      return null;
+      return { category: null, reason: 'unrecognised-name' };
     }
 
     if (scriptScopes[script]) {
-      return qualifiers.includes('e2e') ? 'e2e' : scriptCategories[base];
+      return accepted;
     }
 
-    if (qualifiers.some((qualifier) => unsafeQualifiers.has(qualifier))) {
-      return null;
+    const unsafeQualifier = qualifiers.find(
+      (qualifier) => unsafeQualifiers.has(qualifier),
+    );
+
+    if (unsafeQualifier) {
+      return { category: null, reason: `unsafe-qualifier: ${unsafeQualifier}` };
     }
 
     const allowedQualifiers = safeQualifiers[base];
+    const unsupportedQualifier = allowedQualifiers
+      ? qualifiers.find((qualifier) => !allowedQualifiers.has(qualifier))
+      : undefined;
 
-    if (
-      allowedQualifiers
-      && qualifiers.some((qualifier) => !allowedQualifiers.has(qualifier))
-    ) {
-      return null;
+    if (unsupportedQualifier) {
+      return {
+        category: null,
+        reason: `unsupported-qualifier: ${unsupportedQualifier}`,
+      };
     }
 
     if (
       script === 'format'
       && Object.hasOwn(packageManifest.scripts ?? {}, 'format:check')
     ) {
-      return null;
+      return { category: null, reason: 'superseded-by-format-check' };
     }
 
-    return qualifiers.includes('e2e') ? 'e2e' : scriptCategories[base];
+    return accepted;
   };
   const addPackageCapability = (category, scope, script) => {
-    if (['typecheck', 'type-check'].some((name) => script.split(':').includes(name))) {
+    if (
+      ['typecheck', 'type-check', 'types'].some(
+        (name) => script.split(':').includes(name),
+      )
+    ) {
       capabilities.add('typescript');
       return;
     }
@@ -1416,14 +1433,17 @@ export const discoverVerification = async (
     }
   };
 
+  const unclassifiedScripts = [];
+
   for (const [script, scriptCommand] of Object.entries(packageManifest.scripts ?? {})) {
     if (excludedScriptNames.has(script)) {
       continue;
     }
 
-    const category = categoryForScript(script);
+    const { category, reason } = classifyScript(script);
 
     if (!category) {
+      unclassifiedScripts.push({ script, command: scriptCommand, reason });
       continue;
     }
 
@@ -1443,6 +1463,11 @@ export const discoverVerification = async (
     profile,
     capabilities: sortUnique(capabilities),
     commands,
+    // Reported, never acted on: naming what was declined keeps a maintainer
+    // informed without inferring that any of it is a verification command.
+    unclassifiedScripts: unclassifiedScripts.sort(
+      (first, second) => (first.script < second.script ? -1 : 1),
+    ),
   };
 };
 
