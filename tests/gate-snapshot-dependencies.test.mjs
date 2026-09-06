@@ -163,7 +163,14 @@ test('TB-030 SG-EVAL-001: a project declaring no dependency roots materializes e
   });
 
   assert.equal(declared.snapshot.id, undeclared.snapshot.id);
-  assert.deepEqual(undeclared.dependencies, { provided: [], missing: [], refused: [] });
+  assert.deepEqual(undeclared.dependencies, {
+    // TB-054: a clone that declares nothing is provisioned by the strategy it
+    // always was, and says so.
+    provisioning: 'link',
+    provided: [],
+    missing: [],
+    refused: [],
+  });
   assert.equal(
     await readFile(path.join(target, 'vendor/autoload.php'), 'utf8').catch(() => null),
     null,

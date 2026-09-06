@@ -13,6 +13,7 @@
 import { createHash } from 'node:crypto';
 
 import { EVIDENCE_FORMAT } from './evaluation-contract.mjs';
+import { DEPENDENCY_PROVISIONING_STRATEGIES } from './snapshot.mjs';
 
 /**
  * The Gate policy section has exactly five subcontracts. Nothing else is
@@ -279,6 +280,22 @@ export const validateGatePolicy = (policy) => {
       'gate-policy-execution-invalid',
       'evaluation_gate.execution.dependency_roots',
       'Dependency roots must be listed as repository-relative directories that stay inside the repository.',
+    ));
+  }
+
+  // How those roots are provided is likewise the project's declaration and
+  // never the gate's inference. A project whose tooling resolves a path to its
+  // realpath says so once, here; a project that says nothing keeps the
+  // behaviour it already had. Anything else is named rather than resolved to a
+  // working default, because a strategy silently substituted for the one that
+  // was written is a strategy the project cannot see (`FR-CFG-002`).
+  const provisioning = policy.execution?.dependency_provisioning;
+
+  if (provisioning !== undefined && !DEPENDENCY_PROVISIONING_STRATEGIES.includes(provisioning)) {
+    errors.push(error(
+      'gate-policy-execution-invalid',
+      'evaluation_gate.execution.dependency_provisioning',
+      `Dependency provisioning must be declared as ${DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ')}; it is never detected from the operating system or the filesystem.`,
     ));
   }
 

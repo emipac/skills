@@ -137,6 +137,7 @@ const DECISION_SECTION_FIELDS = Object.freeze({
     'sourceMutable',
     'historyVisibility',
     'cachePolicy',
+    'dependencies',
   ],
   coverage: [
     'scope',
@@ -191,6 +192,16 @@ const isNonEmptyString = (value) => typeof value === 'string' && value.length > 
  * finding.
  */
 const members = (value) => (Array.isArray(value) ? value : []);
+
+/**
+ * A list of dependency-root declarations the decision reports back.
+ *
+ * Only the list itself is required to be a list. What a project wrote is
+ * reported verbatim — a refused declaration is refused precisely because it was
+ * not a usable one, and re-judging its members here would turn one honest
+ * configuration finding into a second, misleading contract finding.
+ */
+const isDeclarationList = (value) => Array.isArray(value);
 
 const isAbsolutePath = (value) => isNonEmptyString(value)
   && (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value));
@@ -576,6 +587,24 @@ export const validateDecision = (decision) => {
       code: 'environment-identity-invalid',
       path: 'decision.environment',
       message: 'The environment must name the materialized snapshot it isolates and must never report mutable source.',
+    });
+  }
+
+  // What a check was given besides the snapshot, and how. A declared dependency
+  // root that was never provided is the environment fault most often reported
+  // as a fault in the code, so the decision states it by name rather than
+  // leaving it to be re-derived from a tool's own error text (NFR-OPER-001).
+  const provisioned = decision.environment?.dependencies;
+
+  if (!isPlainObject(provisioned)
+    || typeof provisioned.provisioning !== 'string'
+    || !isDeclarationList(provisioned.provided)
+    || !isDeclarationList(provisioned.missing)
+    || !isDeclarationList(provisioned.refused)) {
+    errors.push({
+      code: 'environment-identity-invalid',
+      path: 'decision.environment.dependencies',
+      message: 'The environment must state how declared dependency roots were provisioned and name the ones provided, missing, and refused.',
     });
   }
 

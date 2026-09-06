@@ -20,7 +20,8 @@
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { constants as fileConstants } from 'node:fs';
+import { cp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
@@ -29,6 +30,81 @@ const runFile = promisify(execFile);
 export const SNAPSHOT_KINDS = Object.freeze(['git-index', 'worktree']);
 
 export const ISOLATION = 'materialized-snapshot';
+
+/**
+ * How a project's declared dependency roots are provided beside the snapshot.
+ *
+ * `link` places a symbolic link to the clone's own installation, which is
+ * cheap and is what the maintainer would have run the tool against by hand.
+ * `copy` places a real directory, which is what a tool that resolves a path to
+ * its realpath needs in order to conclude that the code it is grading lives
+ * inside the execution root rather than inside the original repository.
+ *
+ * The strategy is DECLARED by the project, never detected. Nothing here reads
+ * the operating system or the filesystem and chooses on the project's behalf
+ * (`NFR-PORT-002`): a maintainer on a filesystem that clones and a maintainer
+ * on one that copies byte by byte write the same word and get the same
+ * behaviour at different speeds.
+ */
+export const DEPENDENCY_PROVISIONING_STRATEGIES = Object.freeze(['link', 'copy']);
+
+/**
+ * What a project that says nothing gets.
+ *
+ * `link` is today's behaviour, so an existing clone that never heard of this
+ * declaration is provisioned exactly as it always was and no configuration
+ * identity churns on upgrade.
+ */
+export const DEFAULT_DEPENDENCY_PROVISIONING = 'link';
+
+/**
+ * The one place each strategy is performed.
+ *
+ * `link` passes `'junction'` rather than `'dir'`. The argument is a Node fs
+ * parameter, not a branch: every platform but Windows ignores it outright, and
+ * on Windows it selects a junction, which an ordinary user may create, over a
+ * directory symbolic link, which needs elevated privilege or Developer Mode.
+ * The old spelling gave `link` an independent reason to fail there, silently,
+ * through the catch below. A junction needs an absolute target, which is what
+ * the caller resolves and passes.
+ *
+ * `copy` asks for a copy-on-write clone through `COPYFILE_FICLONE`. The flag is
+ * a request, never a requirement: where the clone cannot be performed the call
+ * still succeeds as a full byte copy. That is one code path that is correct
+ * everywhere, with only speed and disk varying, and it is why nothing here has
+ * to know which filesystem it is on.
+ *
+ * What the request is worth was measured rather than assumed, and the answer on
+ * the environment this repository claims is: nothing. Copying a 256 MiB file
+ * with the flag consumed 256 MiB of free space, exactly as copying it without
+ * the flag did, on an APFS volume where the system `cp -c` clones the same file
+ * for free. `COPYFILE_FICLONE_FORCE`, which fails rather than falling back,
+ * returns `ENOSYS` there. So a forced attempt would report "this filesystem
+ * cannot clone" about one that plainly can, and catching it to learn which
+ * happened would record a falsehood. The applied strategy is recorded instead,
+ * because that is the part a maintainer can act on; whether the filesystem
+ * cloned underneath is not.
+ *
+ * The consequence is stated rather than hidden: under `copy`, a dependency tree
+ * costs its real bytes and its real seconds on this environment, which is
+ * exactly why `copy` is declared by a project and never chosen for one.
+ *
+ * `copy` never degrades into `link`. A copy that cannot be performed leaves the
+ * root unprovided and named, which is a stated failure the evaluation reports.
+ */
+const PROVISIONERS = Object.freeze({
+  link: (source, destination) => symlink(source, destination, 'junction'),
+  copy: (source, destination) => cp(source, destination, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    // Links inside a dependency tree are kept as links. Resolving them would
+    // follow a cycle forever and multiply what is on disk; a relative link
+    // still resolves inside the copy, which is the whole point.
+    dereference: false,
+    mode: fileConstants.COPYFILE_FICLONE,
+  }),
+});
 
 const NUL_SEPARATED = /\0/;
 
@@ -281,37 +357,78 @@ export const unavailableDependencyRoots = async ({
  * are environment, not subject: the same category as the executable `TB-024`
  * resolves outside the snapshot, and for the same reason.
  *
- * Each root is linked rather than copied. A dependency tree is large enough
- * that copying it per evaluation would make the budget meaningless, and the
- * link is to the clone's own installation, which is what the maintainer would
- * have run the tool against by hand.
+ * How each root is provided is the project's own declaration, not this
+ * function's inference. Under `link` a root costs nothing to provide, which is
+ * why it is the default: a dependency tree is large enough that copying it per
+ * evaluation is a real charge against the budget. Under `copy` the root is a
+ * real directory, which is what a tool that resolves a path to its realpath
+ * needs — under `link` such a tool follows the link out of the execution root
+ * and concludes, correctly for the link and wrongly for the evaluation, that
+ * the project it is grading is the original repository. Formatters, static
+ * analysis, and test runners have each been observed reporting that as a fault
+ * in code that was not faulty.
  *
  * Nothing here is graded: a provided root is absent from the snapshot's path
  * list, so it is outside the identity, outside the immutability re-check, and
  * outside every path-based rule that reads it (`SG-EVAL-001`, `NFR-REL-001`).
+ * That holds under both strategies, and is what keeps an evaluation
+ * reproducible whichever one a project declares.
  */
-const provideDependencyRoots = async ({ repositoryRoot, executionRoot, dependencyRoots }) => {
+const provideDependencyRoots = async ({
+  repositoryRoot,
+  executionRoot,
+  dependencyRoots,
+  provisioning,
+}) => {
   const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
   const missing = new Set(classified.missing);
+  const provide = PROVISIONERS[provisioning];
   const provided = [];
 
   for (const declared of classified.available) {
     const destination = path.join(executionRoot, declared);
+    // A root is provided at a path this function creates, or it is not provided
+    // at all. A declaration naming a path the snapshot already materialized is
+    // reported unavailable rather than served by removing graded content to
+    // make room for it (`SG-EVAL-001`), and knowing the path was ours is what
+    // makes the cleanup below safe to perform.
+    // eslint-disable-next-line no-await-in-loop
+    const occupied = await stat(destination).then(() => true, () => false);
+
+    if (occupied) {
+      missing.add(declared);
+
+      continue;
+    }
 
     try {
       // eslint-disable-next-line no-await-in-loop
       await mkdir(path.dirname(destination), { recursive: true });
       // eslint-disable-next-line no-await-in-loop
-      await symlink(path.join(repositoryRoot, declared), destination, 'dir');
+      await provide(path.resolve(repositoryRoot, declared), destination);
       provided.push(declared);
     } catch {
-      // A platform or filesystem that cannot link is a stated condition, not a
-      // silent degradation: the check would fail inside its own tool otherwise.
+      // A strategy that could not be performed here is a stated condition, not
+      // a silent degradation into the other one: the check would fail inside
+      // its own tool otherwise, and a `copy` quietly served as a link would
+      // reintroduce exactly the defect the declaration exists to close.
+      //
+      // What the attempt left behind goes with it. A recursive copy is not
+      // atomic — it creates the destination before it can discover it cannot
+      // finish — so a failure that walked away would leave a partial dependency
+      // tree at exactly the path a tool looks for a complete one, and a tool
+      // loading half a tree reports something worse than a tool loading none.
+      // eslint-disable-next-line no-await-in-loop
+      await rm(destination, { recursive: true, force: true }).catch(() => {});
       missing.add(declared);
     }
   }
 
   return {
+    // The strategy that was actually applied, so a maintainer reading the
+    // decision can tell which one the roots in front of them were provided by
+    // without rerunning anything (`NFR-OPER-001`).
+    provisioning,
     provided,
     // Declaration order, so what a maintainer reads back is the order they
     // wrote, whichever way a root turned out to be unavailable.
@@ -346,12 +463,25 @@ export const captureSnapshot = async ({
   executionRoot,
   runGit = defaultRunGit,
   dependencyRoots = [],
+  dependencyProvisioning = DEFAULT_DEPENDENCY_PROVISIONING,
 }) => {
   if (!SNAPSHOT_KINDS.includes(kind)) {
     return {
       captured: false,
       reasonCode: 'configuration-invalid',
       detail: `Snapshot target kind ${JSON.stringify(kind)} is not a supported evaluation target.`,
+    };
+  }
+
+  // A strategy this module cannot perform ends the capture rather than being
+  // repaired into the one it can. Resolving an unreadable declaration to a
+  // working default is how a project ends up provisioned by a strategy it did
+  // not ask for and cannot see (`FR-CFG-002`).
+  if (!DEPENDENCY_PROVISIONING_STRATEGIES.includes(dependencyProvisioning)) {
+    return {
+      captured: false,
+      reasonCode: 'configuration-invalid',
+      detail: `Dependency provisioning strategy ${JSON.stringify(dependencyProvisioning)} is not one this gate can perform; declare ${DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ')}.`,
     };
   }
 
@@ -390,6 +520,7 @@ export const captureSnapshot = async ({
       repositoryRoot,
       executionRoot,
       dependencyRoots,
+      provisioning: dependencyProvisioning,
     });
 
     return {
