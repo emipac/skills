@@ -109,6 +109,14 @@ const SHARED_CONFIGURATION = [
   '',
 ].join('\n');
 
+/** The same configuration with no Gate policy section in it at all. */
+const UNCONFIGURED_CONFIGURATION = [
+  'schema_version: 4',
+  'backend: laravel',
+  'frontend: none',
+  '',
+].join('\n');
+
 const gatePolicy = () => ({
   checks: { required: ['broad_test'], advisory: [] },
   budget: { total_seconds: 600 },
@@ -200,6 +208,24 @@ const configuredClone = async (t) => {
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/gate-runner.mjs'), `${SELF_TEST_GUARD}process.exitCode = 0;\n`, 'utf8');
   await writeFile(path.join(root, '.agent-framework.yaml'), SHARED_CONFIGURATION, 'utf8');
+
+  return root;
+};
+
+/**
+ * A clone that is INSTALLED and holds no Gate policy at all.
+ *
+ * Its configuration is a real, readable, ordinary framework configuration —
+ * this is not a broken file. It simply declares no `evaluation_gate` section,
+ * which is the state every existing fixture configured its way out of before
+ * observing anything (`AC-CFG-001`).
+ */
+const installedClone = async (t) => {
+  const root = await throwawayRepository(t);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), `${SELF_TEST_GUARD}process.exitCode = 0;\n`, 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), UNCONFIGURED_CONFIGURATION, 'utf8');
 
   return root;
 };
@@ -389,6 +415,76 @@ test('a configured clone that was never activated observes as configured, and no
 
   // Observing a clone that has no Evidence store does not give it one.
   assert.equal(await wholeCloneSnapshot(root), before);
+});
+
+/**
+ * THE FIRST RED TEST FOR TB-047.
+ *
+ * A clone that holds no Gate policy is INSTALLED, not configured. Before this
+ * slice `statusGate` decided the lifecycle state from the Activation receipt
+ * alone, so this clone — the state no fixture had ever started from — was
+ * reported `configured` and `healthy`, which is what `gate activate` on the
+ * same clone refuses to believe (`AC-CFG-001`, `FR-CFG-001`, `FR-LIFE-009`).
+ */
+test('a clone that holds no Gate policy observes as installed and names the missing policy', async (t) => {
+  const root = await installedClone(t);
+  const before = await wholeCloneSnapshot(root);
+
+  const result = await observe(root, ['status']);
+
+  assert.equal(result.exitCode, EXIT_OBSERVED);
+  assert.equal(result.document.observation.state, 'installed');
+  // Nothing is enforced and nothing has drifted: an unconfigured clone is not
+  // an unhealthy one.
+  assert.equal(result.document.observation.health, 'healthy');
+  assert.equal(result.document.observation.findings.length, 1);
+  assert.equal(result.document.observation.findings[0].code, 'gate-policy-missing');
+  assert.equal(result.document.observation.findings[0].area, 'configuration');
+  assert.equal(result.document.observation.findings[0].severity, 'informational');
+
+  // What is missing is the policy, not the receipt, and it is named well enough
+  // to act on without opening another file (`NFR-OPER-001`).
+  assert.match(result.document.observation.findings[0].detail, /evaluation_gate/);
+  assert.match(result.document.observation.findings[0].detail, /\.agent-framework\.yaml/);
+
+  // Both renderings of the same run report the same state.
+  assert.match(result.stdout, /^state: installed$/m);
+
+  const machine = await observe(root, ['status', '--json']);
+
+  assert.equal(machine.document.observation.state, 'installed');
+  assert.equal(machine.document.observation.health, 'healthy');
+
+  // Not one byte, and not one directory.
+  assert.equal(await wholeCloneSnapshot(root), before);
+});
+
+test('gate status and gate activate agree about whether a clone holds a policy (AC-CFG-001)', async (t) => {
+  const installed = await installedClone(t);
+  const before = await wholeCloneSnapshot(installed);
+
+  const unconfigured = await observe(installed, ['status']);
+  const refused = await observe(installed, ['activate']);
+
+  // One clone, two commands, one answer: this clone holds no policy, and both
+  // name the same reason for saying so.
+  assert.equal(unconfigured.document.observation.state, 'installed');
+  assert.equal(refused.document.failure.reasonCode, 'gate-policy-missing');
+  assert.equal(
+    unconfigured.document.observation.findings[0].code,
+    refused.document.failure.reasonCode,
+  );
+  assert.equal(await wholeCloneSnapshot(installed), before);
+
+  // And a clone that does hold one is still configured, to both of them.
+  const configured = await configuredClone(t);
+  const observed = await observe(configured, ['status']);
+  const previewed = await observe(configured, ['activate']);
+
+  assert.equal(observed.document.observation.state, 'configured');
+  assert.equal(observed.document.observation.findings[0].code, 'activation-absent');
+  assert.equal(previewed.document.failure, null);
+  assert.equal(previewed.document.observation.state, 'configured');
 });
 
 test('both renderings of one invocation agree (NFR-OPER-001)', async (t) => {

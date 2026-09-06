@@ -173,6 +173,7 @@ test('discovers Laravel, frontend, and existing project guidance', async (contex
       build: { backend: [], frontend: ['npm run build'], both: [] },
       e2e: { backend: [], frontend: ['npm run e2e'], both: [] },
     },
+    unclassifiedScripts: [],
   });
 });
 
@@ -1329,4 +1330,206 @@ test('removes explicitly excluded package scripts from verification discovery', 
     'npm run test:unit',
     'npm run test:integration',
   ]);
+});
+
+const unrecognisedScriptNames = {
+  'lint:check': 'eslint .',
+  'types:check': 'svelte-check --tsconfig ./tsconfig.json',
+  'types:watch': 'svelte-check --watch',
+  'types:fix': 'svelte-check --fix',
+  'build:ssr': 'vite build --ssr',
+  dev: 'vite',
+  setup: 'composer install',
+  'post-autoload-dump': 'php artisan package:discover',
+};
+
+const createScriptClassificationFixture = async (scripts) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), 'ai-framework-scripts-'));
+
+  await mkdir(path.join(projectRoot, 'app'), { recursive: true });
+  await mkdir(path.join(projectRoot, 'resources', 'js'), { recursive: true });
+  await writeFile(
+    path.join(projectRoot, 'composer.json'),
+    `${JSON.stringify({
+      require: { 'laravel/framework': '^13.0' },
+      scripts: {
+        'types:check': ['phpstan analyse'],
+        setup: ['composer install'],
+        'post-autoload-dump': ['php artisan package:discover'],
+      },
+    }, null, 2)}\n`,
+  );
+  await writeFile(
+    path.join(projectRoot, 'package.json'),
+    `${JSON.stringify({
+      dependencies: { svelte: '^5.0.0' },
+      devDependencies: { typescript: '^6.0.0' },
+      scripts,
+    }, null, 2)}\n`,
+  );
+  await writeFile(path.join(projectRoot, 'app', 'Order.php'), '<?php\n');
+  await writeFile(
+    path.join(projectRoot, 'resources', 'js', 'app.svelte'),
+    '<script></script>\n',
+  );
+
+  return projectRoot;
+};
+
+test('classifies a types-prefixed script as a type check', async (context) => {
+  const projectRoot = await createScriptClassificationFixture(unrecognisedScriptNames);
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.commands.static_analysis, {
+    backend: [],
+    frontend: ['npm run lint:check', 'npm run types:check'],
+    both: [],
+  });
+  assert.ok(discovery.verification.capabilities.includes('typescript'));
+});
+
+test('still refuses an unsafe qualifier on a types-prefixed script', async (context) => {
+  const projectRoot = await createScriptClassificationFixture(unrecognisedScriptNames);
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+  const everyCommand = Object.values(discovery.verification.commands).flatMap(
+    (scopes) => Object.values(scopes).flat(),
+  );
+
+  assert.ok(!everyCommand.includes('npm run types:watch'));
+  assert.ok(!everyCommand.includes('npm run types:fix'));
+  assert.deepEqual(
+    discovery.verification.unclassifiedScripts
+      .filter((entry) => entry.script.startsWith('types:'))
+      .map((entry) => [entry.script, entry.reason]),
+    [
+      ['types:fix', 'unsafe-qualifier: fix'],
+      ['types:watch', 'unsafe-qualifier: watch'],
+    ],
+  );
+});
+
+test('names every package script the resolver declined, in a stable order', async (context) => {
+  const projectRoot = await createScriptClassificationFixture(unrecognisedScriptNames);
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.unclassifiedScripts, [
+    {
+      script: 'build:ssr',
+      command: 'vite build --ssr',
+      reason: 'unsupported-qualifier: ssr',
+    },
+    { script: 'dev', command: 'vite', reason: 'unrecognised-name' },
+    {
+      script: 'post-autoload-dump',
+      command: 'php artisan package:discover',
+      reason: 'unrecognised-name',
+    },
+    { script: 'setup', command: 'composer install', reason: 'unrecognised-name' },
+    {
+      script: 'types:fix',
+      command: 'svelte-check --fix',
+      reason: 'unsafe-qualifier: fix',
+    },
+    {
+      script: 'types:watch',
+      command: 'svelte-check --watch',
+      reason: 'unsafe-qualifier: watch',
+    },
+  ]);
+  assert.equal(
+    JSON.stringify(await discoverProject(projectRoot)),
+    JSON.stringify(discovery),
+  );
+});
+
+test('reports a superseded format script rather than dropping it silently', async (context) => {
+  const projectRoot = await createScriptClassificationFixture({
+    format: 'prettier --write resources/',
+    'format:check': 'prettier --check resources/',
+  });
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.commands.format.frontend, [
+    'npm run format:check',
+  ]);
+  assert.deepEqual(discovery.verification.unclassifiedScripts, [
+    {
+      script: 'format',
+      command: 'prettier --write resources/',
+      reason: 'superseded-by-format-check',
+    },
+  ]);
+});
+
+test('reports an empty not-classified list when every script is recognised', async (context) => {
+  const projectRoot = await createScriptClassificationFixture({
+    'lint:check': 'eslint .',
+    'types:check': 'svelte-check --tsconfig ./tsconfig.json',
+  });
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.unclassifiedScripts, []);
+});
+
+test('unrecognised scripts neither block configuration nor change what is written', async (context) => {
+  const noisyRoot = await createScriptClassificationFixture(unrecognisedScriptNames);
+  const quietRoot = await createScriptClassificationFixture({
+    'lint:check': 'eslint .',
+    'types:check': 'svelte-check --tsconfig ./tsconfig.json',
+  });
+  context.after(() => rm(noisyRoot, { recursive: true, force: true }));
+  context.after(() => rm(quietRoot, { recursive: true, force: true }));
+  const selections = { tracker: 'local-markdown' };
+
+  const noisyResult = await configureProject({ projectRoot: noisyRoot, selections });
+  const noisyConfiguration = await readFile(
+    path.join(noisyRoot, '.agent-framework.yaml'),
+    'utf8',
+  );
+
+  await configureProject({ projectRoot: quietRoot, selections });
+
+  assert.equal(
+    noisyConfiguration,
+    await readFile(path.join(quietRoot, '.agent-framework.yaml'), 'utf8'),
+  );
+  assert.ok(!noisyConfiguration.includes('post-autoload-dump'));
+  assert.ok(!noisyConfiguration.includes('unclassified'));
+
+  const repeated = await configureProject({ projectRoot: noisyRoot, selections });
+
+  assert.deepEqual(repeated, noisyResult);
+  assert.equal(
+    await readFile(path.join(noisyRoot, '.agent-framework.yaml'), 'utf8'),
+    noisyConfiguration,
+  );
+
+  const discoverRun = await execFileAsync(
+    process.execPath,
+    [configureScript, '--discover', '--project-root', noisyRoot],
+  );
+
+  assert.equal(discoverRun.stderr, '');
+  assert.ok(!JSON.parse(discoverRun.stdout).ambiguities);
+});
+
+test('composer scripts are outside the package-script resolver', async (context) => {
+  const projectRoot = await createScriptClassificationFixture({
+    'lint:check': 'eslint .',
+  });
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.unclassifiedScripts, []);
 });

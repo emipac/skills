@@ -28,15 +28,24 @@
  * same character.
  *
  * WHAT TRUST MEANS HERE. Each adapter declares its own trust model in
- * `adapters.mjs`. `establishActivationTrust` dispatches on the declared model
- * and satisfies it; it invents no policy, weakens nothing, and refuses a model
- * it does not recognize rather than treating it as granted. Authoritative Git
- * declares `repository-hook-registration`: its registration surface is this
- * clone's own hook chain, so there is no client to prompt and the
- * repository-bound consent the command already required IS the grant. The three
- * desktop surfaces declare an explicit grant, which only their client can give;
- * with no grant reader bound there is nothing to read, and the transaction
- * pauses rather than pretending (`FR-LIFE-016`, `AC-LIFE-009`, `SG-TRUST-001`).
+ * `adapters.mjs`, and `ADAPTER_TRUST_MODELS` there says what each model asserts
+ * and what proves it. This dispatch satisfies a model through its declared
+ * `provenBy`, invents no policy, weakens nothing, and refuses a model that
+ * registry does not define rather than treating it as granted.
+ *
+ * Every v1 adapter declares `repository-hook-registration`, because that is the
+ * only thing true of all four: authoritative Git registers into this clone's own
+ * hook chain, and each desktop surface registers into a project-local file THIS
+ * activation writes at a later step. There is no client to prompt before that
+ * write, so the repository-bound consent granted against a preview naming the
+ * exact surface IS the grant. A client that reviews the registration afterwards
+ * — Codex does — has that recorded as a fact about what happens next, never
+ * awaited, because awaiting it could never succeed (`TB-046`, `FR-LIFE-004`).
+ *
+ * The `client-grant-read` branch below is kept and remains reachable for a
+ * client that one day grants BEFORE registration. `FR-LIFE-016` requires that
+ * capability; what it forbids is wiring an adapter to a pause its client cannot
+ * clear (`AC-LIFE-009`, `SG-TRUST-001`).
  */
 
 import { execFile } from 'node:child_process';
@@ -47,6 +56,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import {
+  ADAPTER_TRUST_MODELS,
   buildNativePayload,
   describeAdapter,
   runAdapterEvaluation,
@@ -69,12 +79,16 @@ const runFile = promisify(execFile);
  */
 export const SELF_DECLARED = 'self-declared';
 
-/** Every trust model this dispatch satisfies, and how it satisfies it. */
-export const TRUST_MECHANISMS = Object.freeze({
-  'repository-hook-registration': 'repository-bound-consent',
-  'explicit-workspace-grant': 'client-workspace-grant',
-  'explicit-project-grant': 'client-project-grant',
-});
+/**
+ * Every trust model this dispatch satisfies, and how it satisfies it.
+ *
+ * Derived from the adapter layer's own definitions rather than restated here:
+ * a second table would be a second answer to "which models exist", and the
+ * whole of `TB-046` is that one of those answers was nowhere at all.
+ */
+export const TRUST_MECHANISMS = Object.freeze(Object.fromEntries(
+  Object.entries(ADAPTER_TRUST_MODELS).map(([model, declared]) => [model, declared.mechanism]),
+));
 
 /**
  * What the receipt records about the consent that was verified.
@@ -109,15 +123,23 @@ const trustRecord = ({ mechanism, trustModel, observed, actor }) => ({
  * @param {object|null} options.consent the repository-bound consent this invocation carries
  * @param {string|null} options.actor a name a person supplied, carried as self-declared
  * @param {Function|null} options.readClientGrant asks a desktop client whether it has granted
+ * @param {Function} options.describe resolves a client id to its declaration
  * @returns {Function} the `establishTrust` seam `runActivation` calls
  */
 export const createTrustEstablishment = ({
   consent = null,
   actor = null,
   readClientGrant = null,
+  // Where a declaration comes from. It is a seam for the same reason
+  // `selfTestEvaluationDenial`'s probe is one: no v1 adapter may declare a model
+  // that is granted before registration, so a fixture must be able to supply a
+  // hypothetical client that does, and observe that this pauses without a
+  // reader and establishes with one. Production binds nothing here and reads the
+  // real registry (`FR-LIFE-016`).
+  describe = describeAdapter,
   clock = () => new Date(),
 } = {}) => async ({ client, repository }) => {
-  const adapter = describeAdapter(client?.id ?? null);
+  const adapter = describe(client?.id ?? null);
 
   if (adapter === null) {
     return {
@@ -129,7 +151,8 @@ export const createTrustEstablishment = ({
   }
 
   const trustModel = adapter.capabilities?.trust?.model ?? null;
-  const mechanism = TRUST_MECHANISMS[trustModel] ?? null;
+  const declaredModel = ADAPTER_TRUST_MODELS[trustModel] ?? null;
+  const mechanism = declaredModel?.mechanism ?? null;
 
   // A model nobody here knows how to satisfy is refused. Treating it as granted
   // would be the one failure mode the whole declaration exists to prevent.
@@ -142,12 +165,14 @@ export const createTrustEstablishment = ({
     };
   }
 
-  if (trustModel === 'repository-hook-registration') {
-    // This adapter's registration surface is the clone's own hook chain, so
-    // there is no client configuration to ask and no prompt to answer. The
-    // grant is the repository-bound consent, and it must be bound to THIS
-    // clone — the transaction checks the same binding at its consent step, and
-    // a seam that skipped it would be a second, weaker answer to one question.
+  if (declaredModel.provenBy === 'repository-bound-consent') {
+    // This adapter registers only a surface the Gate owns — this clone's own
+    // hook chain, or an entry this same activation writes into a project-local
+    // client file at a later step. Either way there is no client to ask before
+    // that write and no prompt to answer. The grant is the repository-bound
+    // consent, and it must be bound to THIS clone — the transaction checks the
+    // same binding at its consent step, and a seam that skipped it would be a
+    // second, weaker answer to one question.
     if (!consent) {
       return {
         established: false,
@@ -223,7 +248,7 @@ export const createTrustEstablishment = ({
     pending: true,
     reason: `${trustModel}-not-granted`,
     detail: grant?.detail
-      ?? `${adapter.id} declares ${trustModel}: only ${adapter.id} itself can grant this clone, and it has not. Grant it in ${adapter.id} for this ${trustModel === 'explicit-workspace-grant' ? 'workspace' : 'project'}, then resume.`,
+      ?? `${adapter.id} declares ${trustModel}: ${declaredModel.grantDescription ?? 'the client that owns this grant has not given it.'}`,
   };
 };
 

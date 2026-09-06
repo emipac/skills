@@ -39,21 +39,100 @@ const refuse = (line, message) => ({
 });
 
 /**
+ * The index of a quoted scalar's closing quote, searched forward from the
+ * opening one.
+ *
+ * Searching backwards from the end of the line finds a quote that belongs to a
+ * trailing comment and hands the caller the comment as part of the value
+ * (`TB-049`), so the scan runs forward and stops at the first quote that
+ * actually closes the value. The two quote kinds close differently, and this
+ * has to agree with the unescaping the caller then performs: a double-quoted
+ * scalar escapes with a backslash, so the character after a backslash is
+ * skipped whatever it is — which is what makes `"a\\"` close at its last quote
+ * rather than the escaped one — while a single-quoted scalar escapes a quote by
+ * doubling it, so `''` is content and the scan continues past it.
+ *
+ * @returns {number} the closing quote's index, or -1 when the value never closes
+ */
+const closingQuote = (value, quote) => {
+  for (let index = 1; index < value.length; index += 1) {
+    if (quote === '"' && value[index] === '\\') {
+      index += 1;
+
+      continue;
+    }
+
+    if (value[index] !== quote) {
+      continue;
+    }
+
+    if (quote === "'" && value[index + 1] === "'") {
+      index += 1;
+
+      continue;
+    }
+
+    return index;
+  }
+
+  return -1;
+};
+
+/**
+ * A flow collection with its trailing comment removed, if it carries one.
+ *
+ * Detecting a flow collection and parsing one have to agree about a trailing
+ * comment, and the plain `\s+#.*$` strip the unquoted branch uses cannot be
+ * what they agree on: it would cut `["a #b"]` in half and turn a readable
+ * collection into a refusal. So the boundary is found by walking the collection
+ * and honouring only a `#` that stands outside a JSON string. A collection
+ * whose string never closes is left exactly as written, and refused by
+ * `JSON.parse` as it is today.
+ */
+const withoutFlowComment = (value) => {
+  let quoted = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (quoted) {
+      if (value[index] === '\\') {
+        index += 1;
+      } else if (value[index] === '"') {
+        quoted = false;
+      }
+
+      continue;
+    }
+
+    if (value[index] === '"') {
+      quoted = true;
+
+      continue;
+    }
+
+    if (value[index] === '#' && /\s/.test(value[index - 1] ?? '')) {
+      return value.slice(0, index).trim();
+    }
+  }
+
+  return value;
+};
+
+/**
  * Read one scalar exactly as it was written.
  *
  * A quoted scalar keeps every character inside its quotes, including the
- * apostrophes and `#` characters that a naive reader destroys. Only an
- * unquoted scalar can carry a trailing comment, because only there is `#`
- * unambiguously not content.
+ * apostrophes and `#` characters that a naive reader destroys. A `#` is only
+ * a comment where it stands outside the value: after a quoted scalar's closing
+ * quote, or anywhere in an unquoted one.
  */
 const readScalar = (text, line) => {
   const value = text.trim();
 
   if (value.startsWith('"') || value.startsWith("'")) {
     const quote = value[0];
-    const closing = value.lastIndexOf(quote);
+    const closing = closingQuote(value, quote);
 
-    if (closing <= 0) {
+    if (closing < 0) {
       return { error: refuse(line, 'a quoted value is never closed.') };
     }
 
@@ -98,7 +177,7 @@ const readScalar = (text, line) => {
 
   if (commented.startsWith('[') || commented.startsWith('{')) {
     try {
-      return { value: JSON.parse(value) };
+      return { value: JSON.parse(withoutFlowComment(value)) };
     } catch {
       return { error: refuse(line, 'flow collections are outside the supported configuration subset.') };
     }

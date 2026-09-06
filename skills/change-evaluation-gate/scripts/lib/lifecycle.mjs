@@ -36,6 +36,10 @@ import {
 } from './adapter-registration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { contentIdentity } from './evidence-store.mjs';
+// The one reader of "does this clone hold a Gate policy", imported rather than
+// reimplemented: `gate status` must answer that question exactly the way the
+// authoritative runner and `gate activate` already answer it (`AC-CFG-001`).
+import { resolveConfiguration } from './hook-runner.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
 
 /**
@@ -407,23 +411,83 @@ export const statusGate = async ({
   controlSurface = null,
   repositoryRoot = null,
 } = {}, dependencies = {}) => {
-  const { probeAdapter = async () => ({ ok: true }) } = dependencies;
+  const {
+    probeAdapter = async () => ({ ok: true }),
+    // NOT a configuration reader of this module's own. It is the same
+    // `resolveConfiguration` the authoritative runner, the preflight runner and
+    // `gate activate` already answer "does this clone hold a Gate policy" with,
+    // reached through the same export, so there is one definition of
+    // `configured` rather than a second one waiting to disagree with it
+    // (`AC-CFG-001`, `TB-047`). It is a seam only so a test can observe the
+    // question being asked.
+    resolveConfiguration: resolveCloneConfiguration = resolveConfiguration,
+  } = dependencies;
 
   const receipt = await evidenceStore?.activationReceipt().read() ?? null;
   const findings = [];
 
   if (receipt === null) {
+    // Reading a configuration is not the same act as reading a receipt: the
+    // lifecycle has three states, and which of the first two this clone is in
+    // is not knowable from the receipt's absence alone.
+    const configuration = typeof repositoryRoot === 'string' && repositoryRoot.length > 0
+      ? await resolveCloneConfiguration(repositoryRoot)
+      : {
+        ok: false,
+        reasonCode: 'repository-unresolved',
+        detail: 'No repository root was given, so no configuration could be read.',
+      };
+    // A clone HOLDS a policy when the shared reader found an `evaluation_gate`
+    // section — including one the policy contract then rejects. An invalid
+    // policy is a configured clone with a policy to fix; a missing one is a
+    // clone that was never configured, and only the second is `installed`.
+    const holdsPolicy = configuration.ok || configuration.reasonCode === 'gate-policy-invalid';
+
+    if (!holdsPolicy) {
+      return {
+        state: 'installed',
+        // Nothing is registered, nothing is enforced, and nothing has drifted.
+        // An unconfigured clone is a correct and untroubled condition, not a
+        // broken one, and `broken` goes on meaning what FR-LIFE-009 says it
+        // means for a clone that IS enforcing something.
+        status: 'healthy',
+        receipt: null,
+        release: null,
+        // What is missing is the policy, not the receipt, in the same words and
+        // under the same reason code `gate activate` refuses this clone with.
+        findings: [{
+          area: 'configuration',
+          severity: 'informational',
+          code: configuration.reasonCode,
+          detail: `${configuration.detail} The clone is installed but not configured; there is nothing to enforce and nothing to reconcile.`,
+        }],
+        repaired: false,
+        mutations: [],
+      };
+    }
+
     return {
       state: 'configured',
       status: 'healthy',
       receipt: null,
       release: null,
-      findings: [{
-        area: 'activation',
-        severity: 'informational',
-        code: 'activation-absent',
-        detail: 'The clone is configured but not activated; there is nothing to enforce and nothing to reconcile.',
-      }],
+      findings: [
+        {
+          area: 'activation',
+          severity: 'informational',
+          code: 'activation-absent',
+          detail: 'The clone is configured but not activated; there is nothing to enforce and nothing to reconcile.',
+        },
+        // A policy the contract rejects is still a policy this clone holds, and
+        // saying so here is what keeps `status` and `activate` telling one
+        // story about it.
+        ...(configuration.ok ? [] : [{
+          area: 'configuration',
+          severity: 'informational',
+          code: configuration.reasonCode,
+          detail: configuration.detail,
+        }]),
+      ],
       repaired: false,
       mutations: [],
     };

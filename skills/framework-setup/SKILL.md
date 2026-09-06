@@ -27,6 +27,11 @@ schema version, SRS candidates, guideline paths, protected files, and the
 detected verification profile, capabilities, and exact scoped commands are
 visible.
 
+`verification.unclassifiedScripts` names every package script discovery
+declined, with the reason. It is a report, not a question: nothing blocks on it
+and none of it is inferred to be a verification command. Read it to confirm no
+real check was left out.
+
 ### 2. Confirm the branches
 
 Present detected values and ask only about unresolved or consequential choices:
@@ -50,8 +55,8 @@ Present detected values and ask only about unresolved or consequential choices:
 5. **Command scopes:** confirm every discovered command as backend, frontend,
    or both. A package-manager command is not inherently a frontend command.
    Discovery accepts safe qualified checks such as `test:unit`,
-   `test:integration`, `format:check`, and `smoke:<name>`, uses referenced
-   source roots as scope evidence, and excludes watch, fix, development,
+   `test:integration`, `format:check`, `types:check`, and `smoke:<name>`, uses
+   referenced source roots as scope evidence, and excludes watch, fix, development,
    coverage, and write variants unless explicitly selected. Prefer a
    non-mutating `format:check` when both it and `format` exist. Record any
    intentionally excluded scripts and preserve the same exclusion list on

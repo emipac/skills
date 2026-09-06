@@ -58,7 +58,7 @@ omits a category, or invents one, is rejected rather than filled in.
 | --- | --- |
 | `event` | `deterministic`, `normalizedTriggers` |
 | `blocking` | `native` |
-| `trust` | `model`, `failureIsUnverified` |
+| `trust` | `model`, `failureIsUnverified`, `clientReview` |
 | `repository` | `localFilesystemRoot`, `worktreeAware` |
 | `session` | `identity`, `parallelIsolation` |
 | `filesystem` | `sameFilesAsClient` |
@@ -71,6 +71,83 @@ preflight result to its client, the field that carries it, and the form that
 returns no result. An adapter that declares no feedback channel returns none.
 The packaged preflight program (`gate-preflight.mjs`) answers only through that
 declaration: it never learns a client field name of its own.
+
+## 3a. Trust models
+
+`trust.model` is not a free string. Until `TB-046` it was: the contract required
+every adapter to declare one and never said what a model was, so three adapters
+declared values nothing defined and no surface could issue, and activating them
+paused at `trust-pending` forever on a clone with nothing wrong with it. A
+declared value naming nothing is not a weaker declaration than a defined one; it
+is the absence of one, wearing its shape.
+
+Every permitted model is defined in `ADAPTER_TRUST_MODELS` in
+`scripts/lib/adapters.mjs`, and `createTrustEstablishment` satisfies a model
+through its declared `provenBy` — never through a model name — and refuses a
+model this table does not define rather than granting or pausing on it.
+
+| Model | Asserts | Proven by | Declarable |
+| --- | --- | --- | --- |
+| `repository-hook-registration` | the maintainer gave repository-bound consent to a preview naming the exact surface this adapter would register, and the Gate registers only a surface it owns | the two-invocation confirmation, bound to this clone's identity | yes |
+| `client-grant-before-registration` | the client has already recorded a grant for THIS clone that a process can read before the Gate registers anything | a bound grant reader answering for this clone | no |
+
+**Every v1 adapter declares `repository-hook-registration`**, including all three
+desktop surfaces. Trust is step 5 of `ACTIVATION_STEPS` and adapter registration
+is step 7, and each desktop surface registers into a project-local file *this
+activation writes*. There is no client to prompt before that write, so the
+repository-bound consent granted against a preview naming the exact surface is
+the grant, and it is the only thing true of all four adapters.
+
+`client-grant-before-registration` is defined and its dispatch is kept because
+`FR-LIFE-016` requires the pause-and-resume capability for a client that one day
+grants first. It is **not declarable**: no v1 client offers a grant a process can
+read before registration, and an adapter wired to a pause its client cannot clear
+is a refusal that does not say so. It becomes declarable when such a client
+exists and a grant reader is bound to read it.
+
+`validateAdapterDeclaration` rejects a declaration whose model this table does
+not define (`adapter-trust-model-undefined`) and one whose model is defined but
+not declarable (`adapter-trust-model-undeclarable`). That is the check whose
+absence let the original defect pass every review this project has.
+
+### Adding a model
+
+A future model is addable only with all of:
+
+1. **What it asserts** — what being trusted under it means.
+2. **`provenBy`** — the observation that proves it, which must be one this
+   process can make *for itself, before it registers anything*. A proof that can
+   only exist after a registration cannot be established by the step that blocks
+   that registration.
+3. **`mechanism`** — the single value a receipt records for it. The dispatch
+   derives `TRUST_MECHANISMS` from this table and keeps no second list.
+4. **`requiresClientGrantReader`** — whether satisfying it needs a reader bound,
+   and what that reader must answer.
+5. **`declarable`**, with the `rationale` that settles it.
+
+A `provenBy` the dispatch has no branch for is not addable by declaration alone:
+the branch that makes the observation is part of the model, not a consequence of
+naming it.
+
+### Post-registration client review
+
+`clientReview` is stated by every adapter, never inferred — `null` where the
+client performs none. Where a client reviews the registration only *after*
+reading it, the transaction **records that and never waits for it**, because
+waiting could never succeed.
+
+| Adapter | Client review |
+| --- | --- |
+| `git` | none — Git has no per-hook review or hash-trust workflow |
+| `claude-code-desktop` | none — this client documents settings and policy precedence, not a per-definition review flow |
+| `codex-desktop` | `after-registration` — a non-managed command hook is skipped until its exact definition is reviewed and trusted in Codex, which happens the next time Codex reads `.codex/hooks.json` |
+| `cursor` | none — project and user hook configuration and a plugin marketplace review, and the framework installs Agent Skills rather than a Cursor plugin |
+
+Where one is declared, the activation receipt carries it beside the registration
+it is about, with `observedByGate: false`, and the activation summary restates
+the adapter's own sentence so `activated` is never read as "this client is
+already running it". The Gate wrote an entry; whether the client has accepted it
+is the client's to know (`SG-TRUST-001`).
 
 ## 4. Trigger normalization
 

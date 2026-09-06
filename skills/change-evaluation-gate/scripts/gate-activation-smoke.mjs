@@ -54,6 +54,12 @@
  *    execution root; a root an earlier abandoned run left behind is reclaimed
  *    by the next commit, and those commits still deny and allow exactly as they
  *    did before (TB-038, AC-CFG-004, AC-EVAL-004, SG-SECRET-001, NFR-REL-001).
+ * 9. `commented-configuration-pins-what-the-file-holds` — a clone whose
+ *    configuration a maintainer annotated by hand activates on the policy the
+ *    file holds: the receipt pins the identity the uncommented document has,
+ *    and the clone denies and allows real commits exactly as it does without
+ *    the comments, across removing them again (TB-049, AC-CFG-004,
+ *    NFR-SEC-004, NFR-REL-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -90,6 +96,7 @@ import {
   ACTIVATION_STEPS,
   AUTHORITATIVE_HOOK,
   activate,
+  configurationIdentity,
   previewActivation,
   registerOwnedHook,
 } from './lib/activation.mjs';
@@ -99,6 +106,7 @@ import {
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
 } from './lib/activation-seams.mjs';
+import { describeAdapter } from './lib/adapters.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -716,6 +724,95 @@ const commandDrivenActivation = async () => {
   );
 
   return { name: 'command-driven-activation', ok: findings.length === 0, findings };
+};
+
+/**
+ * A real clone activated for a DESKTOP client through the packaged command.
+ *
+ * Until `TB-046` this could not happen at all: two of the three desktop
+ * adapters declared a trust model no contract defined and no surface could
+ * issue, so `gate activate --client cursor` on a real clone paused at
+ * `trust-pending` with nothing able to clear the pause. Every fixture missed it
+ * because every fixture injected its own trust implementation — the declared
+ * model never selected anything.
+ *
+ * So this drives the packaged command, for two surfaces with different declared
+ * block schemas, and requires each to complete, register exactly its own
+ * declared entry, and publish a receipt (`AC-LIFE-009`, `FR-LIFE-004`,
+ * `AC-ADAPT-003`).
+ */
+const commandDrivenDesktopActivation = async () => {
+  const findings = [];
+
+  for (const adapterId of ['cursor', 'codex-desktop']) {
+    const declared = describeAdapter(adapterId);
+    const surface = declared.registration.file;
+    const owner = declared.registration.schemaVersion === null
+      ? { hooks: {} }
+      : {
+        [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
+        hooks: {},
+      };
+    // The Gate never CREATES a client's configuration file, so a clone that
+    // proves a real registration is one where the client already has one.
+    const root = await fixtureRepository({
+      files: { [surface]: { contents: `${JSON.stringify(owner, null, 2)}\n` } },
+    });
+
+    await assertThrowawayRepository(root);
+
+    const preview = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
+    const previewDocument = JSON.parse(preview.stdout || '{}');
+
+    check(
+      findings,
+      previewDocument.observation?.trustModel === 'repository-hook-registration',
+      `${adapterId} previewed a trust model this Gate cannot establish: ${JSON.stringify(previewDocument.observation?.trustModel)}.`,
+    );
+
+    const confirmed = await runPackagedCommand(root, [
+      'activate', '--client', adapterId,
+      '--confirm', previewDocument.observation?.confirmationToken,
+      '--json',
+    ]);
+    const document = JSON.parse(confirmed.stdout || '{}');
+
+    check(
+      findings,
+      document.mutation?.performed === true && document.mutation?.state === 'activated',
+      `${adapterId} could not be activated through the packaged command: ${confirmed.stdout || confirmed.stderr}`,
+    );
+    check(
+      findings,
+      typeof document.mutation?.receiptId === 'string' && document.mutation.receiptId.startsWith('sha256:'),
+      `${adapterId} activated without publishing a receipt: ${JSON.stringify(document.mutation?.receiptId)}.`,
+    );
+
+    const registered = await readFile(path.join(root, surface), 'utf8')
+      .then((contents) => JSON.parse(contents))
+      .catch(() => null);
+    const entries = registered?.hooks?.[declared.nativeEvents[declared.registration.trigger]] ?? null;
+
+    check(
+      findings,
+      Array.isArray(entries) && entries.length === 1,
+      `${adapterId} did not register exactly its declared surface in ${surface}: ${JSON.stringify(entries)}.`,
+    );
+
+    // Where the client reviews the registration only after reading it, the
+    // maintainer is told so rather than left to read `activated` as "running".
+    const review = declared.capabilities.trust.clientReview;
+
+    check(
+      findings,
+      review === null
+        ? !/review/i.test(document.mutation?.summary ?? '')
+        : (document.mutation?.summary ?? '').includes(review.detail),
+      `${adapterId} did not report its declared post-registration review: ${JSON.stringify(document.mutation?.summary)}.`,
+    );
+  }
+
+  return { name: 'command-driven-desktop-activation', ok: findings.length === 0, findings };
 };
 
 /**
@@ -2107,6 +2204,131 @@ const unprovedPrerequisiteNamesWhatWasMissing = async () => {
   };
 };
 
+/**
+ * TB-049: a hand-annotated configuration activates on what the file holds.
+ *
+ * Nothing that writes this file produces a comment beside a value, so no
+ * fixture ever carried one and the reader's misreading of that line was
+ * invisible to every capability here. It is the document the reader exists for:
+ * one a maintainer edited, explaining the policy to whoever reads it next.
+ *
+ * The proof is the identity, not the string. `configurationIdentity` is what the
+ * receipt pins, what the control surface reconciles, and what every drift check
+ * compares, so a comment that moved it would make an annotated clone deny every
+ * commit as drift, and a misread value that hashed consistently would make all
+ * three agree about a policy nobody wrote (AC-CFG-004, NFR-SEC-004).
+ */
+const commentedConfigurationPinsWhatTheFileHolds = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const plainDocument = await readFile(configurationPath, 'utf8');
+  const plainConfiguration = fixtureConfigurations.get(root);
+  // Exactly the edit a maintainer makes and no writer emits. Each note carries
+  // the quote character that used to end the value early: the closing quote was
+  // searched for backwards from the end of the line, so the comment became part
+  // of the policy.
+  const commentedDocument = plainDocument
+    .replace(/^ {2}checks: (.*)$/m, '  checks: $1 # required means required, not "advisory"')
+    .replace(/^ {2}budget: (.*)$/m, "  budget: $1 # ten minutes is what we agreed, don't raise it")
+    .replace(/^ {2}profile: (.+)$/m, '  profile: "$1" # this project\'s own profile, not "another"')
+    .replace(/^( {8}- \{.*\})$/m, '$1 # the only check this project runs');
+
+  check(
+    findings,
+    commentedDocument !== plainDocument && (commentedDocument.match(/ # /g) ?? []).length === 4,
+    'The fixture configuration could not be annotated, so nothing below proves anything.',
+  );
+
+  await writeFile(configurationPath, commentedDocument, 'utf8');
+
+  const commented = await readRepositoryConfiguration({ repositoryRoot: root });
+
+  check(
+    findings,
+    commented.ok === true,
+    `A hand-annotated configuration was refused: ${commented.detail}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(commented.configuration) === JSON.stringify(plainConfiguration),
+    'A comment changed what the reader says the configuration file holds.',
+  );
+
+  if (findings.length > 0) {
+    return { name: 'commented-configuration-pins-what-the-file-holds', ok: false, findings };
+  }
+
+  // Everything below runs off the annotated file, so the receipt is pinned by
+  // the document the maintainer actually left on disk.
+  fixtureConfigurations.set(root, commented.configuration);
+
+  const store = await storeFor(root);
+  const { preview, result } = await activateFixture(root, store);
+  const uncommentedIdentity = configurationIdentity({
+    schemaVersion: plainConfiguration.schema_version,
+    policy: plainConfiguration.evaluation_gate,
+  });
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+  check(
+    findings,
+    preview.configuration.identity === uncommentedIdentity,
+    'The annotated configuration previewed an identity the uncommented document does not have.',
+  );
+  check(
+    findings,
+    result.receipt?.configuration?.identity === uncommentedIdentity,
+    'The receipt pinned an identity the configuration file does not hold.',
+  );
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'a change the annotated policy must refuse');
+
+  check(findings, blocked.failed === true, 'An annotated configuration stopped the gate being authoritative.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A blocked commit still moved HEAD.',
+  );
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await attemptCommit(root, 'a change the annotated policy must allow');
+
+  check(findings, allowed.failed === false, `The annotated clone refused a passing change: ${allowed.output}.`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'An allowed commit did not move HEAD.',
+  );
+
+  // A comment is not policy in the other direction either: removing the notes
+  // leaves the same policy, so the clone the receipt pinned goes on committing
+  // rather than denying the edit as drift.
+  await writeFile(configurationPath, plainDocument, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired again\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const uncommented = await attemptCommit(root, 'a change after the notes were removed');
+
+  check(
+    findings,
+    uncommented.failed === false,
+    `Removing a comment was read as configuration drift: ${uncommented.output}.`,
+  );
+
+  return { name: 'commented-configuration-pins-what-the-file-holds', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -2131,6 +2353,7 @@ const main = async () => {
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
       await commandDrivenActivation(),
+      await commandDrivenDesktopActivation(),
       await commandDrivenActivationFailure(),
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
@@ -2138,6 +2361,7 @@ const main = async () => {
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
       await unprovedPrerequisiteNamesWhatWasMissing(),
+      await commentedConfigurationPinsWhatTheFileHolds(),
     ];
   } finally {
     for (const root of temporaryRoots) {
