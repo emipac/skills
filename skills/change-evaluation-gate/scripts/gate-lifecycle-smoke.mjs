@@ -27,7 +27,13 @@
  *    distinguishes a broken clone from a failed invocation by exit status
  *    alone, and leaves the clone and its Evidence store unchanged
  *    (AC-LIFE-004, AC-EVID-002, NFR-OPER-001, SG-LIFE-001).
- * 5. `packaged-repair` — the recovery the contract exists for, through the same
+ * 5. `packaged-lifecycle-state` — one real clone observed through the packaged
+ *    command before and after its policy is configured reports two different
+ *    states — `installed`, naming the missing policy, then `configured` — and
+ *    `gate activate` refuses the unconfigured clone for the same reason
+ *    `gate status` named, writing nothing either time (AC-CFG-001, FR-CFG-001,
+ *    FR-LIFE-009, SG-LIFE-001).
+ * 6. `packaged-repair` — the recovery the contract exists for, through the same
  *    packaged command: a real activated clone that really blocks a commit has
  *    its gate-owned block clobbered, stops blocking, reports `broken`, refuses
  *    a confirmation naming a preview it no longer matches, and is then restored
@@ -87,6 +93,18 @@ const PRIOR_HOOK = [
   '# the repository had this long before the gate existed',
   'echo "prior chain ran" > prior-ran',
   'exit 0',
+  '',
+].join('\n');
+
+/** The same configuration before its Gate policy exists: no `evaluation_gate` at all. */
+const UNCONFIGURED_CONFIGURATION = [
+  'schema_version: 4',
+  'backend: laravel',
+  'frontend: none',
+  'tracker: local-markdown',
+  'history:',
+  '  path: docs/history',
+  '  required: true',
   '',
 ].join('\n');
 
@@ -322,7 +340,14 @@ const check = (findings, condition, detail) => {
   }
 };
 
-/** Every file in the clone, by relative path and bytes. */
+/**
+ * Every file AND every directory in the clone, by relative path and bytes.
+ *
+ * Directories are included deliberately: an observation that creates an empty
+ * directory has still written to the clone, and a file-only snapshot cannot see
+ * it — which is exactly the case `TB-041` had to fix after one had already
+ * shipped (`SG-LIFE-001`).
+ */
 const snapshotOf = async (root) => {
   const entries = [];
   const walk = async (directory) => {
@@ -330,6 +355,8 @@ const snapshotOf = async (root) => {
       const absolute = path.join(directory, entry.name);
 
       if (entry.isDirectory()) {
+        entries.push([path.relative(root, absolute), '<directory>']);
+
         await walk(absolute);
       } else if (entry.isFile()) {
         entries.push([
@@ -796,6 +823,108 @@ const packagedObservation = async () => {
 };
 
 /**
+ * The state the clone is actually in, through the PACKAGED command, before and
+ * after its policy is configured.
+ *
+ * One real clone, observed twice: with no `evaluation_gate` section it is
+ * `installed` and names the missing policy, and the same clone with a policy is
+ * `configured`. `gate activate` is run against the unconfigured clone in the
+ * same scenario, so the two commands are proved to agree about whether this
+ * clone holds a policy rather than each being right on its own
+ * (`AC-CFG-001`, `FR-CFG-001`, `FR-LIFE-009`, `SG-LIFE-001`).
+ */
+const packagedLifecycleState = async () => {
+  const findings = [];
+  const root = await temporaryDirectory(`${CAPABILITY}-unconfigured-`);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/gate-runner.mjs'), FIXTURE_HOOK_PROGRAM, 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), UNCONFIGURED_CONFIGURATION, 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const gate = (args) => runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).catch((error) => error);
+
+  const installedBefore = await snapshotOf(root);
+  const machine = await gate(['status', '--json']);
+  const document = JSON.parse(machine.stdout || '{}');
+  const finding = document.observation?.findings?.[0] ?? {};
+
+  check(findings, (machine.code ?? 0) === 0, `An unconfigured clone exited ${machine.code} from gate status.`);
+  check(
+    findings,
+    document.observation?.state === 'installed',
+    `A clone with no Gate policy reported state ${document.observation?.state}.`,
+  );
+  check(
+    findings,
+    document.observation?.health === 'healthy',
+    `A clone with nothing to enforce reported health ${document.observation?.health}.`,
+  );
+  check(
+    findings,
+    finding.code === 'gate-policy-missing' && /evaluation_gate/.test(finding.detail ?? ''),
+    `The report named ${finding.code} rather than the missing Gate policy.`,
+  );
+
+  // The same invocation, rendered for a person.
+  const human = await gate(['status']);
+
+  check(
+    findings,
+    /^state: installed$/m.test(human.stdout ?? ''),
+    'The human rendering did not report the state the document names.',
+  );
+
+  // The other command that answers this same question, on this same clone.
+  const refused = await gate(['activate']);
+
+  check(
+    findings,
+    (refused.stderr ?? '').includes('declares no evaluation_gate section'),
+    'gate activate did not refuse the unconfigured clone for the reason gate status named.',
+  );
+  check(
+    findings,
+    (await snapshotOf(root)) === installedBefore,
+    'Observing an unconfigured clone changed it.',
+  );
+
+  // Configure it, and nothing else about it.
+  await writeFile(path.join(root, '.agent-framework.yaml'), SHARED_CONFIGURATION, 'utf8');
+
+  const configuredBefore = await snapshotOf(root);
+  const configured = JSON.parse((await gate(['status', '--json'])).stdout || '{}');
+
+  check(
+    findings,
+    configured.observation?.state === 'configured',
+    `A clone holding a Gate policy reported state ${configured.observation?.state}.`,
+  );
+  check(
+    findings,
+    (configured.observation?.findings ?? []).some((entry) => entry.code === 'activation-absent'),
+    'A configured clone did not report the absent activation.',
+  );
+  check(
+    findings,
+    (await snapshotOf(root)) === configuredBefore,
+    'Observing a configured clone changed it.',
+  );
+  check(
+    findings,
+    installedBefore !== configuredBefore,
+    'The configuring step did not change the clone at all.',
+  );
+
+  return { name: 'packaged-lifecycle-state', ok: findings.length === 0, findings };
+};
+
+/**
  * The recovery this whole contract exists for, through the PACKAGED command.
  *
  * A real activated clone, really enforcing, whose gate-owned block is really
@@ -954,6 +1083,7 @@ const main = async () => {
       await packagedRemoval(),
       await observationMutatesNothing(),
       await packagedObservation(),
+      await packagedLifecycleState(),
       await packagedRepair(),
     ];
   } finally {

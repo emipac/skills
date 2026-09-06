@@ -194,8 +194,25 @@ it was authorized against, and the migrations that ran.
 | The gate-owned block no longer matches its durable identity | `broken` |
 | The gate-owned block names a different Activation receipt | `broken` |
 
-A configured-but-not-activated clone reports `state: 'configured'` and
-`healthy`: there is nothing being enforced, so there is nothing drifted.
+## The state a clone is reported to be in
+
+`gate status` reports all three lifecycle states, and it decides between the
+first two by asking `resolveConfiguration` — the same reader the authoritative
+runner, the preflight runner, and `gate activate` ask — rather than inferring
+the answer from the Activation receipt alone (`AC-CFG-001`, `FR-CFG-001`):
+
+| The clone | State | Health | Finding |
+| --- | --- | --- | --- |
+| Holds no readable `evaluation_gate` section | `installed` | `healthy` | the reader's own reason code, naming the missing policy |
+| Holds a policy section, has no receipt | `configured` | `healthy` | `activation-absent` (plus `gate-policy-invalid` when the contract rejects the policy it holds) |
+| Has an Activation receipt | `activated` | graded by the table above | whatever reconciliation found |
+
+An unconfigured clone is `healthy`: there is nothing being enforced, so there is
+nothing drifted. `broken` never means "not set up" — it goes on meaning what
+`FR-LIFE-009` says it means for a clone that is enforcing something. A policy
+section the policy contract rejects still means the clone HOLDS a policy, so it
+is `configured` with the invalidity reported, and `gate activate` refuses it
+with the same reason code `gate status` names.
 
 Adapter loss is reported, never requalified and never repaired: reinstating a
 client the machine no longer has is a reinstall, not a repair (`RISK-004`).
