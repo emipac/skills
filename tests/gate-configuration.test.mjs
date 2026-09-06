@@ -16,6 +16,7 @@ import {
   readRepositoryConfiguration,
   gateChecksFromConfiguration,
 } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
+import { configurationIdentity } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
 import { validateCheckDescriptor } from '../skills/change-evaluation-gate/scripts/lib/check-descriptor.mjs';
 import { validateGatePolicy } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 
@@ -108,6 +109,177 @@ test('a quoted value keeps every character it was written with, apostrophes incl
   assert.equal(result.value.profile, "the project's own profile");
   assert.equal(result.value.note, 'it said "no" # not a comment');
   assert.equal(result.value.plain, 'a value');
+});
+
+test('a quoted value followed by a comment is the quoted value, never the comment too', () => {
+  // TB-049: the closing quote was found with `lastIndexOf`, so a quote inside a
+  // trailing comment ended the value and the comment came back as content. The
+  // file never said any of this, and nothing downstream could tell.
+  const document = [
+    'note: "keep this" # do not use "that"',
+    "profile: 'keep this' # do not use 'that'",
+    'escaped: "she said \\"no\\"" # and "meant" it',
+    // The backslash is itself escaped, so the quote that follows it really does
+    // close the value; a scan that only asks "is this quote preceded by a
+    // backslash" walks straight past it.
+    'trailing_backslash: "a\\\\" # a comment',
+    "apostrophe: 'it''s fine' # don't",
+    'plain: a value # with a trailing comment',
+    '',
+  ].join('\n');
+
+  const result = parseConfigurationDocument(document);
+
+  assert.equal(result.ok, true, result.detail ?? '');
+  assert.deepEqual(result.value, {
+    note: 'keep this',
+    profile: 'keep this',
+    escaped: 'she said "no"',
+    trailing_backslash: 'a\\',
+    apostrophe: "it's fine",
+    plain: 'a value',
+  });
+});
+
+test('a quoted value that never closes, or is followed by anything but a comment, is still refused', () => {
+  const unreadable = [
+    'value: "ok" trailing',
+    "value: 'ok' trailing",
+    // Two quoted values on one line is not one value with a comment; reading it
+    // as either would be reading something the file does not say.
+    'value: "a" "b"',
+  ];
+
+  for (const document of unreadable) {
+    const result = parseConfigurationDocument(`${document}\n`);
+
+    assert.equal(result.ok, false, document);
+    assert.equal(
+      result.detail,
+      `${CONFIGURATION_FILE} could not be read at line 1: a quoted value is followed by unreadable text.`,
+      document,
+    );
+  }
+
+  for (const document of ['value: "never closed', "value: 'never closed", 'value: "ends in a backslash\\']) {
+    const result = parseConfigurationDocument(`${document}\n`);
+
+    assert.equal(result.ok, false, document);
+    assert.equal(
+      result.detail,
+      `${CONFIGURATION_FILE} could not be read at line 1: a quoted value is never closed.`,
+      document,
+    );
+  }
+});
+
+test('a flow collection reads the same whether or not a comment follows it', () => {
+  // TB-049: detection stripped the comment and parsing did not, so `[] # deps`
+  // read while `["vendor"] # deps` was refused as outside the subset. The
+  // boundary honours only a `#` outside a JSON string, so a `#` that is content
+  // stays content.
+  const commented = parseConfigurationDocument([
+    'empty: [] # nothing yet',
+    'mapping: {} # nothing yet',
+    'roots: ["vendor"] # the dependencies this project installs',
+    'hashes: ["a #b"] # not the same # at all',
+    '',
+  ].join('\n'));
+  const plain = parseConfigurationDocument([
+    'empty: []',
+    'mapping: {}',
+    'roots: ["vendor"]',
+    'hashes: ["a #b"]',
+    '',
+  ].join('\n'));
+
+  assert.equal(commented.ok, true, commented.detail ?? '');
+  assert.equal(plain.ok, true, plain.detail ?? '');
+  assert.deepEqual(commented.value, {
+    empty: [], mapping: {}, roots: ['vendor'], hashes: ['a #b'],
+  });
+  assert.deepEqual(commented.value, plain.value);
+
+  // Making them agree does not widen the subset: what the reader refuses
+  // without a comment it still refuses with one.
+  for (const value of ['{runner: "package-script"}', '[test:unit, test:install]', '{"runner":"package-script",}']) {
+    const result = parseConfigurationDocument(`value: ${value} # a comment\n`);
+
+    assert.equal(result.ok, false, value);
+    assert.equal(
+      result.detail,
+      `${CONFIGURATION_FILE} could not be read at line 1: flow collections are outside the supported configuration subset.`,
+      value,
+    );
+  }
+});
+
+/** The configuration identity, derived exactly as every consumer derives it. */
+const identityOf = (document) => {
+  const parsed = parseConfigurationDocument(document);
+
+  assert.equal(parsed.ok, true, parsed.detail ?? '');
+
+  return configurationIdentity({
+    schemaVersion: parsed.value?.schema_version ?? null,
+    policy: parsed.value?.evaluation_gate ?? null,
+  });
+};
+
+const policyDocument = ({ comment = '', marker = 'GATE-BYPASS' } = {}) => [
+  'schema_version: 4',
+  'evaluation_gate:',
+  '  checks:',
+  '    required:',
+  '      - configuration.broad-tests.test',
+  '    advisory: []',
+  '  budget:',
+  '    total_seconds: 300',
+  '  bypass:',
+  '    enabled: true',
+  `    marker: "${marker}"${comment}`,
+  '  execution:',
+  `    dependency_roots: ["vendor"]${comment}`,
+  '  evidence: {}',
+  'history:',
+  '  path: null',
+  '  required: false',
+  '',
+].join('\n');
+
+test('the configuration identity keeps its meaning across a trailing comment', () => {
+  // NFR-SEC-004. The returned string being right is necessary but weak: what
+  // drift detection rests on is that a comment cannot move the identity and a
+  // changed policy always does. Under the defect both documents below hashed
+  // the same as each other and differently from the file's actual policy, so
+  // the pinned receipt, the control surface, and every drift check agreed with
+  // one another about a policy nobody wrote.
+  const plain = identityOf(policyDocument());
+  const commented = identityOf(policyDocument({ comment: ' # the marker we agreed on, not "GATE-SKIP"' }));
+  const changed = identityOf(policyDocument({ marker: 'GATE-SKIP' }));
+
+  assert.equal(commented, plain, 'a trailing comment is not policy; it must not move the identity.');
+  assert.notEqual(changed, plain, 'a changed value is policy; it must move the identity.');
+  assert.notEqual(changed, commented);
+});
+
+test('an absent evaluation_gate section still means not configured', () => {
+  // AC-CFG-001. Nothing in this slice teaches the reader to invent a policy.
+  const result = parseConfigurationDocument([
+    'schema_version: 4',
+    'backend: unknown # hand-edited, with a "quoted" aside',
+    'history:',
+    '  path: null',
+    '  required: false',
+    '',
+  ].join('\n'));
+
+  assert.equal(result.ok, true, result.detail ?? '');
+  assert.equal(result.value.evaluation_gate, undefined);
+  assert.equal(
+    configurationIdentity({ schemaVersion: result.value.schema_version, policy: null }),
+    configurationIdentity({ schemaVersion: 4, policy: null }),
+  );
 });
 
 test('a sequence of command descriptors is read as a list of objects', () => {

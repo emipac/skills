@@ -54,6 +54,12 @@
  *    execution root; a root an earlier abandoned run left behind is reclaimed
  *    by the next commit, and those commits still deny and allow exactly as they
  *    did before (TB-038, AC-CFG-004, AC-EVAL-004, SG-SECRET-001, NFR-REL-001).
+ * 9. `commented-configuration-pins-what-the-file-holds` — a clone whose
+ *    configuration a maintainer annotated by hand activates on the policy the
+ *    file holds: the receipt pins the identity the uncommented document has,
+ *    and the clone denies and allows real commits exactly as it does without
+ *    the comments, across removing them again (TB-049, AC-CFG-004,
+ *    NFR-SEC-004, NFR-REL-001).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -90,6 +96,7 @@ import {
   ACTIVATION_STEPS,
   AUTHORITATIVE_HOOK,
   activate,
+  configurationIdentity,
   previewActivation,
   registerOwnedHook,
 } from './lib/activation.mjs';
@@ -2197,6 +2204,131 @@ const unprovedPrerequisiteNamesWhatWasMissing = async () => {
   };
 };
 
+/**
+ * TB-049: a hand-annotated configuration activates on what the file holds.
+ *
+ * Nothing that writes this file produces a comment beside a value, so no
+ * fixture ever carried one and the reader's misreading of that line was
+ * invisible to every capability here. It is the document the reader exists for:
+ * one a maintainer edited, explaining the policy to whoever reads it next.
+ *
+ * The proof is the identity, not the string. `configurationIdentity` is what the
+ * receipt pins, what the control surface reconciles, and what every drift check
+ * compares, so a comment that moved it would make an annotated clone deny every
+ * commit as drift, and a misread value that hashed consistently would make all
+ * three agree about a policy nobody wrote (AC-CFG-004, NFR-SEC-004).
+ */
+const commentedConfigurationPinsWhatTheFileHolds = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const plainDocument = await readFile(configurationPath, 'utf8');
+  const plainConfiguration = fixtureConfigurations.get(root);
+  // Exactly the edit a maintainer makes and no writer emits. Each note carries
+  // the quote character that used to end the value early: the closing quote was
+  // searched for backwards from the end of the line, so the comment became part
+  // of the policy.
+  const commentedDocument = plainDocument
+    .replace(/^ {2}checks: (.*)$/m, '  checks: $1 # required means required, not "advisory"')
+    .replace(/^ {2}budget: (.*)$/m, "  budget: $1 # ten minutes is what we agreed, don't raise it")
+    .replace(/^ {2}profile: (.+)$/m, '  profile: "$1" # this project\'s own profile, not "another"')
+    .replace(/^( {8}- \{.*\})$/m, '$1 # the only check this project runs');
+
+  check(
+    findings,
+    commentedDocument !== plainDocument && (commentedDocument.match(/ # /g) ?? []).length === 4,
+    'The fixture configuration could not be annotated, so nothing below proves anything.',
+  );
+
+  await writeFile(configurationPath, commentedDocument, 'utf8');
+
+  const commented = await readRepositoryConfiguration({ repositoryRoot: root });
+
+  check(
+    findings,
+    commented.ok === true,
+    `A hand-annotated configuration was refused: ${commented.detail}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(commented.configuration) === JSON.stringify(plainConfiguration),
+    'A comment changed what the reader says the configuration file holds.',
+  );
+
+  if (findings.length > 0) {
+    return { name: 'commented-configuration-pins-what-the-file-holds', ok: false, findings };
+  }
+
+  // Everything below runs off the annotated file, so the receipt is pinned by
+  // the document the maintainer actually left on disk.
+  fixtureConfigurations.set(root, commented.configuration);
+
+  const store = await storeFor(root);
+  const { preview, result } = await activateFixture(root, store);
+  const uncommentedIdentity = configurationIdentity({
+    schemaVersion: plainConfiguration.schema_version,
+    policy: plainConfiguration.evaluation_gate,
+  });
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+  check(
+    findings,
+    preview.configuration.identity === uncommentedIdentity,
+    'The annotated configuration previewed an identity the uncommented document does not have.',
+  );
+  check(
+    findings,
+    result.receipt?.configuration?.identity === uncommentedIdentity,
+    'The receipt pinned an identity the configuration file does not hold.',
+  );
+
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'a change the annotated policy must refuse');
+
+  check(findings, blocked.failed === true, 'An annotated configuration stopped the gate being authoritative.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A blocked commit still moved HEAD.',
+  );
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await attemptCommit(root, 'a change the annotated policy must allow');
+
+  check(findings, allowed.failed === false, `The annotated clone refused a passing change: ${allowed.output}.`);
+  check(
+    findings,
+    Number((await runGit(root, ['rev-list', '--count', 'HEAD'])).trim()) === Number(before) + 1,
+    'An allowed commit did not move HEAD.',
+  );
+
+  // A comment is not policy in the other direction either: removing the notes
+  // leaves the same policy, so the clone the receipt pinned goes on committing
+  // rather than denying the edit as drift.
+  await writeFile(configurationPath, plainDocument, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired again\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const uncommented = await attemptCommit(root, 'a change after the notes were removed');
+
+  check(
+    findings,
+    uncommented.failed === false,
+    `Removing a comment was read as configuration drift: ${uncommented.output}.`,
+  );
+
+  return { name: 'commented-configuration-pins-what-the-file-holds', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -2229,6 +2361,7 @@ const main = async () => {
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
       await unprovedPrerequisiteNamesWhatWasMissing(),
+      await commentedConfigurationPinsWhatTheFileHolds(),
     ];
   } finally {
     for (const root of temporaryRoots) {
