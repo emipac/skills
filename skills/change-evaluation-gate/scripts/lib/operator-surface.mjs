@@ -83,6 +83,7 @@ import { describeAdapter } from './adapters.mjs';
 import { gateChecksFromConfiguration } from './configuration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { PROTOCOL_VERSION } from './evaluation-contract.mjs';
+import { declaredSensitiveInputs } from './policy.mjs';
 import {
   contentIdentity,
   openEvidenceStore,
@@ -856,7 +857,12 @@ const activationRequestFor = async ({ repositoryRoot, selector }) => {
       },
       checks,
       adapters,
-      runtimeInputs: [],
+      // The Sensitive runtime inputs the clone's own policy declares, by name
+      // and source. This is the one production path that fills the request:
+      // the preview shows the names, consent is granted against them, the
+      // receipt pins them, and the runners arm the redactor from them. A
+      // value is never read here (`FR-CFG-006`, `TB-045`).
+      runtimeInputs: declaredSensitiveInputs(configuration.policy),
     },
   };
 };

@@ -80,6 +80,44 @@ const isContainedRoot = (value) => {
 
 const isContainedRootList = (value) => Array.isArray(value) && value.every(isContainedRoot);
 
+/**
+ * Where a project declares the Sensitive runtime inputs its checks receive.
+ *
+ * It lives in `evidence` because that is the only thing the declaration
+ * governs: what the Gate keeps. A declared name is looked up in the environment
+ * the checks run in and its value is removed from everything the store writes.
+ * Nothing is supplied, injected, or approved by it — a value never enters this
+ * file, the receipt, an envelope, a blob, or an event (`FR-CFG-006`,
+ * `SG-SECRET-001`).
+ */
+export const SENSITIVE_INPUTS_PROPERTY = 'sensitive_inputs';
+
+/** Where the value of a declared Sensitive input is read at evaluation time. */
+export const SENSITIVE_INPUT_SOURCE = 'environment';
+
+/**
+ * An environment variable name, as every supported platform spells one. The
+ * rule is the project's declaration; no name is known to Gate core
+ * (`SG-OWNER-001`).
+ */
+const isEnvironmentName = (value) => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+
+/**
+ * The Sensitive runtime inputs a policy declares, as the activation request
+ * carries them: name and source, never a value.
+ */
+export const declaredSensitiveInputs = (policy) => {
+  const declared = policy?.evidence?.[SENSITIVE_INPUTS_PROPERTY];
+
+  if (!Array.isArray(declared)) {
+    return [];
+  }
+
+  return declared
+    .filter(isEnvironmentName)
+    .map((name) => ({ name, source: SENSITIVE_INPUT_SOURCE }));
+};
+
 const error = (code, path, message) => ({ code, path, message });
 
 const checksErrors = (checks) => {
@@ -297,6 +335,30 @@ export const validateGatePolicy = (policy) => {
       'evaluation_gate.execution.dependency_provisioning',
       `Dependency provisioning must be declared as ${DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ')}; it is never detected from the operating system or the filesystem.`,
     ));
+  }
+
+  // Which runtime inputs are Sensitive is likewise the project's declaration.
+  // A declaration is a list of environment variable names and nothing else: a
+  // value written here would be a secret committed to the repository, which is
+  // the one thing this contract exists to prevent (`FR-CFG-006`,
+  // `NFR-SEC-003`). A project that declares nothing keeps the pattern layer it
+  // already had.
+  const sensitiveInputs = policy.evidence?.[SENSITIVE_INPUTS_PROPERTY];
+
+  if (sensitiveInputs !== undefined) {
+    if (!Array.isArray(sensitiveInputs) || !sensitiveInputs.every(isEnvironmentName)) {
+      errors.push(error(
+        'gate-policy-evidence-invalid',
+        `evaluation_gate.evidence.${SENSITIVE_INPUTS_PROPERTY}`,
+        'Sensitive inputs must be listed as environment variable names; a value is never declared here.',
+      ));
+    } else if (new Set(sensitiveInputs).size !== sensitiveInputs.length) {
+      errors.push(error(
+        'gate-policy-evidence-invalid',
+        `evaluation_gate.evidence.${SENSITIVE_INPUTS_PROPERTY}`,
+        'A Sensitive input is declared more than once.',
+      ));
+    }
   }
 
   return errors;

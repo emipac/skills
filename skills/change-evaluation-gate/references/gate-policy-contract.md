@@ -17,7 +17,7 @@ therefore cannot be configured into existence (`FR-POL-004`).
 | `budget` | `total_seconds`, the confirmed total evaluation budget |
 | `bypass` | `enabled`, optional `require_reference`, and the commit-visible `marker` |
 | `execution` | execution policy, including `budget_skippable` advisory identities, the `dependency_roots` a check needs provided, and the `dependency_provisioning` strategy that provides them |
-| `evidence` | evidence policy |
+| `evidence` | evidence policy: lower retention ceilings, and the `sensitive_inputs` whose values Evidence must never keep |
 
 No subcontract may carry a command, runner, argument list, working directory,
 allowed environment, evidence category, profile, capability, activation, trust,
@@ -119,6 +119,47 @@ What was provided, what was not, what was refused, and which strategy provided
 them all reach the decision at `environment.dependencies`, so a check that
 failed because a root was unavailable is diagnosable without rerunning anything
 (`NFR-OPER-001`).
+
+## Sensitive inputs
+
+`evidence.sensitive_inputs` names the Sensitive runtime inputs a project's
+checks receive — a list of environment variable **names**, and nothing else.
+It lives in `evidence` because that is the only thing it governs: what the Gate
+keeps. At evaluation time each declared name is read from the environment the
+runner itself runs in, and its value is removed — raw and in every encoded form
+the store recognizes — from every envelope, blob, decision, and Lifecycle event
+before anything is written. Only the built-in patterns protect a project that
+declares nothing, and they catch a secret only in a shape they recognize
+(`NAME=value`, an authorization header, a URL with user info, a PEM block); a
+bare value in a stack trace is caught only by a declared rule (`FR-CFG-006`,
+`NFR-SEC-003`, `SG-SECRET-001`).
+
+```yaml
+evaluation_gate:
+  evidence: {"sensitive_inputs": ["APP_KEY", "MAIL_PASSWORD"]}
+```
+
+- A **value** can never be declared here. Anything that is not a list of
+  environment variable names — an assignment, an object, a duplicate — is
+  refused by plan validation before activation, as
+  `evaluation_gate.evidence.sensitive_inputs`.
+- The declaration reaches the Activation receipt as names only, through the
+  preview (`runtime inputs: APP_KEY, MAIL_PASSWORD`), so consent is granted
+  against it. It is part of the configuration identity the receipt pins:
+  **adding, removing, or renaming a declaration after activation is
+  trusted-configuration drift**, and the clone must be re-pinned before it
+  authorizes again.
+- The value is supplied by nothing here. The Gate does not copy an environment
+  file, inject a variable, or approve a value; a check receives a declared name
+  only if its own descriptor lists it in `allowed_environment`, exactly as
+  before.
+- A declared name **absent from the environment** at evaluation time is not an
+  error and not a silent pass. The evaluation proceeds, no rule can be armed for
+  that name, and the envelope records it under `redaction.unresolved` beside
+  the armed `redaction.secrets`. A project that declares nothing writes exactly
+  the envelope it always did.
+- Which names are Sensitive is the project's declaration; Gate core knows no
+  variable name, tool, or stack (`SG-OWNER-001`).
 
 ## Bypass
 

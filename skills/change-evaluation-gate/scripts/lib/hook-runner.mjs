@@ -53,7 +53,7 @@ import {
   resolveGitCommonDirectory,
   STORE_DIRECTORY,
 } from './evidence-store.mjs';
-import { validateGatePolicy } from './policy.mjs';
+import { SENSITIVE_INPUT_SOURCE, validateGatePolicy } from './policy.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { createRedactor } from './redaction.mjs';
 
@@ -727,11 +727,18 @@ const resolveActor = async (repositoryRoot) => {
  *
  * The receipt itself never carries a value — only the name a maintainer
  * approved (`activation.mjs`) — so the value is read fresh from the
- * environment this invocation actually runs in.
+ * environment this invocation actually runs in. A declared name this
+ * environment does not set is still handed over, with no value: the redactor
+ * cannot arm a rule for it, and the envelope records that it could not, so an
+ * absent secret is neither an error nor a silent pass (`TB-045`).
  */
 const declaredSecrets = (receipt, environment) => (receipt?.runtimeInputs ?? [])
-  .filter((name) => typeof name === 'string' && typeof environment[name] === 'string' && environment[name] !== '')
-  .map((name) => ({ name, source: 'approved-environment-file', value: environment[name] }));
+  .filter((name) => typeof name === 'string' && name !== '')
+  .map((name) => ({
+    name,
+    source: SENSITIVE_INPUT_SOURCE,
+    value: typeof environment[name] === 'string' && environment[name] !== '' ? environment[name] : null,
+  }));
 
 /**
  * Open the clone-local Evidence store the Activation receipt already

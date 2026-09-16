@@ -30,6 +30,15 @@
  *    Trusted policy, and neither advances trust nor authorizes; a hash-bound
  *    approval advances only once both policies pass (`AC-CFG-003`,
  *    `SG-CFG-001`).
+ * 5. `configured-declaration` — a Sensitive input declared in the clone's OWN
+ *    configuration (`evaluation_gate.evidence.sensitive_inputs`) reaches the
+ *    preview, the receipt, and the store through `gate activate` and a real
+ *    commit; a check that prints the value in a shape no built-in pattern
+ *    matches leaves no recognized form of it anywhere the clone keeps; and the
+ *    same name absent from the environment is recorded as unresolved rather
+ *    than erroring or passing silently. Scenario 1 supplies its declaration
+ *    from the fixture, which is exactly what no project could do before
+ *    `TB-045` (`AC-CFG-004`, `NFR-SEC-003`, `FR-CFG-006`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -773,6 +782,214 @@ const packagedPolicyTransition = () => {
   return { name: 'packaged-policy-transition', ok: findings.length === 0, findings };
 };
 
+/** The packaged operator command, run the way a maintainer or an agent runs it. */
+const PACKAGED_COMMAND = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gate.mjs');
+
+const runPackagedCommand = (cwd, args, environment = {}) => runFile(
+  process.execPath,
+  [PACKAGED_COMMAND, ...args],
+  { cwd, env: { ...gitEnvironment(), ...environment } },
+).then(
+  (result) => ({ exitCode: 0, stdout: result.stdout, stderr: result.stderr }),
+  (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+);
+
+/**
+ * A synthetic canary in a shape NO built-in pattern matches: a bare value
+ * inside a stack frame, with no variable name, no `=`, no scheme, no URL. Only
+ * a rule armed from the declared value can catch it. Scenario 1 prints its
+ * canary beside recognizable labels and would pass on the pattern layer alone.
+ */
+const DECLARED_CANARY = 'wq4n8k2vz7m1p5r9t3y6x0';
+
+const DECLARED_INPUT = 'APP_KEY';
+
+/** A required check that fails loudly and prints the declared value bare. */
+const DECLARED_CHECK_SCRIPT = [
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  `const key = process.env.${DECLARED_INPUT} ?? '';`,
+  '',
+  "process.stdout.write('Error: connection refused\\n');",
+  'process.stdout.write(`    at connect (${key})\\n`);',
+  'process.stdout.write(`${key}\\n`);',
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+/** The clone configuration: the same one check, now declaring one Sensitive input. */
+const declaredConfiguration = () => runnerConfiguration()
+  .replace("            - PATH\n", `            - PATH\n            - ${DECLARED_INPUT}\n`)
+  .replace('  evidence: {}', `  evidence: {"sensitive_inputs":["${DECLARED_INPUT}"]}`);
+
+const commitAttempt = (root, message, environment) => runFile('git', [
+  '-c', 'user.email=gate@example.test',
+  '-c', 'user.name=Gate Security Control Smoke',
+  'commit', '--quiet', '--message', message,
+], { cwd: root, env: { ...gitEnvironment(), ...environment } }).then(
+  () => ({ failed: false, output: '' }),
+  (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+/**
+ * A declaration written in the clone's own configuration, reaching the store
+ * through `gate activate` and a real commit — the reachability `TB-045` is
+ * about. Scenario 1 proves the redactor with a declaration the fixture supplies
+ * itself; until this slice no project could supply one, so every real clone
+ * ran with no declared secret and the pattern layer alone.
+ *
+ * The check prints the declared value in a shape no built-in pattern matches,
+ * the commit is denied by a real required failure, and no recognized form of
+ * the value survives anywhere the clone keeps: the store, the receipt, the hook,
+ * the configuration, or the runner's own output (`AC-CFG-004`, `NFR-SEC-003`,
+ * `FR-CFG-006`). A second commit with the declared name absent from the
+ * environment is not an error and not silent: the envelope names it as
+ * unresolved.
+ */
+const configuredDeclaration = async () => {
+  const findings = [];
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-declared-repo-`);
+
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), DECLARED_CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), declaredConfiguration(), 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'baseline',
+  ]);
+
+  // The preview names the declared input, so consent is granted against it.
+  const preview = await runPackagedCommand(repositoryRoot, ['activate']);
+
+  check(findings, preview.exitCode === 0, `The activation preview exited ${preview.exitCode}: ${preview.stderr}`);
+  check(
+    findings,
+    preview.stdout.includes(`runtime inputs: ${DECLARED_INPUT}`),
+    `The preview did not name the declared input: ${preview.stdout}`,
+  );
+
+  const previewed = await runPackagedCommand(repositoryRoot, ['activate', '--json']);
+  const token = JSON.parse(previewed.stdout || '{}').observation?.confirmationToken ?? '';
+  const confirmed = await runPackagedCommand(repositoryRoot, ['activate', '--confirm', token, '--json']);
+  const confirmedDocument = JSON.parse(confirmed.stdout || '{}');
+
+  check(
+    findings,
+    confirmedDocument.mutation?.performed === true,
+    `The command did not activate the clone: ${confirmed.stdout}${confirmed.stderr}`,
+  );
+
+  if (confirmedDocument.mutation?.performed !== true) {
+    return { name: 'configured-declaration', ok: false, findings };
+  }
+
+  const common = (await git(repositoryRoot, ['rev-parse', '--git-common-dir'])).stdout.trim();
+  const gitDirectory = path.resolve(repositoryRoot, common);
+  const receiptPath = path.join(gitDirectory, 'change-evaluation-gate/evidence/activation/receipt.json');
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+
+  check(
+    findings,
+    JSON.stringify(receipt.runtimeInputs) === JSON.stringify([DECLARED_INPUT]),
+    `The receipt did not pin the declared name: ${JSON.stringify(receipt.runtimeInputs)}.`,
+  );
+
+  // A real commit, denied by a real required failure that printed the value.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nBROKEN\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const denied = await commitAttempt(repositoryRoot, 'prints the declared value', {
+    [DECLARED_INPUT]: DECLARED_CANARY,
+  });
+
+  check(findings, denied.failed === true, 'The failing check was not denied.');
+  check(
+    findings,
+    !denied.output.includes(DECLARED_CANARY),
+    'The declared value reached the runner output shown to the committer.',
+  );
+
+  const storeRoot = path.join(gitDirectory, 'change-evaluation-gate');
+  const store = await openEvidenceStore({ repositoryRoot, identity: storeIdentity() });
+  const log = await store.readLog();
+
+  check(findings, log.length === 1, `Expected one logged envelope, found ${log.length}.`);
+
+  const envelope = log.length > 0 ? await store.readEnvelope(log[0].evidenceId) : null;
+
+  check(
+    findings,
+    JSON.stringify(envelope?.redaction?.secrets) === JSON.stringify([{ name: DECLARED_INPUT, source: 'environment' }]),
+    `The envelope did not record the declared input by name and source: ${JSON.stringify(envelope?.redaction?.secrets)}.`,
+  );
+  check(
+    findings,
+    (envelope?.redaction?.rules ?? []).some((rule) => rule.rule === `declared:${DECLARED_INPUT}` && rule.count >= 2),
+    `The declared rule did not catch the bare value: ${JSON.stringify(envelope?.redaction?.rules)}.`,
+  );
+  check(findings, (await store.listBlobs()).length > 0, 'No output blob was retained to scan.');
+
+  // Every byte the clone keeps: store, receipt, hook, configuration, worktree.
+  const retained = [
+    await treeContents(storeRoot),
+    await treeContents(path.join(gitDirectory, 'hooks')),
+    await readFile(path.join(repositoryRoot, '.agent-framework.yaml'), 'utf8'),
+    denied.output,
+  ].join('\n');
+
+  for (const form of secretForms(DECLARED_CANARY)) {
+    check(
+      findings,
+      !retained.includes(form),
+      `A recognized form of the declared value survived in retained state (${form.slice(0, 6)}…).`,
+    );
+  }
+
+  check(findings, retained.includes(DECLARED_INPUT), 'The declared input name was not retained.');
+
+  // The same declared name, absent from the environment: not an error, not
+  // silent. The commit is graded, and the envelope says nothing was armed.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nrepaired\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const environment = { ...process.env };
+
+  delete environment[DECLARED_INPUT];
+
+  const allowed = await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'declared input absent from the environment',
+  ], { cwd: repositoryRoot, env: { ...environment, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } }).then(
+    () => ({ failed: false, output: '' }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  check(findings, allowed.failed === false, `An absent declared input was treated as an error: ${allowed.output}`);
+
+  const afterLog = await store.readLog();
+  const latest = afterLog.length > 1 ? await store.readEnvelope(afterLog.at(-1).evidenceId) : null;
+
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.unresolved) === JSON.stringify([{ name: DECLARED_INPUT, source: 'environment' }]),
+    `The envelope did not record the absent declared input as unresolved: ${JSON.stringify(latest?.redaction)}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.secrets) === '[]',
+    'An absent declared input was recorded as armed.',
+  );
+
+  return { name: 'configured-declaration', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -783,6 +1000,7 @@ const main = async () => {
       await packagedDrift(),
       await packagedRunnerDrift(),
       packagedPolicyTransition(),
+      await configuredDeclaration(),
     ];
   } finally {
     for (const root of temporaryRoots) {

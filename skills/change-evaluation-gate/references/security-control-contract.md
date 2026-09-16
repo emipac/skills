@@ -86,6 +86,16 @@ them. Redaction at the persistence boundary (`redaction.mjs`,
 written; a value that survives redaction is `unsafe-capture` and the decision
 becomes `sensitive-capture-unsafe` / `unverified`.
 
+**What a real clone declares.** `materializeRuntimeInputs` is reached by no
+production path; nothing copies an environment file today. What a project can
+do is name its Sensitive inputs in `evaluation_gate.evidence.sensitive_inputs`
+(see the [Gate policy contract](./gate-policy-contract.md)). `gate activate`
+projects those names onto the activation request, the preview shows them, the
+receipt pins them, and both packaged runners arm the redactor from them by
+reading each name from their own process environment (`source: environment`).
+A declared name the environment does not set is recorded in the envelope under
+`redaction.unresolved` rather than erroring or passing silently.
+
 ## Gate control-surface drift (`NFR-SEC-004`, `AC-SEC-001`)
 
 `CONTROL_SURFACES` is the closed set the Activation receipt pins:

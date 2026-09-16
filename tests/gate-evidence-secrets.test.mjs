@@ -107,6 +107,36 @@ test('built-in patterns redact common secret shapes with nothing declared', () =
   assert.equal(result.rules.length >= 3, true);
 });
 
+test('TB-045: a declared input with no value arms no rule and is reported as unresolved, never as a value', () => {
+  const armed = createRedactor({
+    secrets: [
+      { name: 'APP_KEY', source: 'environment', value: CANARY },
+      { name: 'MAIL_PASSWORD', source: 'environment', value: null },
+      { name: 'EMPTY', source: 'environment', value: '' },
+    ],
+  });
+
+  assert.deepEqual(armed.secrets.map(({ name, source }) => ({ name, source })), [
+    { name: 'APP_KEY', source: 'environment' },
+  ]);
+  assert.deepEqual(armed.unresolved, [
+    { name: 'MAIL_PASSWORD', source: 'environment' },
+    { name: 'EMPTY', source: 'environment' },
+  ]);
+  assert.equal(JSON.stringify(armed.unresolved).includes('value'), false);
+
+  // A bare value, in no shape a built-in pattern recognizes, is still caught by
+  // the armed rule; nothing about the unresolved names changes that.
+  const result = armed.redactText(`    at connect (${CANARY})\n${CANARY}\n`);
+
+  assert.equal(result.text.includes(CANARY), false);
+  assert.deepEqual(result.rules, [{ rule: 'declared:APP_KEY', count: 2 }]);
+
+  // Nothing declared: nothing armed, nothing unresolved, exactly as before.
+  assert.deepEqual(createRedactor().unresolved, []);
+  assert.deepEqual(createRedactor().secrets, []);
+});
+
 test('evidence that cannot be proved safe is never persisted and is unverified', async (t) => {
   const root = await fixtureRepository(t);
   // A redactor that removes nothing stands in for redaction that cannot prove

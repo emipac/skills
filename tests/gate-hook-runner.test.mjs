@@ -703,8 +703,184 @@ test('TB-026 SG-SECRET-001: a declared runtime input a check prints is redacted 
   const declared = envelope.redaction.secrets.find((secret) => secret.name === 'APP_TOKEN');
 
   assert.notEqual(declared, undefined);
-  assert.equal(declared.source, 'approved-environment-file');
+  // The receipt pins names only; the source recorded is where the runner
+  // actually read the value: its own environment (TB-045).
+  assert.equal(declared.source, 'environment');
   assert.equal('value' in declared, false, 'only the name and source of a Sensitive input may be recorded, never its value.');
+});
+
+/**
+ * A synthetic canary in a shape NO built-in pattern matches: a bare value in a
+ * stack trace, with no variable name, no `=`, no scheme, no URL. Only a rule
+ * armed from the declared value can catch it; a canary printed as `TOKEN=…`
+ * would pass on the pattern layer alone and prove nothing about `TB-045`.
+ */
+const PATTERN_INVISIBLE_CANARY = 'qz7v3m9k2p5w8r4t1y6u0n';
+
+const configureSensitiveClone = async (root, { declared = [], allowedEnvironment = ['APP_KEY'] } = {}) => {
+  await configureClone(root, { allowedEnvironment });
+  await writeFile(
+    path.join(root, 'tools/check.mjs'),
+    [
+      "import { readFile } from 'node:fs/promises';",
+      '',
+      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      "const key = process.env.APP_KEY ?? '';",
+      '',
+      "process.stdout.write('Error: could not connect\\n');",
+      // The bare value, alone on a line, and again inside a stack frame.
+      "process.stdout.write(`    at connect (${key})\\n`);",
+      "process.stdout.write(`${key}\\n`);",
+      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  if (declared.length > 0) {
+    const document = await readFile(path.join(root, '.agent-framework.yaml'), 'utf8');
+
+    await writeFile(
+      path.join(root, '.agent-framework.yaml'),
+      document.replace('  evidence: {}', `  evidence: {"sensitive_inputs":${JSON.stringify(declared)}}`),
+      'utf8',
+    );
+  }
+};
+
+/** Every byte the store holds, so a value cannot hide in one file. */
+const storedBytes = async (root) => {
+  const store = await readStore(root);
+  const entries = await readdir(store.root, { recursive: true, withFileTypes: true });
+  const contents = [];
+
+  for (const entry of entries) {
+    if (entry.isFile()) {
+      contents.push(await readFile(path.join(entry.parentPath ?? entry.path, entry.name), 'utf8'));
+    }
+  }
+
+  return contents.join('\n');
+};
+
+test('TB-045 AC-CFG-004, NFR-SEC-003: a declared value printed in a shape no built-in pattern matches is absent from every stored byte', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY },
+  });
+
+  assert.equal(result.exitCode, 0, `expected an allow, got: ${result.lines.join('\n')}`);
+
+  const retained = [
+    await storedBytes(root),
+    await readFile(path.join(root, '.agent-framework.yaml'), 'utf8'),
+    result.lines.join('\n'),
+  ].join('\n');
+
+  assert.equal(retained.includes(PATTERN_INVISIBLE_CANARY), false, 'the raw value survived in stored bytes.');
+  assert.equal(
+    retained.includes(Buffer.from(PATTERN_INVISIBLE_CANARY).toString('base64')),
+    false,
+    'an encoded form of the value survived in stored bytes.',
+  );
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.deepEqual(envelope.redaction.secrets, [{ name: 'APP_KEY', source: 'environment' }]);
+  assert.equal('unresolved' in envelope.redaction, false);
+  assert.ok(
+    envelope.redaction.rules.some((rule) => rule.rule === 'declared:APP_KEY' && rule.count >= 2),
+    `the declared rule must be the one that caught it: ${JSON.stringify(envelope.redaction.rules)}`,
+  );
+
+  const blobs = await store.listBlobs();
+
+  assert.ok(blobs.length > 0, 'the check output must have been retained as a blob to scan.');
+});
+
+test('TB-045 AC-EVID-001: two runs printing the same declared value address one envelope, derived over redacted bytes', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const environment = { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY };
+  const first = await runHook({ cwd: root, environment });
+  const second = await runHook({ cwd: root, environment });
+
+  assert.equal(first.exitCode, 0);
+  assert.equal(second.exitCode, 0);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2, 'each attempt is logged.');
+  assert.equal(log[0].evidenceId, log[1].evidenceId, 'identical redacted content is one envelope.');
+  assert.equal((await store.readEnvelope(log[0].evidenceId)).redaction.applied > 0, true);
+});
+
+test('TB-045: a declared name this environment does not set is recorded as unresolved, not an error and not silence', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const environment = { ...process.env };
+
+  delete environment.APP_KEY;
+
+  const result = await runHook({ cwd: root, environment });
+
+  assert.equal(result.exitCode, 0, `an absent declared input is not an error: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  // Nothing could be armed for it, and the envelope says exactly that.
+  assert.deepEqual(envelope.redaction.secrets, []);
+  assert.deepEqual(envelope.redaction.unresolved, [{ name: 'APP_KEY', source: 'environment' }]);
+  assert.equal(JSON.stringify(envelope).includes('"value"'), false);
+});
+
+test('TB-045: a clone declaring nothing writes the envelope it always did; the pattern layer alone applies', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY },
+  });
+
+  assert.equal(result.exitCode, 0);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.deepEqual(envelope.redaction.secrets, []);
+  assert.equal('unresolved' in envelope.redaction, false, 'an undeclared clone gains no new envelope field.');
+  assert.deepEqual(
+    Object.keys(envelope.redaction),
+    ['version', 'secrets', 'rules', 'applied', 'redactedBytes'],
+  );
+  // And, stated so nobody overclaims: with nothing declared, a pattern-invisible
+  // value is retained. This is today's behaviour, unchanged.
+  assert.equal((await storedBytes(root)).includes(PATTERN_INVISIBLE_CANARY), true);
 });
 
 test("TB-026 FR-EVID-003: the ceilings applied are the clone's own evaluation_gate.evidence limits", async (t) => {

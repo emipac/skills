@@ -1177,6 +1177,10 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
               <td><code>evidence</code></td>
               <td>Whether to lower any retention ceiling. Leaving it empty keeps the built-in bounds, which is usually right.</td>
             </tr>
+            <tr>
+              <td><code>evidence.sensitive_inputs</code></td>
+              <td>The environment variable <em>names</em> whose values your checks might print — <code>APP_KEY</code>, a mail password, an API token. Each declared value is removed from everything the Gate stores before it is written, in every form it recognizes. Names only: a value here is refused. Declaring one changes the configuration identity, so re-run <code>gate activate</code> afterwards.</td>
+            </tr>
           </tbody>
         </table>
       </div>

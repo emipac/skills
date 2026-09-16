@@ -75,8 +75,15 @@ export const secretForms = (value) => {
  * @param {object} options declared Sensitive inputs and extra project patterns
  */
 export const createRedactor = ({ secrets = [], patterns = [] } = {}) => {
+  const hasValue = (secret) => typeof secret?.value === 'string' && secret.value.length > 0;
+  // A declared input whose value this environment did not supply. No rule can
+  // be armed for it, and saying so is the difference between "nothing was
+  // printed" and "nothing could have been caught" (`TB-045`).
+  const unresolved = secrets
+    .filter((secret) => secret && !hasValue(secret))
+    .map((secret) => ({ name: secret.name ?? null, source: secret.source ?? null }));
   const declared = secrets
-    .filter((secret) => typeof secret?.value === 'string' && secret.value.length > 0)
+    .filter(hasValue)
     .map((secret) => ({
       name: secret.name ?? null,
       source: secret.source ?? null,
@@ -177,6 +184,7 @@ export const createRedactor = ({ secrets = [], patterns = [] } = {}) => {
       'value',
       { value, enumerable: false, writable: false, configurable: false },
     )),
+    unresolved,
     redactText,
     redactValue,
   };

@@ -561,6 +561,13 @@ export const openEvidenceStore = async ({
         version: redactor.version ?? null,
         // Identity and source only; a Sensitive value never travels.
         secrets: (redactor.secrets ?? []).map(({ name, source }) => ({ name, source })),
+        // A declared input this run could not arm a rule for, because its
+        // environment set no value. Recorded only when there is one, so a
+        // clone that declares nothing writes exactly the envelope it always
+        // did (`TB-045`).
+        ...((redactor.unresolved ?? []).length > 0
+          ? { unresolved: redactor.unresolved.map(({ name, source }) => ({ name, source })) }
+          : {}),
         rules: redactionRules,
         applied: redactionRules.reduce((total, entry) => total + entry.count, 0),
         redactedBytes,
