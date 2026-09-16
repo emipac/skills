@@ -600,6 +600,37 @@ const runPackagedCommand = async (root, args) => {
   }
 };
 
+/** The one `next:` line a rendering printed, without its label; `null` if it printed none. */
+const nextLineOf = (stdout) => stdout
+  .split('\n')
+  .filter((entry) => entry.startsWith('next: '))
+  .map((entry) => entry.slice('next: '.length))[0] ?? null;
+
+/**
+ * Paste one printed line into a real POSIX shell, exactly as an operator does.
+ *
+ * `gate` resolves to a shim that hands its arguments to the packaged program,
+ * so the only thing between the printed instruction and the surface is the
+ * shell's own word splitting and quote handling (`TB-053`).
+ */
+const pastePrintedLine = async (root, line) => {
+  const bin = await temporaryDirectory('gate-activation-smoke-bin-');
+
+  await writeFile(
+    path.join(bin, 'gate'),
+    `#!/bin/sh\nexec "${process.execPath}" "${PACKAGED_COMMAND}" "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  return runFile('sh', ['-c', `${line} --json`], {
+    cwd: root,
+    env: { ...gitEnvironment(), PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  }).then(
+    ({ stdout, stderr }) => ({ exitCode: 0, stdout, stderr }),
+    (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+  );
+};
+
 /**
  * A real clone activated through the PACKAGED COMMAND, and the real commits it
  * then decides.
@@ -784,17 +815,32 @@ const commandDrivenDesktopActivation = async () => {
       `${adapterId} previewed a trust model this Gate cannot establish: ${JSON.stringify(previewDocument.observation?.trustModel)}.`,
     );
 
-    const confirmed = await runPackagedCommand(root, [
-      'activate', '--client', adapterId,
-      '--confirm', previewDocument.observation?.confirmationToken,
-      '--json',
-    ]);
+    // The confirmation is EXACTLY the line the preview printed for a person,
+    // pasted into a shell: the instruction has to carry `--client`, or the
+    // confirmation recomputes a git preview and refuses with a token for an
+    // activation nobody asked for (`TB-053`, `AC-LIFE-009`).
+    const rendered = await runPackagedCommand(root, ['activate', '--client', adapterId]);
+    const instruction = nextLineOf(rendered.stdout);
+
+    check(
+      findings,
+      instruction === `gate activate --client ${adapterId} --confirm ${previewDocument.observation?.confirmationToken}`,
+      `${adapterId}: the preview printed an instruction that does not name the client it previewed: ${JSON.stringify(instruction)}.`,
+    );
+
+    const confirmed = await pastePrintedLine(root, instruction ?? 'gate activate');
     const document = JSON.parse(confirmed.stdout || '{}');
 
     check(
       findings,
       document.mutation?.performed === true && document.mutation?.state === 'activated',
-      `${adapterId} could not be activated through the packaged command: ${confirmed.stdout || confirmed.stderr}`,
+      `${adapterId} could not be activated by pasting its own printed instruction: ${confirmed.stdout || confirmed.stderr}`,
+    );
+    check(
+      findings,
+      document.observation?.client === adapterId
+        && JSON.stringify((document.observation?.adapters ?? []).map((adapter) => adapter.id)) === JSON.stringify(['git', adapterId]),
+      `${adapterId}: the confirmed activation is not the previewed one: client ${JSON.stringify(document.observation?.client)}, adapters ${JSON.stringify(document.observation?.adapters)}.`,
     );
     check(
       findings,
@@ -827,6 +873,83 @@ const commandDrivenDesktopActivation = async () => {
   }
 
   return { name: 'command-driven-desktop-activation', ok: findings.length === 0, findings };
+};
+
+/**
+ * The printed instruction is bound to the clone it was printed for.
+ *
+ * A clone altered between the preview and the paste of that preview's own
+ * printed line still activates nothing (`AC-LIFE-008`, `FR-LIFE-015`): the
+ * instruction carrying the right selectors makes the correct confirmation
+ * reachable; it does not make the check softer. And the refusal offers no
+ * token for the preview it recomputed, so the operator is never one paste
+ * from confirming something they have not read (`TB-053`).
+ */
+const printedInstructionStillBindsTheClone = async () => {
+  const findings = [];
+  const declared = describeAdapter('cursor');
+  const root = await fixtureRepository({
+    files: {
+      [declared.registration.file]: {
+        contents: `${JSON.stringify({
+          [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
+          hooks: {},
+        }, null, 2)}\n`,
+      },
+    },
+  });
+
+  await assertThrowawayRepository(root);
+
+  const rendered = await runPackagedCommand(root, ['activate', '--client', 'cursor']);
+  const instruction = nextLineOf(rendered.stdout);
+
+  check(findings, instruction !== null && instruction.includes('--client cursor'), `No instruction was printed: ${rendered.stdout}${rendered.stderr}`);
+
+  // The approved policy changes underneath the operator: the budget the
+  // fixture configured is raised, which changes the configuration identity
+  // the token is bound to.
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const configuration = await readFile(configurationPath, 'utf8');
+  const altered = configuration.replace(/^( {2}budget: .*)600(.*)$/m, '$1900$2');
+
+  check(findings, altered !== configuration, 'The fixture configuration could not be altered, so nothing below proves anything.');
+  await writeFile(configurationPath, altered, 'utf8');
+
+  const refused = await pastePrintedLine(root, instruction ?? 'gate activate');
+  const document = JSON.parse(refused.stdout || '{}');
+
+  check(
+    findings,
+    refused.exitCode === 1
+      && document.mutation?.performed === false
+      && document.mutation?.reasonCode === 'preview-mismatch',
+    `The printed instruction was not refused after the clone changed: ${refused.stdout || refused.stderr}`,
+  );
+  check(
+    findings,
+    await stat(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK)).then(() => false, () => true),
+    'A refused confirmation registered a hook.',
+  );
+  check(
+    findings,
+    !/no longer match/.test(document.mutation?.summary ?? ''),
+    `The refusal asserted a cause it cannot establish: ${document.mutation?.summary}`,
+  );
+
+  // The person-facing refusal names the preview to read and offers no token.
+  const renderedRefusal = await runPackagedCommand(root, [
+    'activate', '--client', 'cursor', '--confirm', instruction?.split(' ').at(-1) ?? `sha256:${'f'.repeat(64)}`,
+  ]);
+  const next = nextLineOf(renderedRefusal.stdout);
+
+  check(
+    findings,
+    next === 'gate activate --client cursor',
+    `A refused confirmation still offered a token: ${JSON.stringify(next)}.`,
+  );
+
+  return { name: 'printed-instruction-still-binds-the-clone', ok: findings.length === 0, findings };
 };
 
 /**
@@ -2829,6 +2952,7 @@ const main = async () => {
         },
       await commandDrivenActivation(),
       await commandDrivenDesktopActivation(),
+      await printedInstructionStillBindsTheClone(),
       await commandDrivenActivationFailure(),
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),

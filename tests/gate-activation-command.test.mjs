@@ -27,6 +27,7 @@ import {
   EXIT_OBSERVED,
   EXIT_UNHEALTHY,
   EXIT_UNRUNNABLE,
+  renderDocument,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
 
@@ -973,4 +974,168 @@ test('the skill\'s discovery copy states what the surface now does', async () =>
     'SKILL.md still says `gate activate` is refused by name.',
   );
   assert.match(skill, /gate activate/, 'SKILL.md does not tell an agent how to activate a clone.');
+});
+
+/* ------------------------------------------------------------------------- *
+ * TB-053 — the instruction an activation preview prints performs that preview.
+ * ------------------------------------------------------------------------- */
+
+const PACKAGED_COMMAND = path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/gate.mjs');
+
+/** The one `next:` line a rendering printed, without its label. */
+const nextLineOf = (result) => {
+  const lines = result.stdout.split('\n').filter((entry) => entry.startsWith('next: '));
+
+  assert.equal(lines.length, 1, `\`gate ${result.document.command}\` printed ${lines.length} \`next:\` lines.`);
+
+  return lines[0].slice('next: '.length);
+};
+
+/** Paste one printed line into a real POSIX shell, with `gate` on its PATH. */
+const pasteIntoShell = async (t, root, line) => {
+  const bin = await realpath(await mkdtemp(path.join(tmpdir(), 'gate-activate-bin-')));
+
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(path.join(bin, 'gate'), `#!/bin/sh\nexec "${process.execPath}" "${PACKAGED_COMMAND}" "$@"\n`, { mode: 0o755 });
+
+  const run = await runFile('sh', ['-c', `${line} --json`], {
+    cwd: root,
+    env: { ...isolatedGitEnvironment(), PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  }).then(
+    ({ stdout }) => ({ code: 0, stdout }),
+    (error) => ({ code: error.code, stdout: error.stdout ?? '' }),
+  );
+
+  return { code: run.code, stdout: run.stdout, document: JSON.parse(run.stdout || 'null') };
+};
+
+/** A configured clone on which the named desktop client already has its configuration file. */
+const cursorClone = (t) => {
+  const declaration = describeAdapter('cursor');
+
+  return configuredClone(t, {
+    files: {
+      [declaration.registration.file]: {
+        contents: `${JSON.stringify({
+          [declaration.registration.schemaVersion.key]: declaration.registration.schemaVersion.value,
+          hooks: {},
+        }, null, 2)}\n`,
+      },
+    },
+  });
+};
+
+/**
+ * THE FIRST RED TEST OF TB-053.
+ *
+ * `AC-LIFE-009`, `FR-LIFE-004`. `gate activate --client cursor` followed by
+ * EXACTLY its own printed instruction activates cursor. Before this slice the
+ * printed line was `gate activate --confirm <token>`: `--client` defaulted to
+ * git, the confirmation recomputed a git preview, and the operator was refused
+ * with a fresh token for the git activation they had not asked for.
+ */
+test('TB-053 / AC-LIFE-009: gate activate --client cursor followed by exactly its printed instruction activates cursor', async (t) => {
+  const root = await cursorClone(t);
+  const preview = await gate(root, ['activate', '--client', 'cursor']);
+  const token = tokenOf(preview);
+
+  assert.equal(preview.document.observation.client, 'cursor');
+  assert.deepEqual(preview.document.invocation.selectors, ['--client', 'cursor']);
+  assert.equal(nextLineOf(preview), `gate activate --client cursor --confirm ${token}`);
+
+  // The token is deterministic per state: the same invocation previews the
+  // same operation and prints the same instruction.
+  assert.equal(tokenOf(await gate(root, ['activate', '--client', 'cursor'])), token);
+
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.code, EXIT_OBSERVED, pasted.document?.mutation?.summary);
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.equal(pasted.document.mutation.state, 'activated');
+  assert.equal(pasted.document.observation.client, 'cursor');
+  assert.deepEqual(pasted.document.observation.adapters.map((adapter) => adapter.id), ['git', 'cursor']);
+
+  // And the person-facing rendering of that same document names both.
+  const rendered = renderDocument(pasted.document);
+
+  assert.match(rendered, /^client: cursor /m);
+  assert.match(rendered, /^adapters: git, cursor$/m);
+  assert.match(rendered, /^performed: true$/m);
+
+  const registered = JSON.parse(await readFile(path.join(root, describeAdapter('cursor').registration.file), 'utf8'));
+
+  assert.equal(Object.keys(registered.hooks).length, 1, 'Cursor registered nothing under its declared event.');
+  assert.deepEqual(await hookDirectory(root), ['pre-commit']);
+});
+
+/**
+ * The reproduction from the ticket, after the fix: the confirmation that
+ * dropped `--client` is still refused (`FR-LIFE-015`), the refusal no longer
+ * blames the clone, it names the invocation it ran as, and it offers no token
+ * for the git activation it recomputed.
+ */
+test('TB-053: a confirmation that omits --client is refused, names its own invocation, blames nothing, and offers no token', async (t) => {
+  const root = await cursorClone(t);
+  const beforeConfiguration = await cloneConfiguration(root);
+  const preview = await gate(root, ['activate', '--client', 'cursor']);
+  const token = tokenOf(preview);
+
+  const refused = await gate(root, ['activate', '--confirm', token]);
+
+  assert.equal(refused.exitCode, EXIT_UNHEALTHY);
+  assert.equal(refused.document.mutation.performed, false);
+  assert.equal(refused.document.mutation.reasonCode, 'preview-mismatch');
+  assert.equal(refused.document.mutation.confirmation, token);
+  // The recomputed preview is the git one, and it is still shown.
+  assert.equal(refused.document.observation.client, 'git');
+  assert.notEqual(refused.document.observation.confirmationToken, token);
+  assert.match(refused.stdout, /^client: git /m);
+  // But no token is offered beside the refusal: the next thing to do is read
+  // a preview, and the line says so.
+  assert.equal(nextLineOf(refused), 'gate activate');
+  assert.doesNotMatch(refused.stdout, /no longer match/);
+  // The summary asserts only what this process established: two identities
+  // differ, and here is the invocation that produced the second one.
+  assert.match(refused.document.mutation.summary, /either this clone changed since that preview, or this invocation's selectors differ/);
+  assert.ok(refused.document.mutation.summary.includes('this one ran as `gate activate`'));
+  assert.match(refused.document.mutation.summary, /confirm the `next:` line it prints/);
+
+  // Nothing was activated, for either client.
+  assert.deepEqual(await hookDirectory(root), []);
+  assert.equal(await cloneConfiguration(root), beforeConfiguration);
+
+  // The preview's own instruction still performs the preview.
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.equal(pasted.document.observation.client, 'cursor');
+});
+
+/**
+ * Every selector the invocation carried is echoed, whether or not it reached
+ * the token: `--actor` shapes what the confirmation records and `--resume`
+ * shapes what it resumes, so an instruction that dropped either would perform
+ * something other than what was previewed.
+ */
+test('TB-053: --actor and --resume are carried on the printed instruction alongside --client', async (t) => {
+  const root = await cursorClone(t);
+  const preview = await gate(root, ['activate', '--client', 'cursor', '--actor', 'a maintainer']);
+  const token = tokenOf(preview);
+
+  assert.deepEqual(preview.document.invocation.selectors, ['--client', 'cursor', '--actor', 'a maintainer']);
+  assert.equal(nextLineOf(preview), `gate activate --client cursor --actor 'a maintainer' --confirm ${token}`);
+
+  // A resumption is echoed too, in the order the command declares its
+  // selectors rather than the order the operator typed them.
+  const transaction = `sha256:${'b'.repeat(64)}`;
+  const resuming = await gate(root, ['activate', '--resume', transaction, '--client', 'cursor']);
+
+  assert.equal(tokenOf(resuming), token, '`--resume` does not shape the preview token.');
+  assert.equal(nextLineOf(resuming), `gate activate --client cursor --resume ${transaction} --confirm ${token}`);
+
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.equal(pasted.document.observation.client, 'cursor');
+  assert.deepEqual(pasted.document.mutation.trust.grantedBy.actor, { name: 'a maintainer', provenance: SELF_DECLARED });
 });

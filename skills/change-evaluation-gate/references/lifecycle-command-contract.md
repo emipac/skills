@@ -90,6 +90,26 @@ nothing the caller holds decides what happens, so a confirmation naming a
 preview the clone no longer matches writes nothing and returns a stated refusal
 (`NFR-REL-002`).
 
+**The preview owns its instruction.** The `next:` line a preview ends with is
+composed from the invocation that produced the preview, not from the command's
+name: it carries every value selector that invocation carried, in the order the
+command declares them, once per value for a repeatable one, and single-quoted
+wherever a POSIX shell would otherwise split or interpret the value (a path
+with a space, a `'`, a `$`). Pasting the line unchanged reproduces the preview
+and therefore its token, and performs exactly what was shown. The same
+selectors are recorded on every document as `invocation.selectors`, so the
+`--json` reader has the instruction the person has (`TB-053`).
+
+**A refused confirmation offers no token.** The surface holds two opaque
+identities — the token the operator carried and the one this invocation
+recomputed — and can tell that they differ, not why: a clone that changed and
+an invocation that dropped a selector leave identical evidence. The refusal
+therefore names both possibilities, states the invocation it ran as, and its
+`next:` line names the preview to read rather than a confirmation to paste.
+The recomputed preview is still rendered; what is withheld is the shortcut
+past reading it, which is how a `--client cursor` preview once became a git
+activation.
+
 **What refuses is what records.** Where a seam takes the confirmation itself —
 `confirmRepair`, `updateGate`, `confirmConfigurationCleanup`,
 `confirmEvidencePrune`, `recoverStale` — the token is handed straight to it and

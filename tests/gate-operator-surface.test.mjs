@@ -21,6 +21,7 @@ import {
   EXIT_OBSERVED,
   EXIT_UNHEALTHY,
   EXIT_UNRUNNABLE,
+  quoteForShell,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
 
@@ -320,6 +321,44 @@ const storeContents = async (store) => JSON.stringify({
   tombstones: (await store.readTombstones()).length,
   receipt: await store.activationReceipt().read(),
 });
+
+/** The one `next:` line a rendering printed, without its label. */
+const nextLineOf = (result) => {
+  const lines = result.stdout.split('\n').filter((entry) => entry.startsWith('next: '));
+
+  assert.equal(lines.length, 1, `\`gate ${result.document.command}\` printed ${lines.length} \`next:\` lines.`);
+
+  return lines[0].slice('next: '.length);
+};
+
+/**
+ * Paste one printed line into a real POSIX shell, exactly as an operator would.
+ *
+ * `gate` resolves to a shim in a throwaway directory that hands its arguments
+ * to the packaged program, so the only thing between the printed line and the
+ * surface is the shell's own word splitting and quote handling — which is the
+ * thing a printed instruction has to survive (`TB-053`).
+ */
+const pasteIntoShell = async (t, root, line) => {
+  const bin = await realpath(await mkdtemp(path.join(tmpdir(), 'gate-operator-bin-')));
+
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(
+    path.join(bin, 'gate'),
+    `#!/bin/sh\nexec ${quoteForShell(process.execPath)} ${quoteForShell(PACKAGED_COMMAND)} "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  const run = await runFile('sh', ['-c', `${line} --json`], {
+    cwd: root,
+    env: { ...isolatedGitEnvironment(), PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  }).then(
+    ({ stdout }) => ({ code: 0, stdout }),
+    (error) => ({ code: error.code, stdout: error.stdout ?? '' }),
+  );
+
+  return { code: run.code, document: JSON.parse(run.stdout || 'null') };
+};
 
 /** The token the preview just printed, which a later invocation must reproduce. */
 const tokenOf = (result) => {
@@ -1099,6 +1138,14 @@ for (const scenario of STALE_SCENARIOS) {
     assert.match(confirmed.stdout, /performed: false/);
     assert.ok(confirmed.stdout.includes(scenario.reasonCode));
 
+    // And the refusal offers no token (`TB-053`): the token this invocation
+    // recomputed names the operation THIS invocation described, which the
+    // operator has not read, so the `next:` line names the preview to read
+    // rather than a confirmation to paste. Nothing blames the clone either —
+    // the surface cannot tell a changed clone from a changed invocation.
+    assert.equal(nextLineOf(confirmed), `gate ${argv.join(' ')}`);
+    assert.doesNotMatch(confirmed.stdout, /no longer match/);
+
     // 4. Nothing was written. Not the hook, not the configuration, not the
     //    asset, not the receipt, not one blob.
     assert.equal(
@@ -1703,4 +1750,230 @@ test('both renderings of one confirmed invocation agree, and the packaged progra
   }
 
   assert.match(help.stdout, /previews and confirms in one/);
+});
+
+/* ------------------------------------------------------------------------- *
+ * TB-053 — the instruction a preview prints performs that preview.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * THE FIRST RED TESTS OF TB-053, for the three commands this suite owns.
+ *
+ * Every fixture before this slice constructed its own confirmation argument
+ * vector, so the line a preview PRINTS had never been executed by anything.
+ * These read the printed `next:` line back out of the rendering, hand it to a
+ * real shell exactly as an operator pastes it, and require the result to be
+ * the previewed operation — with every selector the preview needed, once per
+ * value for a repeatable one, and quoted wherever a path has a space or a
+ * quote in it (`FR-LIFE-004`, `AC-LIFE-008`, `NFR-OPER-001`).
+ */
+test('TB-053: a prune preview prints an instruction carrying every selector, and pasting it performs that prune', async (t) => {
+  const { root, store } = await populatedClone(t);
+  const evaluations = [`sha256:${'1'.repeat(64)}`, `sha256:${'2'.repeat(64)}`];
+
+  for (const [index, evaluationId] of evaluations.entries()) {
+    await store.appendEvidence({
+      decision: { evaluationId, outcome: 'pass' },
+      outputs: [{ checkId: 'broad_test', attempt: index + 1, text: `output ${index}\n`.repeat(8) }],
+    });
+  }
+
+  const argv = [
+    'prune',
+    '--evaluation', evaluations[0],
+    '--evaluation', evaluations[1],
+    '--before', '2999-01-01T00:00:00.000Z',
+    '--reclaim', '1048576',
+  ];
+  const preview = await observe(root, argv);
+  const token = tokenOf(preview);
+  const previewed = preview.document.observation.blobs.map((blob) => blob.blobId);
+
+  assert.equal(previewed.length, 2, 'The selector did not reach both evaluations.');
+  // The document records the invocation the parser read, as an argument
+  // vector, so an agent reading `--json` has the same instruction a person has.
+  assert.deepEqual(preview.document.invocation.selectors, argv.slice(1));
+  assert.equal(
+    nextLineOf(preview),
+    `gate prune --evaluation ${evaluations[0]} --evaluation ${evaluations[1]} --before 2999-01-01T00:00:00.000Z --reclaim 1048576 --confirm ${token}`,
+  );
+
+  // Idempotent: the printed line reproduces the preview, therefore the token.
+  const again = await observe(root, argv);
+
+  assert.equal(tokenOf(again), token);
+
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.code, 0, JSON.stringify(pasted.document?.mutation));
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.deepEqual(pasted.document.mutation.removed, previewed);
+  assert.equal(pasted.document.mutation.confirmation, token);
+});
+
+test('TB-053: a repair preview prints an instruction carrying --hook-script, and pasting it performs that repair', async (t) => {
+  const { root, hookPath } = await populatedClone(t);
+  const registered = await readFile(hookPath, 'utf8');
+
+  await writeFile(hookPath, registered.replace(/\|\| exit \$\?/, '|| true'), 'utf8');
+
+  const preview = await observe(root, ['repair', '--hook-script', FIXTURE_HOOK_SCRIPT]);
+  const token = tokenOf(preview);
+
+  assert.deepEqual(preview.document.invocation.selectors, ['--hook-script', FIXTURE_HOOK_SCRIPT]);
+  assert.equal(nextLineOf(preview), `gate repair --hook-script ${FIXTURE_HOOK_SCRIPT} --confirm ${token}`);
+
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.code, 0, JSON.stringify(pasted.document?.mutation));
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.deepEqual(pasted.document.mutation.actions.map((action) => action.kind), ['hook-registration']);
+  // Restored to exactly what the receipt authorizes — `AC-LIFE-010` is
+  // unchanged once the repair is correctly confirmed.
+  assert.equal(await readFile(hookPath, 'utf8'), registered);
+});
+
+test('TB-053: an uninstall preview prints --asset once per asset, quoted so a path with a space or a quote pastes unchanged', async (t) => {
+  const { root, projectAsset } = await populatedClone(t);
+  const spaced = path.join(root, '.claude', 'skills', 'gate notes', 'read me.md');
+  const quoted = path.join(root, '.claude', 'skills', "it's", 'gate.md');
+
+  for (const asset of [spaced, quoted]) {
+    await mkdir(path.dirname(asset), { recursive: true });
+    await writeFile(asset, '# project asset\n', 'utf8');
+  }
+
+  // An activated clone is never uninstalled out from under its own hook.
+  const deactivation = await observe(root, ['deactivate']);
+
+  assert.equal((await observe(root, ['deactivate', '--confirm', tokenOf(deactivation)])).document.mutation.performed, true);
+
+  const argv = ['uninstall', '--asset', projectAsset, '--asset', spaced, '--asset', quoted];
+  const preview = await observe(root, argv);
+  const token = tokenOf(preview);
+  const line = nextLineOf(preview);
+
+  assert.deepEqual(preview.document.invocation.selectors, argv.slice(1));
+  // Bare where a shell would pass it through unchanged; single-quoted where it
+  // would not, with the embedded quote spelled the one way every POSIX shell
+  // reads identically.
+  assert.equal(
+    line,
+    `gate uninstall --asset ${projectAsset} --asset '${spaced}' --asset '${quoted.replace("'", "'\\''")}' --confirm ${token}`,
+  );
+
+  const pasted = await pasteIntoShell(t, root, line);
+
+  assert.equal(pasted.code, 0, JSON.stringify(pasted.document?.mutation));
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.deepEqual(pasted.document.mutation.removed.map((entry) => entry.path).sort(), [projectAsset, spaced, quoted].sort());
+
+  for (const asset of [projectAsset, spaced, quoted]) {
+    assert.equal(await readFile(asset, 'utf8').catch(() => null), null, `${asset} survived the uninstall its own instruction confirmed.`);
+  }
+});
+
+/**
+ * The quoting rule, stated and proved against the shell it is for: a value made
+ * only of characters a POSIX shell passes through bare is printed bare, and
+ * anything else comes back from `sh` byte for byte.
+ */
+test('TB-053: a value is quoted for the shell iff a shell would split or interpret it, and every quoted value round-trips', async () => {
+  assert.equal(quoteForShell('tools/gate-runner.mjs'), 'tools/gate-runner.mjs');
+  assert.equal(quoteForShell('2999-01-01T00:00:00.000Z'), '2999-01-01T00:00:00.000Z');
+  assert.equal(quoteForShell(`sha256:${'a'.repeat(64)}`), `sha256:${'a'.repeat(64)}`);
+  assert.equal(quoteForShell('/Users/x/Library/Application Support/Herd/bin/php'), "'/Users/x/Library/Application Support/Herd/bin/php'");
+  assert.equal(quoteForShell("it's"), "'it'\\''s'");
+
+  for (const value of [
+    '/Users/x/Library/Application Support/Herd/bin/php',
+    "it's here",
+    '$HOME/gate.md',
+    'a;b && c | d',
+    '`whoami`',
+    'tab\there',
+    '"double"',
+    '*.md',
+  ]) {
+    const { stdout } = await runFile('sh', ['-c', `printf '%s' ${quoteForShell(value)}`]);
+
+    assert.equal(stdout, value, `${JSON.stringify(value)} did not survive the shell.`);
+  }
+});
+
+/**
+ * The five commands whose invocation carries no preview-shaping selector print
+ * exactly the line they always printed — the shared renderer changed, their
+ * output did not (`TB-053`).
+ */
+test('TB-053: the commands with no preview-shaping selector print exactly the instruction they always printed', async (t) => {
+  const fixture = await populatedClone(t);
+  const { root } = fixture;
+
+  // A stale lock, so `locks` has something to recover and a token to print.
+  await STALE_SCENARIOS.find((scenario) => scenario.command === 'locks').prepare(fixture);
+
+  const status = await observe(root, ['status']);
+
+  assert.equal(status.stdout.split('\n').some((entry) => entry.startsWith('next: ')), false);
+  assert.deepEqual(status.document.invocation.selectors, []);
+
+  for (const command of ['locks', 'update', 'deactivate', 'cleanup']) {
+    const preview = await observe(root, [command]);
+    const token = tokenOf(preview);
+
+    assert.deepEqual(preview.document.invocation.selectors, []);
+    assert.equal(nextLineOf(preview), `gate ${command} ${CONFIRMABLE_COMMANDS[command]} ${token}`);
+  }
+});
+
+/**
+ * A confirmation that dropped a selector its preview carried is refused, and
+ * the refusal says what THIS invocation ran as rather than blaming the clone —
+ * the one thing an operator can compare against the `next:` line they were
+ * given (`NFR-OPER-001`).
+ */
+test('TB-053: a confirmation that omits a selector the preview carried is refused, names its own invocation, and offers no token', async (t) => {
+  const { root, hookPath, store } = await populatedClone(t);
+  const registered = await readFile(hookPath, 'utf8');
+  const clobbered = registered.replace(/\|\| exit \$\?/, '|| true');
+
+  await writeFile(hookPath, clobbered, 'utf8');
+
+  const preview = await observe(root, ['repair', '--hook-script', FIXTURE_HOOK_SCRIPT]);
+  const eventsBefore = (await store.readEvents()).length;
+  // The operator pastes the token but not the selector.
+  const refused = await observe(root, ['repair', '--confirm', tokenOf(preview)]);
+
+  assert.equal(refused.exitCode, EXIT_UNHEALTHY);
+  assert.equal(refused.document.mutation.performed, false);
+  // Verified while writing this: the repair token is the identity of
+  // `{ status, receiptId, actions }` and does NOT bind the hook program, so a
+  // confirmation that dropped `--hook-script` reproduces the token and is
+  // refused one step later, when the packaged program cannot reproduce the
+  // pinned registration (`registration-not-reproducible`). Nothing is written
+  // either way; this slice does not change the token's derivation, and the
+  // `next:` line now carries the selector so the operator never gets here by
+  // following the instruction.
+  assert.equal(refused.document.mutation.reasonCode, 'repair-refused');
+  assert.ok(
+    JSON.stringify(refused.document.mutation.errors).includes('registration-not-reproducible'),
+    JSON.stringify(refused.document.mutation.errors),
+  );
+  assert.deepEqual(refused.document.invocation.selectors, []);
+  // The recomputed preview is still rendered — a different hook program — but
+  // its token is not offered beside the refusal.
+  assert.ok(refused.document.observation.hookProgram.script.endsWith('gate-precommit.mjs'));
+  assert.equal(nextLineOf(refused), 'gate repair');
+  assert.doesNotMatch(refused.stdout, /no longer match/);
+
+  // Nothing was repaired, and the refusal was recorded.
+  assert.equal(await readFile(hookPath, 'utf8'), clobbered);
+  assert.ok((await store.readEvents()).length > eventsBefore);
+
+  // The instruction the preview printed still performs the preview.
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.equal(await readFile(hookPath, 'utf8'), registered);
 });

@@ -232,6 +232,68 @@ const SELECTORS = Object.freeze({
   cleanup: Object.freeze({ '--confirm': 'confirmation' }),
 });
 
+/**
+ * The parsed field each value selector is read into — the inverse of the
+ * `if (argument === '--…')` ladder in `parseArguments`, stated once so the
+ * instruction a preview prints is derived from what the parser READ and never
+ * from a second look at the argument vector (`TB-053`).
+ */
+const SELECTOR_FIELDS = Object.freeze({
+  '--client': 'client',
+  '--actor': 'actor',
+  '--resume': 'resume',
+  '--evaluation': 'evaluationIds',
+  '--before': 'appendedBefore',
+  '--reclaim': 'reclaimBytes',
+  '--hook-script': 'hookScript',
+  '--asset': 'assets',
+});
+
+/**
+ * Characters a POSIX shell (`sh`, `bash`, `zsh` — macOS and Linux, the
+ * platforms this skill claims) passes through unchanged outside quotes. A value
+ * made only of these is printed bare; anything else is single-quoted, with an
+ * embedded `'` spelled `'\''`, which is the one quoting every POSIX shell reads
+ * identically. This repository's own resolved PHP lives under
+ * `Application Support`, so a path with a space is not hypothetical.
+ */
+const SHELL_BARE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/** One argument, as it has to be pasted for a POSIX shell to hand it back unchanged. */
+export const quoteForShell = (value) => (
+  SHELL_BARE.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+);
+
+/**
+ * The selectors one parsed invocation carried, as the argument vector that
+ * would reproduce them.
+ *
+ * Every value selector the command declares and the invocation supplied is
+ * echoed, in the order `SELECTORS` declares them, once per value for a
+ * `repeatable` selector; the confirmation selector is never among them. This
+ * is what a `next:` line is composed from: the instruction a preview prints
+ * is a statement about the invocation that produced the preview, so it has to
+ * carry whatever that invocation carried — whether or not the value reached
+ * the confirmation token (`--client` does; `--actor` and `--resume` shape what
+ * the confirmation records and resumes without changing the token, and are
+ * carried for the same reason).
+ */
+export const instructionSelectors = (command, selector) => Object.entries(SELECTORS[command] ?? {})
+  .filter(([, reading]) => reading !== 'confirmation')
+  .flatMap(([flag, reading]) => {
+    const value = selector?.[SELECTOR_FIELDS[flag]] ?? null;
+
+    if (value === null) {
+      return [];
+    }
+
+    return (reading === 'repeatable' ? value : [value])
+      .flatMap((each) => [flag, String(each)]);
+  });
+
+/** The preview invocation, as a person pastes it: `gate <command> <selectors…>`. */
+const previewInstruction = (command, selectors) => ['gate', command, ...selectors.map(quoteForShell)].join(' ');
+
 /** What every removal path on this surface preserves, in the seams' own words. */
 const DEACTIVATION_PRESERVES = Object.freeze([
   'shared-configuration',
@@ -880,8 +942,27 @@ const pendingClientReviews = (result) => (result.receipt?.adapters ?? [])
   .filter((adapter) => adapter.clientReview !== null && adapter.clientReview !== undefined)
   .map((adapter) => adapter.clientReview.detail);
 
+/**
+ * Why a confirmation did not reproduce the preview its token names, in words
+ * that assert only what this process established.
+ *
+ * All the confirmation path holds is two opaque `sha256:` identities — the one
+ * the operator carried and the one this invocation recomputed. A token that
+ * differs says the preview differs; it cannot say WHY. The preview body is
+ * hashed whole, no preview is ever persisted to diff against, and a clone that
+ * changed underneath the operator and an invocation that dropped a selector
+ * (`gate activate --confirm …` where the preview was `--client cursor`) produce
+ * exactly the same evidence: `expected !== actual`. So the refusal names both
+ * causes and blames neither, and points at the one thing that decides between
+ * them — the `next:` line the preview printed, which carries every selector its
+ * preview needed (`NFR-OPER-001`, `TB-053`).
+ */
+const mismatchExplanation = (command, selectors) => (
+  `the confirmation did not reproduce the preview that token names: either this clone changed since that preview, or this invocation's selectors differ from the one that printed it (this one ran as \`${previewInstruction(command, selectors)}\`). Preview again, read it, and confirm the \`next:\` line it prints.`
+);
+
 /** What one activation invocation did, in the transaction's own terms. */
-const activationSummary = (result, shortcut) => {
+const activationSummary = (result, shortcut, selector) => {
   if (result.activated === true) {
     return [
       `This clone is activated: every step ran in the settled order, the receipt ${result.receipt.receiptId} was published and confirmed, and authoritative Git was enabled last.`,
@@ -891,7 +972,15 @@ const activationSummary = (result, shortcut) => {
   }
 
   if (result.state === 'paused') {
-    return `Nothing was activated (${result.reasonCode}): the transaction paused at ${result.step}, no gate integration is active, and it resumes only as \`gate activate --resume ${result.resumption.transactionId} --confirm <token>\` against the same clone, policy, adapters, and preview.`;
+    // The resumption carries every selector this invocation carried, with the
+    // transaction identity in place of any `--resume` it was itself given: a
+    // resumption that dropped `--client` would preview a different activation.
+    const resumption = previewInstruction('activate', instructionSelectors('activate', {
+      ...selector,
+      resume: result.resumption.transactionId,
+    }));
+
+    return `Nothing was activated (${result.reasonCode}): the transaction paused at ${result.step}, no gate integration is active, and it resumes only as \`${resumption} --confirm <token>\` against the same clone, policy, adapters, and preview.`;
   }
 
   if (result.state === 'recovery-required') {
@@ -996,7 +1085,7 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
       evidenceStore: clone.store,
       type: 'activation',
       before: confirmation,
-      reason: 'preview-mismatch: the confirmation named an activation this clone no longer matches; nothing was registered and no receipt was written.',
+      reason: 'preview-mismatch: the confirmation did not reproduce the activation preview its token names; nothing was registered and no receipt was written.',
     });
 
     return {
@@ -1008,7 +1097,7 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
         performed: false,
         reasonCode: 'preview-mismatch',
         expected: preview.previewId,
-        summary: 'Nothing was activated (preview-mismatch): this clone no longer matches the activation that token named. Preview again and confirm the new preview.',
+        summary: `Nothing was activated (preview-mismatch): ${mismatchExplanation('activate', instructionSelectors('activate', selector))}`,
       }),
     };
   }
@@ -1087,7 +1176,7 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
       rollback: result.rollback,
       shortcut,
       errors: result.errors ?? [],
-      summary: activationSummary(result, shortcut),
+      summary: activationSummary(result, shortcut, selector),
     }),
   };
 };
@@ -1425,7 +1514,7 @@ const operateDeactivate = async ({ repositoryRoot, environment, confirmation }) 
       evidenceStore: clone.store,
       type: 'removal',
       before: confirmation,
-      reason: `preview-mismatch: the confirmation named a deactivation this clone no longer matches; nothing was removed and nothing was repaired.`,
+      reason: 'preview-mismatch: the confirmation did not reproduce the deactivation preview its token names; nothing was removed and nothing was repaired.',
     });
 
     return {
@@ -1437,7 +1526,7 @@ const operateDeactivate = async ({ repositoryRoot, environment, confirmation }) 
         performed: false,
         reasonCode: 'preview-mismatch',
         expected: observation.confirmationToken,
-        summary: 'Nothing was removed (preview-mismatch): this clone no longer matches the deactivation that token named. Preview again and confirm the new preview.',
+        summary: `Nothing was removed (preview-mismatch): ${mismatchExplanation('deactivate', [])}`,
       }),
     };
   }
@@ -1527,7 +1616,7 @@ const operateUninstall = async ({ repositoryRoot, environment, selector, confirm
       evidenceStore: clone.store,
       type: 'removal',
       before: confirmation,
-      reason: 'preview-mismatch: the confirmation named an uninstall these files no longer match; nothing was removed.',
+      reason: 'preview-mismatch: the confirmation did not reproduce the uninstall preview its token names; nothing was removed.',
     });
 
     return {
@@ -1539,7 +1628,7 @@ const operateUninstall = async ({ repositoryRoot, environment, selector, confirm
         performed: false,
         reasonCode: 'preview-mismatch',
         expected: observation.confirmationToken,
-        summary: 'Nothing was removed (preview-mismatch): these assets are no longer the ones that token named. Preview again and confirm the new preview.',
+        summary: `Nothing was removed (preview-mismatch): ${mismatchExplanation('uninstall', instructionSelectors('uninstall', selector))}`,
       }),
     };
   }
@@ -1643,8 +1732,9 @@ const OPERATIONS = Object.freeze({
 });
 
 /** The envelope every rendering is made from, whether the command ran or not. */
-const documentOf = ({ command, repositoryRoot, result }) => {
+const documentOf = ({ command, repositoryRoot, result, selector = null }) => {
   const failed = result.failure !== undefined;
+  const resolvedCommand = result.command ?? command ?? null;
   const exitStatus = failed
     ? EXIT_UNRUNNABLE
     : (result.healthy ? EXIT_OBSERVED : EXIT_UNHEALTHY);
@@ -1652,10 +1742,18 @@ const documentOf = ({ command, repositoryRoot, result }) => {
   return {
     document: DOCUMENT_VERSION,
     gate: GATE_ID,
-    command: result.command ?? command ?? null,
+    command: resolvedCommand,
     ok: !failed && result.healthy === true,
     exitStatus,
     repository: { root: repositoryRoot },
+    // The value selectors THIS invocation carried, as the parser read them and
+    // as the argument vector that would reproduce them. The `next:` line is
+    // composed from these, so the instruction a preview prints is a statement
+    // about the invocation that produced the preview rather than a template
+    // built from the command's name (`FR-LIFE-004`, `TB-053`).
+    invocation: {
+      selectors: failed || resolvedCommand === null ? [] : instructionSelectors(resolvedCommand, selector),
+    },
     // What this invocation would do, re-derived from the clone as it is now.
     observation: failed ? null : result.observation,
     // What it did, or refused to do. `null` on every preview, which is what
@@ -1682,13 +1780,38 @@ const renderFindings = (findings) => (findings ?? []).map((finding) => [
   `    ${finding.detail}`,
 ].join('\n'));
 
-/** The one line every confirmable command ends its preview with. */
-const renderConfirmation = (command, observation) => line(
-  'next',
-  observation.confirmationToken === null || observation.confirmationToken === undefined
-    ? 'nothing to confirm'
-    : `gate ${command} ${CONFIRMABLE_COMMANDS[command]} ${observation.confirmationToken}`,
-);
+/**
+ * The one line every confirmable command ends its preview with.
+ *
+ * It is composed from the invocation the document records, so it carries every
+ * selector that shaped the preview — once per value for a repeatable one, and
+ * quoted wherever a shell would otherwise split or interpret it — followed by
+ * the confirmation selector and the token. A command whose invocation carried
+ * no selector prints exactly the line it always printed (`TB-053`).
+ *
+ * After a REFUSED confirmation the line names the preview invocation and no
+ * token. The token this invocation recomputed is the token of the operation
+ * this invocation described, which is by definition not the one the operator
+ * confirmed; offered beside the refusal it is one paste from performing an
+ * operation nobody read — which is exactly how a `--client cursor` preview
+ * became a git activation. The recomputed preview is still rendered above,
+ * so nothing is hidden; what is withheld is the shortcut past reading it.
+ */
+const renderConfirmation = (command, observation, document = {}) => {
+  const token = observation.confirmationToken ?? null;
+
+  if (token === null) {
+    return line('next', 'nothing to confirm');
+  }
+
+  const preview = previewInstruction(command, document.invocation?.selectors ?? []);
+
+  if (document.mutation?.performed === false) {
+    return line('next', preview);
+  }
+
+  return line('next', `${preview} ${CONFIRMABLE_COMMANDS[command]} ${token}`);
+};
 
 /**
  * The dependency roots line of an activation preview.
@@ -1714,7 +1837,7 @@ const renderDependencyRoots = ({ dependencyRoots, dependencyProvisioning }) => {
     .join(', ');
 };
 
-const renderActivate = (observation) => [
+const renderActivate = (observation, document) => [
   line('state', observation.state),
   line('client', `${observation.client} (trust model ${observation.trustModel ?? 'undeclared'})`),
   line(
@@ -1739,7 +1862,7 @@ const renderActivate = (observation) => [
   line('dependency roots', renderDependencyRoots(observation)),
   line('runtime inputs', observation.runtimeInputs.join(', ') || 'none'),
   line('shortcut', `${observation.shortcut.name} (${observation.shortcut.kind})`),
-  renderConfirmation('activate', observation),
+  renderConfirmation('activate', observation, document),
 ];
 
 const renderStatus = (observation) => [
@@ -1758,7 +1881,7 @@ const renderStatus = (observation) => [
   line('mutations', observation.mutations.length),
 ];
 
-const renderLocks = (observation) => [
+const renderLocks = (observation, document) => [
   line('lock', observation.lockPath),
   line('held', observation.held),
   line('liveness', observation.liveness),
@@ -1772,10 +1895,10 @@ const renderLocks = (observation) => [
   line('recovery token', observation.recoveryToken ?? 'none'),
   line('acquired', observation.acquired),
   line('recovered', observation.recovered),
-  renderConfirmation('locks', observation),
+  renderConfirmation('locks', observation, document),
 ];
 
-const renderPrune = (observation) => [
+const renderPrune = (observation, document) => [
   line('previewed', observation.previewedAt),
   line(
     'selector',
@@ -1792,10 +1915,10 @@ const renderPrune = (observation) => [
   line('removed', observation.removed),
   observation.blobs.length === 0
     ? line('next', 'nothing to remove')
-    : renderConfirmation('prune', observation),
+    : renderConfirmation('prune', observation, document),
 ];
 
-const renderRepair = (observation) => [
+const renderRepair = (observation, document) => [
   line('health', observation.health),
   line('receipt', observation.receiptId ?? 'none'),
   line('hook program', `${observation.hookProgram.interpreter} ${observation.hookProgram.script}`),
@@ -1807,14 +1930,14 @@ const renderRepair = (observation) => [
   ...renderFindings(observation.unrepairable),
   observation.actions.length === 0
     ? line('next', 'nothing to repair')
-    : renderConfirmation('repair', observation),
+    : renderConfirmation('repair', observation, document),
 ];
 
 const renderRelease = (release) => (release === null
   ? 'none'
   : `${release.id ?? 'unknown'} ${release.version ?? 'unknown'} (protocol ${release.protocolVersion ?? 'unknown'})`);
 
-const renderUpdate = (observation) => [
+const renderUpdate = (observation, document) => [
   line('active', renderRelease(observation.active)),
   line('candidate', renderRelease(observation.candidate)),
   line('distribution', observation.distribution.manifest ?? 'unresolved'),
@@ -1826,11 +1949,11 @@ const renderUpdate = (observation) => [
   ),
   line('self-tests rerun', observation.selfTestsRerun),
   observation.candidateAvailable
-    ? renderConfirmation('update', observation)
+    ? renderConfirmation('update', observation, document)
     : line('next', 'the installed distribution offers no new release'),
 ];
 
-const renderDeactivate = (observation) => [
+const renderDeactivate = (observation, document) => [
   line('receipt', observation.receiptId ?? 'none'),
   line('registrations', observation.registrations.length),
   ...observation.registrations.map(
@@ -1841,10 +1964,10 @@ const renderDeactivate = (observation) => [
     (registration) => `  - ${registration.kind} ${registration.adapter} ${registration.path}`,
   ),
   line('preserved', observation.preserved.join(', ')),
-  renderConfirmation('deactivate', observation),
+  renderConfirmation('deactivate', observation, document),
 ];
 
-const renderUninstall = (observation) => [
+const renderUninstall = (observation, document) => [
   line('assets', observation.assets.length),
   ...observation.assets.map(
     (asset) => `  - ${asset.path} (present ${asset.present}) ${asset.identity ?? 'no identity'}`,
@@ -1852,17 +1975,17 @@ const renderUninstall = (observation) => [
   line('preserved', observation.preserved.join(', ')),
   observation.assets.length === 0
     ? line('next', 'name the project-installed assets with --asset <path>')
-    : renderConfirmation('uninstall', observation),
+    : renderConfirmation('uninstall', observation, document),
 ];
 
-const renderCleanup = (observation) => [
+const renderCleanup = (observation, document) => [
   line('configuration', observation.path),
   line('keys', observation.keys.length),
   ...observation.keys.map((key) => `  - ${key.key} lines ${key.startLine}-${key.endLine}`),
   line('file deleted', observation.fileDeleted),
   observation.keys.length === 0
     ? line('next', 'nothing to remove')
-    : renderConfirmation('cleanup', observation),
+    : renderConfirmation('cleanup', observation, document),
 ];
 
 const RENDERERS = Object.freeze({
@@ -1903,7 +2026,7 @@ const renderMutation = (mutated) => [
 export const renderDocument = (document) => [
   `gate ${document.command}${document.mutation === null ? '' : ` ${CONFIRMABLE_COMMANDS[document.command]}`}`,
   line('repository', document.repository.root ?? 'unresolved'),
-  ...RENDERERS[document.command](document.observation),
+  ...RENDERERS[document.command](document.observation, document),
   ...(document.mutation === null
     ? ['preview: nothing was written, nothing was repaired, and nothing was removed.']
     : renderMutation(document.mutation)),
@@ -1951,6 +2074,7 @@ export const runOperatorCommand = async ({
       command: parsed.command ?? null,
       repositoryRoot: null,
       result: parsed,
+      selector: parsed.selector ?? null,
     }));
   }
 
@@ -1979,5 +2103,6 @@ export const runOperatorCommand = async ({
     command: parsed.command,
     repositoryRoot: repository.root,
     result,
+    selector: parsed.selector,
   }));
 };
