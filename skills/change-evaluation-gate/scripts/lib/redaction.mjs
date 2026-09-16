@@ -74,14 +74,20 @@ export const secretForms = (value) => {
  *
  * @param {object} options declared Sensitive inputs and extra project patterns
  */
-export const createRedactor = ({ secrets = [], patterns = [] } = {}) => {
+export const createRedactor = ({ secrets = [], patterns = [], environmentFiles = [] } = {}) => {
   const hasValue = (secret) => typeof secret?.value === 'string' && secret.value.length > 0;
-  // A declared input whose value this environment did not supply. No rule can
-  // be armed for it, and saying so is the difference between "nothing was
-  // printed" and "nothing could have been caught" (`TB-045`).
+  // A declared input whose value no source supplied. No rule can be armed for
+  // it, and saying so is the difference between "nothing was printed" and
+  // "nothing could have been caught" (`TB-045`). Where it was looked for
+  // travels with it when a declared file was consulted, so an envelope can say
+  // why (`TB-059`); a clone declaring no file records exactly what it did.
   const unresolved = secrets
     .filter((secret) => secret && !hasValue(secret))
-    .map((secret) => ({ name: secret.name ?? null, source: secret.source ?? null }));
+    .map((secret) => ({
+      name: secret.name ?? null,
+      source: secret.source ?? null,
+      ...(Array.isArray(secret.searched) ? { searched: [...secret.searched] } : {}),
+    }));
   const declared = secrets
     .filter(hasValue)
     .map((secret) => ({
@@ -185,6 +191,12 @@ export const createRedactor = ({ secrets = [], patterns = [] } = {}) => {
       { value, enumerable: false, writable: false, configurable: false },
     )),
     unresolved,
+    // The declared environment files and what each turned out to be when the
+    // resolution consulted it: path and status only, never a line of contents.
+    environmentFiles: environmentFiles.map((file) => ({
+      path: file?.path ?? null,
+      status: file?.status ?? null,
+    })),
     redactText,
     redactValue,
   };

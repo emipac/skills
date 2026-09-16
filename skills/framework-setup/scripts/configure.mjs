@@ -664,11 +664,17 @@ const gateProviderModules = Object.freeze({
   node: '../../change-evaluation-gate/scripts/lib/providers/node-package.mjs',
 });
 
-const resolveDraftProvider = async (projectRoot) => {
+/** The backend profile a Gate draft is derived for: configured, else discovered. */
+const resolveDraftBackend = async (projectRoot) => {
   const existing = await readExistingConfiguration(projectRoot);
-  const backend = existing.backend && existing.backend !== 'unknown'
+
+  return existing.backend && existing.backend !== 'unknown'
     ? existing.backend
     : (await discoverProject(projectRoot)).backend;
+};
+
+const resolveDraftProvider = async (projectRoot) => {
+  const backend = await resolveDraftBackend(projectRoot);
   const specifier = backend === 'laravel'
     ? gateProviderModules.laravel
     : (await exists(path.join(path.resolve(projectRoot), 'package.json'))
@@ -817,6 +823,38 @@ const derivedDependencyRoots = async (projectRoot, checks) => {
   return roots.sort();
 };
 
+/**
+ * The Sensitive runtime inputs a stock project of each profile needs its test
+ * suite to receive, and where that profile keeps them.
+ *
+ * A Laravel application reads its encryption key from `.env`, which is
+ * git-ignored and therefore absent from the Evaluation snapshot; its stock
+ * `phpunit.xml` deliberately sets no `APP_KEY`, so a suite that runs locally
+ * fails inside the snapshot with a missing key on first activation. Declaring
+ * the name and the file here lets the Gate resolve that one approved name from
+ * the file, hand it to the check, and scrub it from Evidence — the declaration
+ * is names and paths only, never a value (`FR-CFG-006`, `FR-LIFE-013`,
+ * `TB-059`). A maintainer who does not want it removes one line. Every other
+ * profile declares nothing, exactly as before.
+ *
+ * This is the profile's knowledge, kept in `framework-setup`'s profile table:
+ * Gate core learns no variable name, file name, or framework (`SG-OWNER-001`).
+ */
+const PROFILE_EVIDENCE_DEFAULTS = Object.freeze({
+  laravel: Object.freeze({
+    sensitive_inputs: Object.freeze(['APP_KEY']),
+    environment_files: Object.freeze(['.env']),
+  }),
+});
+
+const derivedEvidencePolicy = (backend) => {
+  const defaults = PROFILE_EVIDENCE_DEFAULTS[backend] ?? null;
+
+  return defaults === null
+    ? {}
+    : Object.fromEntries(Object.entries(defaults).map(([key, values]) => [key, [...values]]));
+};
+
 export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
   const provider = await resolveDraftProvider(projectRoot);
   const checks = await configuredChecksToDraft(projectRoot);
@@ -839,7 +877,7 @@ export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
       budget_skippable: [],
       dependency_roots: await derivedDependencyRoots(projectRoot, checks),
     },
-    evidence: {},
+    evidence: derivedEvidencePolicy(await resolveDraftBackend(projectRoot)),
   }, out);
 };
 

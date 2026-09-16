@@ -85,13 +85,29 @@ const terminateTree = async (child) => {
  * A descriptor that also declares `PATH` gets the ambient value appended, so a
  * project can widen what its own command reaches without ever being able to
  * hide the runtime's own entries behind it.
+ *
+ * An APPROVED runtime input is a different question from ambient pass-through
+ * and is answered by a different consent: the operator confirmed its name at
+ * activation, and that consent is what hands it to the check. So it is merged
+ * after the ambient pass-through and regardless of `allowed_environment`,
+ * which keeps its meaning for ambient variables and nothing else. Neither can
+ * shadow the other: an approved input overwrites nothing an ambient variable
+ * of the same name would have carried, because resolution reads the runner's
+ * own environment first and hands over that same value (`FR-CFG-006`,
+ * `AC-CFG-004`, `TB-059`).
  */
-export const environmentFor = (allowedEnvironment, source, runtimePath = '') => {
+export const environmentFor = (allowedEnvironment, source, runtimePath = '', approvedInputs = {}) => {
   const environment = {};
 
   for (const name of allowedEnvironment ?? []) {
     if (source[name] !== undefined) {
       environment[name] = source[name];
+    }
+  }
+
+  for (const [name, value] of Object.entries(approvedInputs ?? {})) {
+    if (typeof value === 'string') {
+      environment[name] = value;
     }
   }
 
@@ -157,6 +173,9 @@ export const createBoundedExecutor = ({
   captureOutput = false,
   captureLimitBytes = DEFAULT_CAPTURE_LIMIT_BYTES,
   runtimePath = '',
+  // The approved Sensitive runtime inputs this evaluation materialized, as
+  // `{ name: value }`: what the materializer handed back, never read here.
+  runtimeInputs = {},
 } = {}) => {
   const totalMs = Number.isInteger(totalSeconds) ? totalSeconds * 1000 : null;
   let consumedMs = 0;
@@ -265,7 +284,7 @@ export const createBoundedExecutor = ({
 
     const child = spawn(launch.executable, composition.args, {
       cwd: path.join(executionRoot, command.working_directory ?? '.'),
-      env: environmentFor(command.allowed_environment, environment, searchPath),
+      env: environmentFor(command.allowed_environment, environment, searchPath, runtimeInputs),
       stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       // The check leads its own process group so the whole tree can be
       // terminated on timeout or budget exhaustion.

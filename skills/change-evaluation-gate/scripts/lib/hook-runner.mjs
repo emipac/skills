@@ -53,9 +53,11 @@ import {
   resolveGitCommonDirectory,
   STORE_DIRECTORY,
 } from './evidence-store.mjs';
-import { SENSITIVE_INPUT_SOURCE, validateGatePolicy } from './policy.mjs';
+import { declaredEnvironmentFiles, validateGatePolicy } from './policy.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { createRedactor } from './redaction.mjs';
+import { resolveRuntimeInputs } from './runtime-inputs.mjs';
+import { materializeRuntimeInputs } from './security-control.mjs';
 
 const runFile = promisify(execFile);
 
@@ -722,33 +724,34 @@ const resolveActor = async (repositoryRoot) => {
 };
 
 /**
- * The runtime input values this activation named, read from this process's own
- * environment so the redactor can catch one if a check happens to print it.
- *
- * The receipt itself never carries a value — only the name a maintainer
- * approved (`activation.mjs`) — so the value is read fresh from the
- * environment this invocation actually runs in. A declared name this
- * environment does not set is still handed over, with no value: the redactor
- * cannot arm a rule for it, and the envelope records that it could not, so an
- * absent secret is neither an error nor a silent pass (`TB-045`).
+ * The approved runtime input names the Activation receipt pinned. The receipt
+ * itself never carries a value — only the name a maintainer approved
+ * (`activation.mjs`, `FR-CFG-006`).
  */
-const declaredSecrets = (receipt, environment) => (receipt?.runtimeInputs ?? [])
-  .filter((name) => typeof name === 'string' && name !== '')
-  .map((name) => ({
-    name,
-    source: SENSITIVE_INPUT_SOURCE,
-    value: typeof environment[name] === 'string' && environment[name] !== '' ? environment[name] : null,
-  }));
+const approvedRuntimeInputs = (receipt) => (receipt?.runtimeInputs ?? [])
+  .filter((name) => typeof name === 'string' && name !== '');
 
 /**
  * Open the clone-local Evidence store the Activation receipt already
- * identifies.
+ * identifies — and, because this is the one path both runners reach with the
+ * receipt, the configuration, and the repository in hand, resolve the approved
+ * Sensitive runtime inputs here, once, for both of their consumers.
  *
  * The store lives under the Git common directory `resolveReceipt` already
  * resolved, and its ceilings are the clone's own `evaluation_gate.evidence`
  * policy. A store that cannot be opened is a diagnosable local fault the
  * runner denies against, never a reason to grade a commit unrecorded
  * (`FR-EVID-001`, `FR-EVID-002`, `NFR-REL-003`).
+ *
+ * Resolution happens BEFORE the store opens, so the redactor is armed with
+ * every value before the first byte could be written: a value that later
+ * reaches a check through `provisionRuntimeInputs` is, by construction, a
+ * value the redactor already holds (`AC-EVID-001`, `SG-SECRET-001`). The same
+ * resolved set is returned as `runtimeInputs`, so the runner hands the
+ * materializer exactly what the redactor was armed with. A declared name no
+ * source supplies is still handed over, with no value: the redactor cannot
+ * arm a rule for it, and the envelope records that it could not, so an absent
+ * secret is neither an error nor a silent pass (`TB-045`, `TB-059`).
  *
  * `openStoreSeam` is `openEvidenceStore` by default; it is a parameter only so
  * a test can prove the open-failure and append-failure paths deterministically,
@@ -764,6 +767,12 @@ export const openStore = async ({
       ?? { id: 'change-evaluation-gate', version: null, protocolVersion: PROTOCOL_VERSION },
     repository: { identity: repositoryIdentity(activation.gitCommonDirectory) },
   };
+  const runtimeInputs = await resolveRuntimeInputs({
+    approved: approvedRuntimeInputs(activation.receipt),
+    environment,
+    environmentFiles: declaredEnvironmentFiles(configuration.policy),
+    repositoryRoot: repository.root,
+  });
 
   try {
     const store = await openStoreSeam({
@@ -771,10 +780,13 @@ export const openStore = async ({
       gitCommonDirectory: activation.gitCommonDirectory,
       evidencePolicy: configuration.policy?.evidence ?? null,
       identity,
-      redactor: createRedactor({ secrets: declaredSecrets(activation.receipt, environment) }),
+      redactor: createRedactor({
+        secrets: runtimeInputs.inputs,
+        environmentFiles: runtimeInputs.files,
+      }),
     });
 
-    return { ok: true, store };
+    return { ok: true, store, runtimeInputs: runtimeInputs.inputs };
   } catch (error) {
     return {
       ok: false,
@@ -782,6 +794,45 @@ export const openStore = async ({
       detail: `the clone-local Evidence store could not be opened (${error.message}); nothing is authorized.`,
     };
   }
+};
+
+/**
+ * Hand the resolved, approved runtime inputs to the isolated materialization
+ * once it exists, and return the environment the check receives them by.
+ *
+ * `openStore` resolved the values; this is the second consumer of that one
+ * resolution. The materializer refuses by name anything the receipt did not
+ * approve, writes each approved value to an owner-only file under the
+ * execution root, and returns the `{ name: value }` environment the bounded
+ * executor merges after ambient pass-through. That directory is a child of the
+ * execution root and is removed with it in the runners' `finally`, by the
+ * signal disposition, and by the orphan sweep — the same lifecycle as the
+ * snapshot it sits beside (`FR-CFG-006`, `AC-CFG-004`, `TB-038`). It is not
+ * a tracked path, so it is outside the snapshot's path list, its identity,
+ * and its immutability re-check, exactly as a provided dependency root is
+ * (`SG-EVAL-001`, `TB-054`).
+ *
+ * Stated plainly: while a check runs, an approved value lives in a `0600`
+ * file inside a `0700` directory under the operating system's temporary
+ * directory, and in that check's environment. Nowhere else, and not after.
+ *
+ * A name no source supplied is not materialized: there is nothing to hand
+ * over, and the redactor already recorded it as unresolved.
+ */
+export const provisionRuntimeInputs = async ({ activation, runtimeInputs = [], executionRoot }) => {
+  const materialized = await materializeRuntimeInputs({
+    approved: approvedRuntimeInputs(activation?.receipt),
+    inputs: runtimeInputs.filter((input) => typeof input?.value === 'string' && input.value !== ''),
+    executionRoot,
+  });
+
+  return {
+    environment: materialized.environment,
+    record: materialized.record,
+    refused: materialized.refused,
+    directory: materialized.directory,
+    release: materialized.release,
+  };
 };
 
 /** How many contract findings a denial names before it summarizes the rest. */
@@ -975,19 +1026,27 @@ export const runHook = async ({
   // proves an executable against the same path rather than against a second
   // idea of where a check would look (`TB-044`).
   const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
-  const executor = createBoundedExecutor({
-    totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
-    resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
-    environment,
-    // The Evidence envelope's whole purpose is a bounded, redacted excerpt of
-    // what a check printed; capturing nothing would leave that purpose unmet
-    // on the one path a maintainer actually reaches (FR-EVID-003).
-    captureOutput: true,
-    runtimePath,
-  });
   let decision;
 
   try {
+    // The approved Sensitive inputs `openStore` resolved, handed to the
+    // materialization now that the root exists — the same values the redactor
+    // was armed with, so nothing reaches a check unredacted (`TB-059`).
+    const provisioned = await provisionRuntimeInputs({
+      activation, runtimeInputs: store.runtimeInputs, executionRoot,
+    });
+    const executor = createBoundedExecutor({
+      totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
+      resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
+      environment,
+      // The Evidence envelope's whole purpose is a bounded, redacted excerpt of
+      // what a check printed; capturing nothing would leave that purpose unmet
+      // on the one path a maintainer actually reaches (FR-EVID-003).
+      captureOutput: true,
+      runtimePath,
+      runtimeInputs: provisioned.environment,
+    });
+
     decision = await evaluateSeam({
       protocolVersion: PROTOCOL_VERSION,
       operation: 'evaluate',

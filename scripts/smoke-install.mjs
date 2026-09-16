@@ -364,8 +364,21 @@ try {
       throw new Error(`${agent}: framework-setup was not installed correctly`);
     }
 
-    if (!(await readFile(setupScript, 'utf8')).includes('configureProject')) {
+    const installedSetupScript = await readFile(setupScript, 'utf8');
+
+    if (!installedSetupScript.includes('configureProject')) {
       throw new Error(`${agent}: framework-setup script was not installed`);
+    }
+
+    // The installed drafter carries the Laravel evidence default (TB-059):
+    // tokens, not a sentence, so a reflow of the skill's prose cannot read as
+    // a failed install. The generated section itself is proved by the unit
+    // suite that owns `draftGatePolicy`.
+    if (
+      !installedSetupScript.includes('environment_files')
+      || !(await readFile(setupDocument, 'utf8')).includes('environment_files')
+    ) {
+      throw new Error(`${agent}: installed framework-setup does not declare the Laravel evidence default`);
     }
 
     if (!(await readFile(laravelSetupDocument, 'utf8')).includes(

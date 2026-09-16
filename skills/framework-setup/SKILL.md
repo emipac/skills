@@ -179,6 +179,14 @@ draft proposes the provider's defaults, not a decision. `budget.total_seconds`
 is the total of the timeouts the configuration proved, or `null` when none are
 proved; a `null` budget is refused by `--policy` rather than defaulted.
 
+For a Laravel profile the draft's `evidence` subcontract declares
+`sensitive_inputs: ["APP_KEY"]` and `environment_files: [".env"]`, because a
+stock Laravel suite reads its encryption key from a git-ignored `.env` the
+Gate's snapshot cannot contain. The Gate resolves that one approved name from
+the file at evaluation time, hands it to the check, and scrubs it from
+Evidence; names and paths only, never a value. Remove the two entries if the
+project keeps its key elsewhere. Every other profile drafts `evidence: {}`.
+
 Prepare the five-subcontract policy as JSON, then preview without `--confirm`:
 
 ```bash

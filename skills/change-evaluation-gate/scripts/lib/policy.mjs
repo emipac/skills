@@ -92,8 +92,23 @@ const isContainedRootList = (value) => Array.isArray(value) && value.every(isCon
  */
 export const SENSITIVE_INPUTS_PROPERTY = 'sensitive_inputs';
 
-/** Where the value of a declared Sensitive input is read at evaluation time. */
+/** Where the value of a declared Sensitive input is read first at evaluation time. */
 export const SENSITIVE_INPUT_SOURCE = 'environment';
+
+/**
+ * Where a project declares the environment files a Sensitive input may be
+ * resolved from when the runner's own environment does not set it.
+ *
+ * It sits beside `sensitive_inputs`, in `evidence`, because it changes only
+ * where an already-declared name is looked up — never what a check may do.
+ * The name says what the entry is: files in environment-file grammar
+ * (`NAME=value`) that hold environment variables, the words `FR-CFG-006`
+ * itself uses ("approved environment files"). A declared file is never copied
+ * anywhere; only the declared, approved names are ever read from it, and the
+ * value goes to the isolated materialization and the check's environment,
+ * nowhere else (`SG-SECRET-001`, `TB-059`).
+ */
+export const ENVIRONMENT_FILES_PROPERTY = 'environment_files';
 
 /**
  * An environment variable name, as every supported platform spells one. The
@@ -116,6 +131,21 @@ export const declaredSensitiveInputs = (policy) => {
   return declared
     .filter(isEnvironmentName)
     .map((name) => ({ name, source: SENSITIVE_INPUT_SOURCE }));
+};
+
+/**
+ * The environment files a policy declares, in declaration order, as
+ * repository-relative paths. Nothing is read here; a path that could leave
+ * the repository is dropped exactly as validation would refuse it.
+ */
+export const declaredEnvironmentFiles = (policy) => {
+  const declared = policy?.evidence?.[ENVIRONMENT_FILES_PROPERTY];
+
+  if (!Array.isArray(declared)) {
+    return [];
+  }
+
+  return declared.filter(isContainedRoot);
 };
 
 const error = (code, path, message) => ({ code, path, message });
@@ -357,6 +387,31 @@ export const validateGatePolicy = (policy) => {
         'gate-policy-evidence-invalid',
         `evaluation_gate.evidence.${SENSITIVE_INPUTS_PROPERTY}`,
         'A Sensitive input is declared more than once.',
+      ));
+    }
+  }
+
+  // Where a declared name may be resolved from besides the runner's own
+  // environment is likewise the project's declaration: a list of
+  // repository-relative files that stay inside the repository. Whether a
+  // declared file is tracked is judged where the repository is, at
+  // resolution time, and a tracked file is refused there rather than read: it
+  // is already in the snapshot, and reading it again would be a second source
+  // (`FR-CFG-006`, `TB-059`).
+  const environmentFiles = policy.evidence?.[ENVIRONMENT_FILES_PROPERTY];
+
+  if (environmentFiles !== undefined) {
+    if (!isContainedRootList(environmentFiles)) {
+      errors.push(error(
+        'gate-policy-evidence-invalid',
+        `evaluation_gate.evidence.${ENVIRONMENT_FILES_PROPERTY}`,
+        'Environment files must be listed as repository-relative paths that stay inside the repository; a value is never declared here.',
+      ));
+    } else if (new Set(environmentFiles).size !== environmentFiles.length) {
+      errors.push(error(
+        'gate-policy-evidence-invalid',
+        `evaluation_gate.evidence.${ENVIRONMENT_FILES_PROPERTY}`,
+        'An environment file is declared more than once.',
       ));
     }
   }

@@ -13,10 +13,12 @@ import {
   validateDecision,
 } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
 import {
+  ENVIRONMENT_FILES_PROPERTY,
   GATE_POLICY_SUBCONTRACTS,
   SENSITIVE_INPUTS_PROPERTY,
   authorizeDecision,
   bindingOf,
+  declaredEnvironmentFiles,
   declaredSensitiveInputs,
   validateGatePolicy,
 } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
@@ -455,6 +457,73 @@ test('TB-045 FR-CFG-006 / NFR-SEC-003: Sensitive inputs are declared as environm
   const sixth = validateGatePolicy({ ...policy({}), secrets: { sensitive_inputs: ['APP_KEY'] } });
 
   assert.equal(sixth.some((issue) => issue.code === 'gate-policy-subcontract-unknown'), true);
+});
+
+/**
+ * `TB-059`, `FR-CFG-006`. Beside the names, a project declares the environment
+ * files a name may be resolved from: repository-relative paths that stay inside
+ * the repository, validated at their own path with their own diagnostic. Whether
+ * a path is tracked is a repository fact, judged at resolution time, not here.
+ */
+test('TB-059 FR-CFG-006: environment files are declared beside sensitive inputs as contained repository-relative paths', () => {
+  const policy = (evidence) => ({
+    checks: { required: ['node-package.broad-tests.test'], advisory: [] },
+    budget: { total_seconds: 600 },
+    bypass: { enabled: false, marker: null },
+    execution: {},
+    evidence,
+  });
+
+  assert.equal(ENVIRONMENT_FILES_PROPERTY, 'environment_files');
+  assert.deepEqual(validateGatePolicy(policy({ environment_files: [] })), []);
+  assert.deepEqual(
+    validateGatePolicy(policy({ sensitive_inputs: ['APP_KEY'], environment_files: ['.env', 'config/local.env'] })),
+    [],
+  );
+
+  // The projection: declaration order, nothing read, nothing declared projects
+  // to nothing.
+  assert.deepEqual(declaredEnvironmentFiles(policy({})), []);
+  assert.deepEqual(declaredEnvironmentFiles(null), []);
+  assert.deepEqual(
+    declaredEnvironmentFiles(policy({ environment_files: ['.env.testing', '.env'] })),
+    ['.env.testing', '.env'],
+  );
+
+  // A path that could leave the repository, an absolute path, a value, or
+  // anything that is not a list of paths is refused at its own path.
+  for (const invalid of [
+    '.env',
+    { '.env': 'APP_KEY' },
+    ['../.env'],
+    ['secrets/../../.env'],
+    ['/etc/environment'],
+    ['C:\\secrets\\.env'],
+    [''],
+    [null],
+    [{ path: '.env' }],
+  ]) {
+    const issues = validateGatePolicy(policy({ environment_files: invalid }));
+
+    assert.equal(issues.length, 1, `expected one issue for ${JSON.stringify(invalid)}`);
+    assert.equal(issues[0].code, 'gate-policy-evidence-invalid');
+    assert.equal(issues[0].path, 'evaluation_gate.evidence.environment_files');
+  }
+
+  const duplicated = validateGatePolicy(policy({ environment_files: ['.env', '.env'] }));
+
+  assert.equal(duplicated.length, 1);
+  assert.equal(duplicated[0].path, 'evaluation_gate.evidence.environment_files');
+  assert.match(duplicated[0].message, /more than once/);
+
+  // Each declaration is judged at its own path, so a reader is told which
+  // one to fix.
+  const both = validateGatePolicy(policy({ sensitive_inputs: ['APP KEY'], environment_files: ['../.env'] }));
+
+  assert.deepEqual(
+    both.map((issue) => issue.path).sort(),
+    ['evaluation_gate.evidence.environment_files', 'evaluation_gate.evidence.sensitive_inputs'],
+  );
 });
 
 test('AC-POL-002 / FR-POL-005: a per-check timeout terminates the whole process tree, not only the direct child', async () => {

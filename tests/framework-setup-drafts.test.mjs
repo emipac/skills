@@ -372,6 +372,48 @@ test('FR-PROF-010: the Laravel policy draft binds the provider plan policy for e
   );
 });
 
+/**
+ * `TB-059`, `FR-LIFE-013`, `FR-CFG-006`. A stock Laravel suite reads its key
+ * from a git-ignored `.env` the snapshot cannot contain, so the Laravel draft
+ * declares the one Sensitive input and the one file every such project needs.
+ * Names and paths only; a non-Laravel draft is unchanged; repeat drafts are
+ * byte-identical.
+ */
+test('TB-059 FR-LIFE-013: the Laravel draft declares APP_KEY and .env as evidence defaults, byte-identically on repeat', async (context) => {
+  const root = await v4Project(context, { laravel: true, commandLines: singleCommandLines });
+  const before = await readFile(path.join(root, CONFIGURATION_FILE), 'utf8');
+  const first = await draftGatePolicy({ projectRoot: root });
+  const second = await draftGatePolicy({ projectRoot: root });
+
+  assert.deepEqual(first.evidence, { sensitive_inputs: ['APP_KEY'], environment_files: ['.env'] });
+  assert.equal(JSON.stringify(first), JSON.stringify(second), 'repeat drafts are byte-identical.');
+  assert.equal(JSON.stringify(first).includes('value'), false, 'a value is never drafted.');
+  assert.deepEqual(validateGatePolicy(first), []);
+  assert.equal(await readFile(path.join(root, CONFIGURATION_FILE), 'utf8'), before, 'drafting writes nothing.');
+
+  // Drafting it into a file and previewing the configuration carries the
+  // declaration into the generated section exactly as drafted.
+  const preview = await previewGateConfiguration({ projectRoot: root, policy: first });
+
+  assert.match(
+    preview.proposedConfiguration,
+    /^ {2}evidence: \{"sensitive_inputs":\["APP_KEY"\],"environment_files":\["\.env"\]\}$/m,
+  );
+  assert.equal(
+    (await previewGateConfiguration({ projectRoot: root, policy: second })).proposedConfiguration,
+    preview.proposedConfiguration,
+  );
+});
+
+test('TB-059 FR-LIFE-013: a non-Laravel draft declares no evidence defaults, exactly as before', async (context) => {
+  const root = await v4Project(context, { node: true, commandLines: singleCommandLines });
+  const draft = await draftGatePolicy({ projectRoot: root });
+
+  assert.deepEqual(draft.evidence, {});
+  assert.equal(JSON.stringify(draft).includes('APP_KEY'), false);
+  assert.equal(JSON.stringify(draft).includes('.env'), false);
+});
+
 test('SG-OWNER-001: framework-setup keeps no copy of the check catalogue', async () => {
   const source = await readFile(
     fileURLToPath(new URL('../skills/framework-setup/scripts/configure.mjs', import.meta.url)),
