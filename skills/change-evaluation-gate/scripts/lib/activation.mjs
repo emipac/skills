@@ -28,6 +28,7 @@ import { describeAdapter } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
+import { DEFAULT_DEPENDENCY_PROVISIONING } from './snapshot.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
 export const ACTIVATION_STEPS = Object.freeze([
@@ -1282,6 +1283,13 @@ export const previewActivation = async (request, dependencies = {}) => {
     // granted against this preview, so a maintainer sees which installed
     // directories their own tools will reach (TB-030, FR-LIFE-004).
     dependencyRoots: [...(request.configuration?.policy?.execution?.dependency_roots ?? [])],
+    // And how those directories will be provided. The difference is visible to
+    // a maintainer before consent because it is visible to their tools
+    // afterwards: under `link` a tool that resolves a path to its realpath
+    // reads their own clone, and under `copy` it reads the snapshot
+    // (`FR-CFG-002`, `FR-LIFE-004`).
+    dependencyProvisioning: request.configuration?.policy?.execution?.dependency_provisioning
+      ?? DEFAULT_DEPENDENCY_PROVISIONING,
     unresolved: described.runners.unresolved,
     adapters: described.adapters,
     runtimeInputs: described.runtimeInputs,

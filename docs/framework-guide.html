@@ -1167,7 +1167,11 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
             </tr>
             <tr>
               <td><code>execution.dependency_roots</code></td>
-              <td>Repository-relative directories your checks need but Git does not track — <code>vendor</code>, <code>node_modules</code>, and anything a build step generates. They are linked beside the snapshot rather than copied, and are never graded.</td>
+              <td>Repository-relative directories your checks need but Git does not track — <code>vendor</code>, <code>node_modules</code>, and anything a build step generates. They are provided beside the snapshot, and are never graded.</td>
+            </tr>
+            <tr>
+              <td><code>execution.dependency_provisioning</code></td>
+              <td>How those directories are provided: <code>link</code> (the default — a symbolic link to your own installation, provided instantly) or <code>copy</code> (a real directory). Declare <code>copy</code> when your tooling resolves a path to its realpath. It is never detected for you.</td>
             </tr>
             <tr>
               <td><code>evidence</code></td>
@@ -1185,6 +1189,23 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           finds nothing there unless you name its directory in
           <code>execution.dependency_roots</code>. This is the single most likely reason a check
           that passes in your terminal does not pass in the Gate.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">If your tool asks where a file <em>is</em></span>
+        <p>
+          A dependency root is linked by default, and a link is reachable — which is all most
+          tools need. A tool that resolves a path to its realpath needs more: it follows the link
+          out of the snapshot and concludes your project lives in your own clone, not in the tree
+          it is grading. PHP's <code>__DIR__</code> inside an autoloader does this, so a test
+          runner derives the wrong project root; a TypeScript import resolver does it, so your own
+          aliased imports are classified as external and an import-order rule fails code that is
+          correct. If your formatter, static analysis, or tests fail only under the Gate and pass
+          by hand, set <code>execution.dependency_provisioning</code> to <code>copy</code>. It
+          costs real time and real disk on every commit — a tree of thirty-four thousand files
+          measured at about ten seconds to provide, two to clean up, and 373 MiB — which is why
+          it is yours to declare rather than ours to assume.
         </p>
       </div>
 

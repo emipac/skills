@@ -2,7 +2,7 @@
 /**
  * `gate-runtime-portability` — the release qualification matrix.
  *
- * This capability executes the twelve runtime portability fixtures `AC-PORT-001`
+ * This capability executes the thirteen runtime portability fixtures `AC-PORT-001`
  * names against throwaway Git repositories on the environment it is running on,
  * runs the shared compatibility baseline for every declared adapter, gathers the
  * timing and attempt evidence `RISK-003` and `RISK-007` stay open against, and
@@ -61,6 +61,7 @@ import {
   validateCommandDescriptor,
 } from './lib/command-descriptor.mjs';
 import { evaluate } from './lib/evaluate.mjs';
+import { captureSnapshot, verifySnapshot } from './lib/snapshot.mjs';
 import { createExecutionRoot, releaseExecutionRoot } from './lib/hook-runner.mjs';
 import { PROTOCOL_VERSION } from './lib/evaluation-contract.mjs';
 import { openEvidenceStore, resolveGitCommonDirectory } from './lib/evidence-store.mjs';
@@ -188,7 +189,7 @@ const executeCheck = async ({
 };
 
 /* ------------------------------------------------------------------ *
- * The twelve fixtures AC-PORT-001 names.
+ * The thirteen fixtures AC-PORT-001 names.
  * ------------------------------------------------------------------ */
 
 /**
@@ -845,6 +846,131 @@ const linkedTemporaryRootFixture = async () => {
   };
 };
 
+/**
+ * `dependency-provisioning-realpath` — a check whose tool resolves a dependency
+ * to its realpath resolves inside the execution root under `copy`, and outside
+ * it under `link`, on this environment (`FR-EVAL-004`, `FR-CFG-002`,
+ * `SG-EVAL-001`, `NFR-PORT-002`).
+ *
+ * Both strategies are executed here, on the same clone, with nothing else
+ * changed. That is the whole of the defect and the whole of the fix: a link is
+ * reachable, which is all any earlier fixture ever asked, and it is reachable
+ * at an address in the maintainer's own repository, which is what a formatter,
+ * a static analyser, and a test runner each acted on and reported back as a
+ * fault in the code they were grading.
+ *
+ * The question is put to a real tool in a real child process: this runtime's
+ * own module resolver, which reports the resolved location of the module it
+ * loaded. No operating system is named and no filesystem is detected — the
+ * strategy is the declaration the capture is given.
+ */
+const dependencyProvisioningFixture = async () => {
+  const declared = 'installed';
+  const locator = 'export const loadedFrom = import.meta.dirname;\n';
+  const source = await repositoryWithHistory('gate-portability-provisioning-');
+
+  await writeFile(path.join(source, '.gitignore'), `${declared}/\n`);
+  await writeFile(
+    path.join(source, 'grade.mjs'),
+    [
+      `import { loadedFrom } from './${declared}/locate.mjs';`,
+      'process.stdout.write(loadedFrom);',
+    ].join('\n'),
+  );
+  await mkdir(path.join(source, declared), { recursive: true });
+  await writeFile(path.join(source, declared, 'locate.mjs'), locator);
+  await git(source, ['add', '--all']);
+  await commit(source, 'a project whose tool asks where its dependency lives');
+
+  const findings = [];
+  const observed = {};
+  const canonicalSource = await realpath(source);
+
+  for (const strategy of ['link', 'copy']) {
+    const executionRoot = await temporaryDirectory(`gate-portability-provisioning-${strategy}-`);
+    const captured = await captureSnapshot({
+      repositoryRoot: source,
+      kind: 'git-index',
+      executionRoot,
+      runGit: (repositoryRoot, args) => runGitForRepository(repositoryRoot, args),
+      dependencyRoots: [declared],
+      dependencyProvisioning: strategy,
+    });
+
+    if (!captured.captured) {
+      findings.push(`the ${strategy} snapshot was not captured: ${captured.detail}`);
+
+      continue;
+    }
+
+    if (captured.dependencies.provisioning !== strategy
+      || captured.dependencies.provided.length !== 1) {
+      findings.push(`the ${strategy} capture provided ${JSON.stringify(captured.dependencies)}.`);
+
+      continue;
+    }
+
+    const attempt = await executeCheck({
+      command: descriptorFor({ args: ['grade.mjs'] }),
+      executionRoot,
+    });
+
+    if (attempt.exitCode !== 0) {
+      findings.push(`the ${strategy} check exited ${attempt.exitCode}: ${attempt.output}`);
+
+      continue;
+    }
+
+    observed[strategy] = {
+      executionRoot,
+      snapshotId: captured.snapshot.id,
+      loadedFrom: (attempt.output ?? '').trim(),
+      // SG-EVAL-001: a provided root is outside the identity under both
+      // strategies, so the immutability re-check still holds after a tool has
+      // written inside its own dependency tree.
+      graded: captured.snapshot.paths.some((relative) => relative.startsWith(`${declared}/`)),
+      verified: (await verifySnapshot(captured.snapshot)).verified,
+    };
+  }
+
+  if (observed.link && !isInside(canonicalSource, observed.link.loadedFrom)) {
+    findings.push(`under link the tool resolved its dependency to ${observed.link.loadedFrom}, which is not the repository the link points at; the fixture is not reproducing the condition.`);
+  }
+
+  if (observed.copy && !isInside(observed.copy.executionRoot, observed.copy.loadedFrom)) {
+    findings.push(`under copy the tool resolved its dependency to ${observed.copy.loadedFrom}, outside the execution root ${observed.copy.executionRoot} it is grading.`);
+  }
+
+  if (observed.link && observed.copy && observed.link.snapshotId !== observed.copy.snapshotId) {
+    findings.push('the identity of an unchanged tree differed between the two strategies.');
+  }
+
+  for (const [strategy, entry] of Object.entries(observed)) {
+    if (entry.graded) {
+      findings.push(`under ${strategy} a provided dependency root entered the snapshot path list.`);
+    }
+
+    if (!entry.verified) {
+      findings.push(`under ${strategy} the execution root did not re-identify after the check ran.`);
+    }
+  }
+
+  if (!observed.link || !observed.copy) {
+    findings.push('one of the two strategies produced no observation at all.');
+  }
+
+  return {
+    ok: findings.length === 0,
+    detail: findings.length === 0
+      ? `The same tool, unchanged, resolved its dependency to ${observed.link.loadedFrom} under link and to ${observed.copy.loadedFrom} under copy; the snapshot identity, its path list, and its re-check were the same under both.`
+      : findings.join(' '),
+    observed: {
+      link: observed.link?.loadedFrom ?? null,
+      copy: observed.copy?.loadedFrom ?? null,
+    },
+  };
+};
+
 const FIXTURES = Object.freeze({
   executable: executableFixture,
   stream: streamFixture,
@@ -858,6 +984,7 @@ const FIXTURES = Object.freeze({
   'source-immutability': sourceImmutabilityFixture,
   'non-interactive-shell': nonInteractiveFixture,
   'linked-temporary-root': linkedTemporaryRootFixture,
+  'dependency-provisioning-realpath': dependencyProvisioningFixture,
 });
 
 /* ------------------------------------------------------------------ *

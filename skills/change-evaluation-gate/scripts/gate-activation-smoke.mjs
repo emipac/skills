@@ -1525,6 +1525,128 @@ const vendorBinaryCommit = async () => {
   return { name: 'vendor-binary-commit', ok: findings.length === 0, findings };
 };
 
+/** The directory this fixture project installs its dependencies into. */
+const PROVISIONED_ROOT = 'installed';
+
+/** The module the required check loads out of that root, which says where it is. */
+const PROVISIONED_LOCATOR = `${PROVISIONED_ROOT}/locate.mjs`;
+
+/**
+ * A required check that asks its own tooling where the code it is grading lives.
+ *
+ * It resolves the module it loaded out of the project's dependency root and
+ * fails when that module is outside the execution root — which is precisely the
+ * question no fixture in this suite had ever asked. Every earlier one asked
+ * whether the dependency was reachable, and a link is reachable.
+ *
+ * This is a faithful stand-in rather than a smaller one: PHP resolving `__DIR__`
+ * inside an autoloader, a TypeScript import resolver classifying an aliased
+ * import by realpath, and this runtime's own module resolver all compute a
+ * project root the same way, and all three answer differently depending on how
+ * the root was provided.
+ */
+const PROVISIONING_CHECK_SCRIPT = [
+  "import { realpathSync } from 'node:fs';",
+  "import path from 'node:path';",
+  '',
+  `import { loadedFrom } from '../${PROVISIONED_LOCATOR}';`,
+  '',
+  'const executionRoot = realpathSync(process.cwd());',
+  'const inside = loadedFrom === executionRoot',
+  '  || loadedFrom.startsWith(`${executionRoot}${path.sep}`);',
+  '',
+  'process.stdout.write(`dependency resolved to ${loadedFrom}\\n`);',
+  'process.stdout.write(`execution root is ${executionRoot}\\n`);',
+  'process.exitCode = inside ? 0 : 1;',
+  '',
+].join('\n');
+
+const PROVISIONED_FILES = {
+  // Git-ignored in a real clone, so it is in no snapshot unless the project
+  // declared the root and the gate provided it.
+  '.gitignore': { contents: `${PROVISIONED_ROOT}/\n` },
+  'tools/check.mjs': { contents: PROVISIONING_CHECK_SCRIPT },
+  [PROVISIONED_LOCATOR]: { contents: 'export const loadedFrom = import.meta.dirname;\n' },
+};
+
+const provisioningPolicy = (strategy) => ({
+  ...GATE_POLICY,
+  execution: {
+    budget_skippable: [],
+    dependency_roots: [PROVISIONED_ROOT],
+    ...(strategy === null ? {} : { dependency_provisioning: strategy }),
+  },
+});
+
+/**
+ * An activated clone whose tool resolves paths blocks its own good code under
+ * `link`, and allows it under `copy`, with nothing else changed.
+ *
+ * This is the defect end to end and through a real commit: the maintainer's code
+ * is fine, their configuration is fine, their tool is fine, and the commit is
+ * refused anyway because the tool was shown a dependency living in a different
+ * tree. Both halves run here — the failing one because a fix nobody can watch
+ * fail is a fix nobody can trust (`FR-EVAL-004`, `FR-CFG-002`, `AC-EVAL-001`).
+ */
+const dependencyProvisioningCommit = async () => {
+  const findings = [];
+  const observed = {};
+
+  for (const strategy of ['link', 'copy']) {
+    const root = await fixtureRepository({
+      policy: provisioningPolicy(strategy),
+      files: PROVISIONED_FILES,
+    });
+    const store = await storeFor(root);
+    const { preview, result } = await activateFixture(root, store);
+
+    check(
+      findings,
+      result.activated === true,
+      `Activation under ${strategy} did not succeed: ${result.reasonCode}.`,
+    );
+    // Consent is granted against a preview that says how the roots will be
+    // provided, because that is what decides what the maintainer's tools will
+    // conclude afterwards (`FR-LIFE-004`).
+    check(
+      findings,
+      preview.dependencyProvisioning === strategy,
+      `The preview said the roots would be provided by ${preview.dependencyProvisioning}, not ${strategy}.`,
+    );
+
+    if (result.activated !== true) {
+      continue;
+    }
+
+    await writeFile(path.join(root, SOURCE), `baseline\nunder ${strategy}\n`, 'utf8');
+    await git(root, ['add', '--all']);
+
+    observed[strategy] = await attemptCommit(root, `code that is not broken, graded under ${strategy}`);
+  }
+
+  // The red half. The code is unbroken, the check is correct, and the commit is
+  // refused — by an environment fault that arrives dressed as a code fault.
+  check(
+    findings,
+    observed.link?.failed === true,
+    'Under link the tool resolved its dependency inside the execution root; this capability is no longer observing the defect it exists to observe.',
+  );
+  check(
+    findings,
+    (observed.link?.output ?? '').includes(REQUIRED_CHECK),
+    `The link denial does not name the failing required check: ${observed.link?.output}.`,
+  );
+
+  // The green half. One declared word, nothing else changed.
+  check(
+    findings,
+    observed.copy?.failed === false,
+    `Under copy the same unbroken code was still refused: ${observed.copy?.output}.`,
+  );
+
+  return { name: 'dependency-provisioning-commit', ok: findings.length === 0, findings };
+};
+
 /** Entries the self-test subject would leave behind if it left anything. */
 const selfTestSubjects = async () => (await readdir(tmpdir()).catch(() => []))
   .filter((entry) => entry.startsWith('gate-hook-program-self-test-'));
@@ -2358,6 +2480,7 @@ const main = async () => {
       await rollbackLeavesNoTrace(),
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),
+      await dependencyProvisioningCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
       await unprovedPrerequisiteNamesWhatWasMissing(),

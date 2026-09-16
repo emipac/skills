@@ -48,6 +48,7 @@ import {
 } from './runtime-binding.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
 import {
+  DEFAULT_DEPENDENCY_PROVISIONING,
   ISOLATION,
   captureSnapshot,
   unavailableDependencyRoots,
@@ -120,6 +121,7 @@ const buildDecision = ({
   surfaces = [],
   runtimeBinding = null,
   bypass = null,
+  dependencies = null,
 }) => {
   const purpose = scope.scope;
   const contractId = scope.contractId;
@@ -191,6 +193,20 @@ const buildDecision = ({
       sourceMutable: false,
       historyVisibility: HISTORY_VISIBILITY,
       cachePolicy: CACHE_POLICY,
+      // What the checks were given besides the snapshot, and how. A check that
+      // failed because a declared root was never provided is diagnosable from
+      // the decision itself, without rerunning it, and a check that behaved
+      // differently between two clones can be told which strategy provided its
+      // dependencies (`NFR-OPER-001`). It is environment, not subject: no
+      // provided root is a graded path, so none of this moves the snapshot
+      // identity the environment names.
+      dependencies: dependencies ?? {
+        provisioning: policy?.execution?.dependency_provisioning
+          ?? DEFAULT_DEPENDENCY_PROVISIONING,
+        provided: [],
+        missing: [],
+        refused: [],
+      },
     },
     configurationId,
     profile,
@@ -419,6 +435,12 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     // project's own declaration. Gate core provides what it is told to provide
     // and knows nothing about which stack asked (SG-OWNER-001, FR-EVAL-001).
     dependencyRoots: policy?.execution?.dependency_roots ?? [],
+    // And how it declared they should be provided. A project whose tooling
+    // resolves a path to its realpath declares `copy` so that the tool
+    // concludes the code it is grading lives in the execution root; a project
+    // that declares nothing keeps the behaviour it already had (`FR-CFG-002`).
+    dependencyProvisioning: policy?.execution?.dependency_provisioning
+      ?? DEFAULT_DEPENDENCY_PROVISIONING,
   });
 
   if (!capture.captured) {
@@ -670,6 +692,9 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     surfaces,
     runtimeBinding,
     delegation: resolution.delegation,
+    // Established by materialization, not re-derived: what was provided, what
+    // was not, and by which strategy (`NFR-OPER-001`).
+    dependencies: capture.dependencies,
   };
 
   return persistEvidence(
@@ -832,6 +857,16 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     surfaces: [],
     runtimeBinding: null,
     delegation: resolution.delegation,
+    // Nothing was materialized on this path, so nothing was provided. What the
+    // clone could not have offered is still named, by the same names the graded
+    // path uses (`NFR-OPER-001`, `TB-039`).
+    dependencies: {
+      provisioning: policy?.execution?.dependency_provisioning
+        ?? DEFAULT_DEPENDENCY_PROVISIONING,
+      provided: [],
+      missing: unavailable.missing,
+      refused: unavailable.refused,
+    },
   };
   const decision = buildDecision(graded);
   const store = dependencies.evidenceStore ?? null;

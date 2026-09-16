@@ -16,7 +16,7 @@ therefore cannot be configured into existence (`FR-POL-004`).
 | `checks` | `required` and `advisory` check identities |
 | `budget` | `total_seconds`, the confirmed total evaluation budget |
 | `bypass` | `enabled`, optional `require_reference`, and the commit-visible `marker` |
-| `execution` | execution policy, including `budget_skippable` advisory identities and the `dependency_roots` a check needs provided |
+| `execution` | execution policy, including `budget_skippable` advisory identities, the `dependency_roots` a check needs provided, and the `dependency_provisioning` strategy that provides them |
 | `evidence` | evidence policy |
 
 No subcontract may carry a command, runner, argument list, working directory,
@@ -77,6 +77,48 @@ of the repository, is refused by this contract. A declared root the clone has
 not installed is `dependency-root-unavailable` and denies, rather than becoming
 a fatal error from inside somebody's tool. Nothing is ever installed by the
 gate.
+
+`execution.dependency_provisioning` says *how* those roots are provided. It is
+`link` or `copy`, and it defaults to `link` when absent, so a clone that
+declares nothing behaves exactly as it always did.
+
+| Strategy | What a check is given | When a project declares it |
+| --- | --- | --- |
+| `link` | a symbolic link to the clone's own installation | the default; nothing is copied and the root costs nothing to provide |
+| `copy` | a real directory beside the snapshot | the project's tooling resolves a path to its realpath |
+
+The difference is only visible to a tool that asks where a file *is*. Under
+`link` such a tool follows the link out of the execution root and concludes that
+the project it is grading is the original repository — so PHP's `__DIR__` inside
+an autoloader reports the wrong project root, a TypeScript import resolver
+classifies the project's own aliased imports as external, and this runtime's
+module resolver reports a module's realpath outside the tree being graded. Each
+one then reports an environment fault as a fault in the code, which is the
+failure this declaration exists to end.
+
+The strategy is **declared, never detected**. The gate does not read the
+operating system or the filesystem and choose (`NFR-PORT-002`): a project on a
+filesystem that supports copy-on-write clones and one that does not write the
+same word and get the same behaviour at different speeds.
+
+`copy` costs real time and real disk against the budget, so it is declared
+rather than assumed. A dependency tree of about thirty-four thousand files was
+measured at roughly ten seconds to provide, about two to reclaim, and 373 MiB of
+free space per evaluation. The copy asks for a copy-on-write clone, but that is
+a request the runtime may decline: on the environment this release claims it is
+declined silently, and the bytes are really written. Nothing depends on the
+answer — the copy succeeds either way — which is why the strategy that was
+applied is recorded and the clone mechanism underneath it is not.
+
+A `copy` that cannot be performed is never quietly served as a link. The root is
+reported `dependency-root-unavailable` exactly as an uninstalled one is, and the
+partial tree the attempt created is removed. A strategy this gate cannot perform
+at all is one `configuration-invalid` diagnostic, not a fallback.
+
+What was provided, what was not, what was refused, and which strategy provided
+them all reach the decision at `environment.dependencies`, so a check that
+failed because a root was unavailable is diagnosable without rerunning anything
+(`NFR-OPER-001`).
 
 ## Bypass
 
