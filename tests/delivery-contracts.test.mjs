@@ -14,6 +14,7 @@ import test from 'node:test';
 import { auditFeatureSpec } from '../skills/to-spec/scripts/audit-feature-spec.mjs';
 import {
   auditTicketSet,
+  parseBlockedBy,
   verificationLayers,
 } from '../skills/to-tickets/scripts/audit-ticket-contracts.mjs';
 import {
@@ -329,6 +330,137 @@ test('rejects blocker cycles and unknown blockers', () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.code === 'blocker-cycle'));
   assert.ok(result.errors.some((error) => error.code === 'unknown-blocker'));
+});
+
+/**
+ * Every ticket in this repository explains what it builds on inside
+ * `## Blocked By` — "None. `TB-004` delivered … and is done." Reading every
+ * mentioned id as an edge turned that house style into false blockers, a
+ * frontier that excluded most of the set, and a cycle nobody could locate.
+ */
+test('reads a Blocked By section that begins with None as unblocked whatever it mentions', () => {
+  const tickets = [
+    { id: 'TB-001', contents: ticket({ id: 'TB-001', blockedBy: 'None.' }) },
+    {
+      id: 'TB-002',
+      contents: ticket({
+        id: 'TB-002',
+        blockedBy: 'None. `TB-001` delivered the seam and `TB-003` is also done.',
+      }),
+    },
+    {
+      id: 'TB-003',
+      contents: ticket({
+        id: 'TB-003',
+        blockedBy: 'None. `TB-002` is done and defines the protocol\n`TB-001` — whose seam this extends — is done.',
+      }),
+    },
+  ];
+  const result = auditTicketSet(tickets, { contractContents: featureSpec });
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.metrics.frontier, ['TB-001', 'TB-002', 'TB-003']);
+});
+
+test('reads only leading ticket ids as blockers and treats the rest of the line as explanation', () => {
+  assert.deepEqual(
+    parseBlockedBy(['', '`TB-004` — policy is applied after `TB-001` and `TB-002`.', '']).blockers,
+    ['TB-004'],
+  );
+  assert.deepEqual(
+    parseBlockedBy([
+      '- `TB-002` — evaluation consumes the configured Gate policy.',
+      '- `TB-003` — evaluation consumes normalized descriptors from `TB-001`.',
+    ]).blockers,
+    ['TB-002', 'TB-003'],
+  );
+  assert.deepEqual(
+    parseBlockedBy(['`TB-054`, which introduces the `copy` strategy `TB-050` made cheap.']).blockers,
+    ['TB-054'],
+  );
+  assert.deepEqual(parseBlockedBy(['- TB-001', '- TB-002']).blockers, ['TB-001', 'TB-002']);
+  assert.deepEqual(parseBlockedBy(['None — can start immediately.']), {
+    declaredNone: true,
+    blockers: [],
+    contradictions: [],
+  });
+  assert.deepEqual(parseBlockedBy(['<!-- template', '- `TB-001` — example', '-->', '']), {
+    declaredNone: false,
+    blockers: [],
+    contradictions: [],
+  });
+});
+
+test('lets None win over a bulleted blocker in the same section and warns', () => {
+  const tickets = [
+    { id: 'TB-001', contents: ticket({ id: 'TB-001' }) },
+    {
+      id: 'TB-002',
+      contents: ticket({ id: 'TB-002', blockedBy: 'None.\n\n- `TB-001` — the seam.' }),
+    },
+  ];
+  const result = auditTicketSet(tickets, { contractContents: featureSpec });
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.metrics.frontier, ['TB-001', 'TB-002']);
+  assert.ok(result.warnings.some((warning) => (
+    warning.code === 'contradictory-blocker'
+    && warning.message.includes('TB-002')
+    && warning.message.includes('TB-001')
+  )));
+});
+
+test('names the tickets in a genuine blocker cycle', () => {
+  const tickets = [
+    {
+      id: 'TB-018',
+      contents: ticket({ id: 'TB-018', blockedBy: '`TB-020` — defines the self-test protocol.' }),
+    },
+    {
+      id: 'TB-020',
+      contents: ticket({ id: 'TB-020', blockedBy: '`TB-018` — supplies the runner.' }),
+    },
+  ];
+  const result = auditTicketSet(tickets, { contractContents: featureSpec });
+
+  assert.deepEqual(
+    result.errors.filter((error) => error.code === 'blocker-cycle'),
+    [{
+      code: 'blocker-cycle',
+      message: 'Ticket blocker graph contains a cycle: TB-018 → TB-020 → TB-018',
+    }],
+  );
+});
+
+test('still reports a self-blocker declared as a leading token', () => {
+  const result = auditTicketSet(
+    [{ id: 'TB-001', contents: ticket({ id: 'TB-001', blockedBy: '`TB-001` — itself.' }) }],
+    { contractContents: featureSpec },
+  );
+
+  assert.ok(result.errors.some((error) => error.code === 'self-blocker'));
+  assert.ok(result.errors.some((error) => error.code === 'blocker-cycle'));
+});
+
+test('cross-checks the header Blocked by line against the section without adding edges', () => {
+  const withHeader = (id, header, blockedBy) => ticket({ id, blockedBy }).replace(
+    '**Status:** ready-for-agent',
+    `Tracker ID: ${id.toLowerCase()}-slug\nBlocked by: ${header}\n\n**Status:** ready-for-agent`,
+  );
+  const tickets = [
+    { id: 'TB-001', contents: withHeader('TB-001', '', 'None.') },
+    { id: 'TB-002', contents: withHeader('TB-002', 'tb-001-slug', '`TB-001` — the seam.') },
+    { id: 'TB-003', contents: withHeader('TB-003', 'TB-001', 'None. `TB-001` is done.') },
+  ];
+  const result = auditTicketSet(tickets, { contractContents: featureSpec });
+
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.metrics.frontier, ['TB-001', 'TB-003']);
+  assert.deepEqual(result.warnings, [{
+    code: 'blocker-header-mismatch',
+    message: 'TB-003 header Blocked by (TB-001) disagrees with its Blocked By section (none)',
+  }]);
 });
 
 test('rejects a ready ticket with an unresolved blocking assumption', () => {
