@@ -28,7 +28,7 @@ import { describeAdapter } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
-import { DEFAULT_DEPENDENCY_PROVISIONING } from './snapshot.mjs';
+import { recordedProvisioning } from './snapshot.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
 export const ACTIVATION_STEPS = Object.freeze([
@@ -1287,9 +1287,14 @@ export const previewActivation = async (request, dependencies = {}) => {
     // a maintainer before consent because it is visible to their tools
     // afterwards: under `link` a tool that resolves a path to its realpath
     // reads their own clone, and under `copy` it reads the snapshot
-    // (`FR-CFG-002`, `FR-LIFE-004`).
-    dependencyProvisioning: request.configuration?.policy?.execution?.dependency_provisioning
-      ?? DEFAULT_DEPENDENCY_PROVISIONING,
+    // (`FR-CFG-002`, `FR-LIFE-004`). A scalar declaration previews as the
+    // scalar; a per-root map previews complete, every declared root with the
+    // strategy it will receive, so the consent is to the mixed provisioning
+    // itself and a changed map is a changed preview identity (`TB-057`).
+    dependencyProvisioning: recordedProvisioning(
+      request.configuration?.policy?.execution?.dependency_provisioning,
+      request.configuration?.policy?.execution?.dependency_roots ?? [],
+    ),
     unresolved: described.runners.unresolved,
     adapters: described.adapters,
     runtimeInputs: described.runtimeInputs,

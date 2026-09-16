@@ -35,22 +35,36 @@ import path from 'node:path';
  * provided by.
  *
  * This is the ONE place the decision's dependency record is read for
- * re-basing, and it is per root on purpose. Today every provided root shares
- * one declared strategy; a later declaration may copy `vendor` while it links
- * `node_modules` in the same evaluation. When it does, the record grows a
- * per-root strategy and this projection reads it — nothing that consumes the
- * result has to change, because nothing else ever reads the scalar.
+ * re-basing, and it is per root on purpose. The record's `provisioning` is
+ * either one scalar every provided root shares, or — since `TB-057` — a
+ * complete map from each declared root to the strategy it received, so
+ * `vendor` may be copied while `node_modules` is linked in the same
+ * evaluation. This projection reads whichever shape the record carries, and
+ * nothing that consumes the result has to know which: nothing else ever reads
+ * the record for re-basing.
  *
  * Re-basing itself does not branch on the strategy: a root the snapshot was
  * given is where its binaries run from, and under `link` that is the same file
  * by another name. The strategy travels so evidence can say which one a root
  * received.
  */
-export const providedRoots = (dependencies) => (Array.isArray(dependencies?.provided)
-  ? dependencies.provided
-  : [])
-  .filter((root) => typeof root === 'string' && root !== '')
-  .map((root) => ({ root, strategy: dependencies?.provisioning ?? null }));
+export const providedRoots = (dependencies) => {
+  const provisioning = dependencies?.provisioning ?? null;
+  const strategyOf = (root) => {
+    if (typeof provisioning === 'string') {
+      return provisioning;
+    }
+
+    return typeof provisioning === 'object' && provisioning !== null
+      && Object.hasOwn(provisioning, root) && typeof provisioning[root] === 'string'
+      ? provisioning[root]
+      : null;
+  };
+
+  return (Array.isArray(dependencies?.provided) ? dependencies.provided : [])
+    .filter((root) => typeof root === 'string' && root !== '')
+    .map((root) => ({ root, strategy: strategyOf(root) }));
+};
 
 /** The path below `parent` at which `candidate` lies, or `null` if it does not. */
 const remainderUnder = (parent, candidate) => {

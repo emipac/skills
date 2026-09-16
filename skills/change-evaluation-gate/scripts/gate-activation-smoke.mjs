@@ -54,6 +54,14 @@
  *    unbroken code is allowed and broken code refused under both strategies,
  *    the tool's cache lands in the copy, and the evidence names the pinned
  *    and invoked paths (TB-056, FR-EVAL-004, NFR-SEC-001, NFR-OPER-001).
+ *    `mixed-provisioning-commit` — a clone declaring two dependency roots and
+ *    a per-root map naming only one: the map round-trips through the real
+ *    configuration writer and reader, the packaged preview names each root's
+ *    strategy, consent to the map is not consent to a scalar, a real commit
+ *    is graded with the mapped root a real directory and the unmapped one a
+ *    link, a required failure still blocks, and the evidence records the
+ *    strategy per root (TB-057, FR-CFG-002, FR-EVAL-004, AC-EVAL-001,
+ *    NFR-OPER-001).
  * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
@@ -1659,6 +1667,167 @@ const dependencyProvisioningCommit = async () => {
   return { name: 'dependency-provisioning-commit', ok: findings.length === 0, findings };
 };
 
+/** A second declared root the mixed fixture never maps, so it is linked (TB-057). */
+const UNMAPPED_ROOT = 'installed-too';
+
+/**
+ * A required check that asks how BOTH declared roots were provided, and grades
+ * the source.
+ *
+ * It fails when the mapped root's module resolves outside the execution root
+ * (it was not copied), when the unmapped root is not a link (it was copied
+ * although nothing asked), or when the graded source carries the breakage
+ * marker. One check, three questions, so a real commit can prove the mix and
+ * a real required failure can still block it.
+ */
+const MIXED_CHECK_SCRIPT = [
+  "import { lstatSync, readFileSync, realpathSync } from 'node:fs';",
+  "import path from 'node:path';",
+  '',
+  `import { loadedFrom } from '../${PROVISIONED_LOCATOR}';`,
+  '',
+  'const executionRoot = realpathSync(process.cwd());',
+  'const inside = loadedFrom === executionRoot',
+  '  || loadedFrom.startsWith(`${executionRoot}${path.sep}`);',
+  `const linked = lstatSync(path.join(process.cwd(), ${JSON.stringify(UNMAPPED_ROOT)})).isSymbolicLink();`,
+  "const graded = readFileSync(process.argv[2], 'utf8');",
+  `const broken = graded.includes(${JSON.stringify(BREAKAGE)});`,
+  '',
+  'process.stdout.write(`mapped root resolved to ${loadedFrom}\\n`);',
+  'process.stdout.write(`unmapped root is ${linked ? "a link" : "not a link"}\\n`);',
+  'process.exitCode = inside && linked && !broken ? 0 : 1;',
+  '',
+].join('\n');
+
+const MIXED_PROVISIONED_FILES = {
+  ...PROVISIONED_FILES,
+  '.gitignore': { contents: `${PROVISIONED_ROOT}/\n${UNMAPPED_ROOT}/\n` },
+  'tools/check.mjs': { contents: MIXED_CHECK_SCRIPT },
+  [`${UNMAPPED_ROOT}/present.txt`]: { contents: 'linked, never copied\n' },
+};
+
+const mixedProvisioningPolicy = (provisioning) => ({
+  ...GATE_POLICY,
+  execution: {
+    budget_skippable: [],
+    dependency_roots: [PROVISIONED_ROOT, UNMAPPED_ROOT],
+    dependency_provisioning: provisioning,
+  },
+});
+
+/**
+ * One declaration, two shapes, and each root provided the way it needs
+ * (TB-057).
+ *
+ * The same clone as `dependencyProvisioningCommit`, with a second declared
+ * root and a map naming only the first. Through the real configuration
+ * writer and reader — the map is a JSON flow value in `.agent-framework.yaml`
+ * — the packaged preview names each root's strategy, consent to the map is a
+ * different consent than to a scalar, the commit provides the mapped root as
+ * a real directory and the unmapped one as a link, a required failure still
+ * blocks, and the evidence records the strategy per root (`FR-CFG-002`,
+ * `FR-EVAL-004`, `AC-EVAL-001`, `NFR-OPER-001`, `FR-LIFE-004`).
+ */
+const mixedProvisioningCommit = async () => {
+  const findings = [];
+  const declared = { [PROVISIONED_ROOT]: 'copy' };
+  const root = await fixtureRepository({
+    policy: mixedProvisioningPolicy(declared),
+    files: MIXED_PROVISIONED_FILES,
+  });
+  const store = await storeFor(root);
+
+  // The written configuration carries the map, and the supported reader
+  // reads it back as the object it is (TB-049).
+  const readBack = fixtureConfigurations.get(root)?.evaluation_gate?.execution?.dependency_provisioning;
+
+  check(
+    findings,
+    JSON.stringify(readBack) === JSON.stringify(declared),
+    `The reader returned ${JSON.stringify(readBack)} for the map declaration.`,
+  );
+
+  // The packaged preview a person reads names each root's strategy.
+  const rendered = await runPackagedCommand(root, ['activate']);
+
+  check(
+    findings,
+    rendered.stdout.includes(`dependency roots: ${PROVISIONED_ROOT} (copy), ${UNMAPPED_ROOT} (link)`),
+    `The rendered preview does not name each root's strategy: ${rendered.stdout}${rendered.stderr}`,
+  );
+
+  // Consent to the mixed provisioning is not consent to a scalar: the same
+  // clone declared with the scalar previews under a different identity, so
+  // moving between the two is a re-pin, never a silent carry-over.
+  const scalarRoot = await fixtureRepository({
+    policy: mixedProvisioningPolicy('copy'),
+    files: MIXED_PROVISIONED_FILES,
+  });
+  const scalarPreview = await previewActivation(activationRequest(scalarRoot), dependencies());
+
+  const { preview, result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation under a mixed declaration did not succeed: ${result.reasonCode}.`);
+  check(
+    findings,
+    JSON.stringify(preview.dependencyProvisioning)
+      === JSON.stringify({ [PROVISIONED_ROOT]: 'copy', [UNMAPPED_ROOT]: 'link' }),
+    `The preview said the roots would be provided by ${JSON.stringify(preview.dependencyProvisioning)}, not per root.`,
+  );
+  check(
+    findings,
+    scalarPreview.dependencyProvisioning === 'copy' && scalarPreview.previewId !== preview.previewId,
+    'A map declaration and a scalar one produced the same preview identity; consent would not distinguish them.',
+  );
+
+  if (result.activated !== true) {
+    return { name: 'mixed-provisioning-commit', ok: false, findings };
+  }
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nunder a mixed declaration\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const allowed = await attemptCommit(root, 'code that is not broken, graded under a mixed declaration');
+
+  // The check itself proved the mapped root a real directory and the unmapped
+  // root a link, or it would have refused this commit.
+  check(
+    findings,
+    allowed.failed === false,
+    `Under a mixed declaration the unbroken code was refused: ${allowed.output}.`,
+  );
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const blocked = await attemptCommit(root, 'broken code graded under a mixed declaration');
+
+  check(findings, blocked.failed === true, 'Under a mixed declaration broken code was committed.');
+  check(
+    findings,
+    blocked.output.includes(REQUIRED_CHECK),
+    `The mixed-declaration denial does not name the failing check: ${blocked.output}.`,
+  );
+
+  // Diagnosable from evidence: the envelope names every root's strategy.
+  const log = await store.readLog();
+  const latest = log.length > 0 ? await store.readEnvelope(log[log.length - 1].evidenceId) : null;
+  const recorded = latest?.decision?.environment?.dependencies ?? null;
+
+  check(
+    findings,
+    JSON.stringify(recorded) === JSON.stringify({
+      provisioning: { [PROVISIONED_ROOT]: 'copy', [UNMAPPED_ROOT]: 'link' },
+      provided: [PROVISIONED_ROOT, UNMAPPED_ROOT],
+      missing: [],
+      refused: [],
+    }),
+    `The evidence does not record each root's strategy: ${JSON.stringify(recorded)}.`,
+  );
+
+  return { name: 'mixed-provisioning-commit', ok: findings.length === 0, findings };
+};
+
 /** The `composer-bin` binary whose shim loads two autoloaders (TB-056). */
 const TWO_AUTOLOADER_BINARY = 'analyse';
 
@@ -2665,6 +2834,7 @@ const main = async () => {
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),
       await dependencyProvisioningCommit(),
+      await mixedProvisioningCommit(),
       await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),

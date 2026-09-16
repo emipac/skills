@@ -599,10 +599,17 @@ export const validateDecision = (decision) => {
   // root that was never provided is the environment fault most often reported
   // as a fault in the code, so the decision states it by name rather than
   // leaving it to be re-derived from a tool's own error text (NFR-OPER-001).
+  //
+  // `provisioning` is one strategy every root shared, or — since `TB-057` — a
+  // map from each declared root to the strategy it received, so a reader of
+  // a mixed evaluation is never told a scalar that was true of no root.
   const provisioned = decision.environment?.dependencies;
+  const isProvisioningRecord = (value) => typeof value === 'string'
+    || (isPlainObject(value)
+      && Object.values(value).every((strategy) => typeof strategy === 'string'));
 
   if (!isPlainObject(provisioned)
-    || typeof provisioned.provisioning !== 'string'
+    || !isProvisioningRecord(provisioned.provisioning)
     || !isDeclarationList(provisioned.provided)
     || !isDeclarationList(provisioned.missing)
     || !isDeclarationList(provisioned.refused)) {

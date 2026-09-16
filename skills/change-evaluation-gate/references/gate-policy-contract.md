@@ -82,6 +82,15 @@ gate.
 `link` or `copy`, and it defaults to `link` when absent, so a clone that
 declares nothing behaves exactly as it always did.
 
+The declaration has two shapes. A scalar applies one strategy to every declared
+root. A map names a strategy per root — `{"vendor": "copy"}` — and a root the
+map does not name is provided by `link`. A map may only name roots listed in
+`dependency_roots`: a key naming anything else is refused by name, never
+ignored. The gate never infers a strategy from a root's contents, name, or
+size; a project pays to copy exactly the roots it said need a real directory.
+Under a map the preview, the receipt, and the evidence record every declared
+root with the strategy it received; under a scalar they record the scalar.
+
 | Strategy | What a check is given | When a project declares it |
 | --- | --- | --- |
 | `link` | a symbolic link to the clone's own installation | the default; nothing is copied and the root costs nothing to provide |

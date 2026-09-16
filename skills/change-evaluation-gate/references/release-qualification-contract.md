@@ -59,7 +59,7 @@ required set is the contract's, never the set a manifest happens to carry.
 | `source-immutability` | The source repository's Git state and tracked content are byte-identical before and after an evaluation. |
 | `non-interactive-shell` | A check runs with no controlling terminal, reads end-of-file from standard input immediately, and sees only the environment names its descriptor declared. |
 | `linked-temporary-root` | A temporary directory reached through a symbolic link still yields one execution root with one name: a check executing inside it observes the path the gate created, resolving that path reaches the same directory, and the root is removed afterwards. |
-| `dependency-provisioning-realpath` | A check whose tool resolves a dependency to its realpath resolves outside the execution root under the declared `link` strategy and inside it under `copy`, on the same clone with nothing else changed, while the snapshot identity, its path list, and its immutability re-check stay the same under both. |
+| `dependency-provisioning-realpath` | A check whose tool resolves a dependency to its realpath resolves outside the execution root under the declared `link` strategy and inside it under `copy`, on the same clone with nothing else changed, and under a per-root map naming only one of two declared roots the mapped root is a real directory beside a linked unmapped one with both strategies recorded, while the snapshot identity, its path list, and its immutability re-check stay the same under all three. |
 
 An **unverified** environment must say why it was not tested. It is not a
 refusal and not a defect; it is an environment this run had no access to. The
