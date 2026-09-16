@@ -1,12 +1,12 @@
 # FS-002 — Name every script the setup did not classify
 
-Status: ready-for-agent
-Labels: ready-for-agent, defect
+Status: done
+Labels: done, defect
 Blocked by:
 Tracker ID: 02-name-every-script-the-setup-did-not-classify
 Draft key: FS-002
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. `framework-setup` owns deterministic project
 discovery and configuration, and no feature contract governs how it decides

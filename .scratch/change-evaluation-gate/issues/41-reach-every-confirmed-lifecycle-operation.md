@@ -1,15 +1,15 @@
 # TB-041 — Reach every confirmed lifecycle operation
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by: 40-let-a-maintainer-and-an-agent-observe-the-gate
 
 Tracker ID: 41-reach-every-confirmed-lifecycle-operation
 Draft key: TB-041
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`

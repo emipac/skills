@@ -1,12 +1,12 @@
 # FS-001 — Run a skill script through the path a client installed it at
 
-Status: ready-for-agent
-Labels: ready-for-agent, defect
+Status: done
+Labels: done, defect
 Blocked by:
 Tracker ID: 01-run-a-skill-script-through-the-path-a-client-installed
 Draft key: FS-001
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. This is a cross-skill defect in how every
 released script decides whether it was run as a command. No feature contract
