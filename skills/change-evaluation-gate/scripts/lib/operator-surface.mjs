@@ -1690,6 +1690,30 @@ const renderConfirmation = (command, observation) => line(
     : `gate ${command} ${CONFIRMABLE_COMMANDS[command]} ${observation.confirmationToken}`,
 );
 
+/**
+ * The dependency roots line of an activation preview.
+ *
+ * Under one strategy for every root the line reads exactly as it did before
+ * `TB-057`. Under a per-root map each root carries its own strategy, so what
+ * a maintainer confirms is the mixed provisioning they declared, not a
+ * summary of it (`FR-LIFE-004`, `NFR-OPER-001`).
+ */
+const renderDependencyRoots = ({ dependencyRoots, dependencyProvisioning }) => {
+  if (dependencyRoots.length === 0) {
+    return typeof dependencyProvisioning === 'string'
+      ? `none (provided by ${dependencyProvisioning})`
+      : 'none';
+  }
+
+  if (typeof dependencyProvisioning === 'string') {
+    return `${dependencyRoots.join(', ')} (provided by ${dependencyProvisioning})`;
+  }
+
+  return dependencyRoots
+    .map((root) => `${root} (${dependencyProvisioning?.[root] ?? 'unstated'})`)
+    .join(', ');
+};
+
 const renderActivate = (observation) => [
   line('state', observation.state),
   line('client', `${observation.client} (trust model ${observation.trustModel ?? 'undeclared'})`),
@@ -1712,10 +1736,7 @@ const renderActivate = (observation) => [
   line('unresolved', observation.unresolved.length),
   ...observation.unresolved.map((entry) => `  - ${JSON.stringify(entry)}`),
   line('adapters', observation.adapters.map((adapter) => adapter.id).join(', ') || 'none'),
-  line(
-    'dependency roots',
-    `${observation.dependencyRoots.join(', ') || 'none'} (provided by ${observation.dependencyProvisioning})`,
-  ),
+  line('dependency roots', renderDependencyRoots(observation)),
   line('runtime inputs', observation.runtimeInputs.join(', ') || 'none'),
   line('shortcut', `${observation.shortcut.name} (${observation.shortcut.kind})`),
   renderConfirmation('activate', observation),

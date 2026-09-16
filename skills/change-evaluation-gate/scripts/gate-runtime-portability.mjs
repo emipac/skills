@@ -42,7 +42,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -863,13 +863,21 @@ const linkedTemporaryRootFixture = async () => {
  * own module resolver, which reports the resolved location of the module it
  * loaded. No operating system is named and no filesystem is detected — the
  * strategy is the declaration the capture is given.
+ *
+ * A third pass declares a per-root map naming only the first of two roots
+ * (`TB-057`): the mapped root is a real directory the tool resolves inside the
+ * execution root, the unmapped one is a link, the record names both, and the
+ * identity is the same as under either scalar.
  */
 const dependencyProvisioningFixture = async () => {
   const declared = 'installed';
+  const unmapped = 'installed-too';
   const locator = 'export const loadedFrom = import.meta.dirname;\n';
   const source = await repositoryWithHistory('gate-portability-provisioning-');
 
-  await writeFile(path.join(source, '.gitignore'), `${declared}/\n`);
+  await writeFile(path.join(source, '.gitignore'), `${declared}/\n${unmapped}/\n`);
+  await mkdir(path.join(source, unmapped), { recursive: true });
+  await writeFile(path.join(source, unmapped, 'present.txt'), 'linked, never copied\n');
   await writeFile(
     path.join(source, 'grade.mjs'),
     [
@@ -959,14 +967,76 @@ const dependencyProvisioningFixture = async () => {
     findings.push('one of the two strategies produced no observation at all.');
   }
 
+  // The mixed declaration: one root mapped `copy`, the other left to `link`.
+  const mixedRoot = await temporaryDirectory('gate-portability-provisioning-mixed-');
+  const mixed = await captureSnapshot({
+    repositoryRoot: source,
+    kind: 'git-index',
+    executionRoot: mixedRoot,
+    runGit: (repositoryRoot, args) => runGitForRepository(repositoryRoot, args),
+    dependencyRoots: [declared, unmapped],
+    dependencyProvisioning: { [declared]: 'copy' },
+  });
+
+  if (!mixed.captured) {
+    findings.push(`the mixed snapshot was not captured: ${mixed.detail}`);
+  } else {
+    const expected = {
+      provisioning: { [declared]: 'copy', [unmapped]: 'link' },
+      provided: [declared, unmapped],
+      missing: [],
+      refused: [],
+    };
+
+    if (JSON.stringify(mixed.dependencies) !== JSON.stringify(expected)) {
+      findings.push(`the mixed capture recorded ${JSON.stringify(mixed.dependencies)} rather than each root's strategy.`);
+    }
+
+    const mappedIsLink = await lstat(path.join(mixedRoot, declared)).then((entry) => entry.isSymbolicLink(), () => null);
+    const unmappedIsLink = await lstat(path.join(mixedRoot, unmapped)).then((entry) => entry.isSymbolicLink(), () => null);
+
+    if (mappedIsLink !== false) {
+      findings.push(`under the mixed declaration the root mapped copy is ${mappedIsLink === null ? 'absent' : 'a link'}.`);
+    }
+
+    if (unmappedIsLink !== true) {
+      findings.push(`under the mixed declaration the unmapped root is ${unmappedIsLink === null ? 'absent' : 'not a link'}.`);
+    }
+
+    const attempt = await executeCheck({
+      command: descriptorFor({ args: ['grade.mjs'] }),
+      executionRoot: mixedRoot,
+    });
+    const loadedFrom = (attempt.output ?? '').trim();
+
+    if (attempt.exitCode !== 0) {
+      findings.push(`the mixed check exited ${attempt.exitCode}: ${attempt.output}`);
+    } else if (!isInside(mixedRoot, loadedFrom)) {
+      findings.push(`under the mixed declaration the tool resolved its dependency to ${loadedFrom}, outside the execution root ${mixedRoot}.`);
+    }
+
+    if (observed.copy && mixed.snapshot.id !== observed.copy.snapshotId) {
+      findings.push('the identity of an unchanged tree differed under the mixed declaration.');
+    }
+
+    if (mixed.snapshot.paths.some((relative) => relative.startsWith(`${declared}/`) || relative.startsWith(`${unmapped}/`))) {
+      findings.push('under the mixed declaration a provided dependency root entered the snapshot path list.');
+    }
+
+    if (!(await verifySnapshot(mixed.snapshot)).verified) {
+      findings.push('under the mixed declaration the execution root did not re-identify after the check ran.');
+    }
+  }
+
   return {
     ok: findings.length === 0,
     detail: findings.length === 0
-      ? `The same tool, unchanged, resolved its dependency to ${observed.link.loadedFrom} under link and to ${observed.copy.loadedFrom} under copy; the snapshot identity, its path list, and its re-check were the same under both.`
+      ? `The same tool, unchanged, resolved its dependency to ${observed.link.loadedFrom} under link and to ${observed.copy.loadedFrom} under copy; under a map naming only ${declared} it was a real directory beside a linked ${unmapped}; the snapshot identity, its path list, and its re-check were the same under all three.`
       : findings.join(' '),
     observed: {
       link: observed.link?.loadedFrom ?? null,
       copy: observed.copy?.loadedFrom ?? null,
+      mixed: mixed.captured ? mixed.dependencies.provisioning : null,
     },
   };
 };

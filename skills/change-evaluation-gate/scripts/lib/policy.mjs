@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 
 import { EVIDENCE_FORMAT } from './evaluation-contract.mjs';
-import { DEPENDENCY_PROVISIONING_STRATEGIES } from './snapshot.mjs';
+import { describeProvisioningDefect } from './snapshot.mjs';
 
 /**
  * The Gate policy section has exactly five subcontracts. Nothing else is
@@ -357,13 +357,25 @@ export const validateGatePolicy = (policy) => {
   // behaviour it already had. Anything else is named rather than resolved to a
   // working default, because a strategy silently substituted for the one that
   // was written is a strategy the project cannot see (`FR-CFG-002`).
+  //
+  // The declaration has two shapes (`TB-057`): one strategy for every root, or
+  // a map from a declared root to its own. A map is held to the same two
+  // strategies, and to the roots `dependency_roots` actually lists: a key
+  // naming anything else is refused by name, because a declaration about a
+  // root nothing declared would otherwise be a silent no-op.
   const provisioning = policy.execution?.dependency_provisioning;
+  const provisioningDefect = provisioning === undefined
+    ? null
+    : describeProvisioningDefect(
+      provisioning,
+      isContainedRootList(dependencyRoots) ? dependencyRoots : [],
+    );
 
-  if (provisioning !== undefined && !DEPENDENCY_PROVISIONING_STRATEGIES.includes(provisioning)) {
+  if (provisioningDefect !== null) {
     errors.push(error(
       'gate-policy-execution-invalid',
       'evaluation_gate.execution.dependency_provisioning',
-      `Dependency provisioning must be declared as ${DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ')}; it is never detected from the operating system or the filesystem.`,
+      provisioningDefect,
     ));
   }
 

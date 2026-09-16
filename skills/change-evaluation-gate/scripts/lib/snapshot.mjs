@@ -57,6 +57,99 @@ export const DEPENDENCY_PROVISIONING_STRATEGIES = Object.freeze(['link', 'copy']
  */
 export const DEFAULT_DEPENDENCY_PROVISIONING = 'link';
 
+const isPlainObject = (value) => typeof value === 'object'
+  && value !== null
+  && !Array.isArray(value);
+
+/** Whether one value names a strategy this module can perform. */
+export const isProvisioningStrategy = (value) => DEPENDENCY_PROVISIONING_STRATEGIES.includes(value);
+
+/**
+ * Why one `dependency_provisioning` declaration cannot be performed, or `null`
+ * when it can (`TB-057`).
+ *
+ * A declaration has two shapes. A scalar names one strategy for every root,
+ * exactly as `TB-054` defined it. A map names a strategy per declared root;
+ * a root it does not name is provided by the default, `link`, for the reason
+ * the default exists at all — an undeclared thing behaves as it always has.
+ *
+ * A map may only name declared roots. A key naming a root `dependency_roots`
+ * does not list is a configuration error stated by name, never a silent
+ * no-op: it is exactly the class of misconfiguration a maintainer cannot see
+ * and therefore cannot fix. Nothing here infers a strategy from what a root
+ * contains, what it is called, or how large it is.
+ *
+ * @returns {string|null} one diagnostic naming what was wrong, or `null`
+ */
+export const describeProvisioningDefect = (declaration, dependencyRoots = []) => {
+  const strategies = DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ');
+
+  if (isProvisioningStrategy(declaration)) {
+    return null;
+  }
+
+  if (!isPlainObject(declaration)) {
+    return `Dependency provisioning must be declared as ${strategies}, or as a map from a declared dependency root to ${strategies}; it is never detected from the operating system or the filesystem.`;
+  }
+
+  const declared = new Set(Array.isArray(dependencyRoots) ? dependencyRoots : []);
+
+  for (const [root, strategy] of Object.entries(declaration)) {
+    if (!declared.has(root)) {
+      return `Dependency provisioning names ${JSON.stringify(root)}, which is not a declared dependency root; a map may only name roots listed in dependency_roots.`;
+    }
+
+    if (!isProvisioningStrategy(strategy)) {
+      return `Dependency provisioning for ${JSON.stringify(root)} must be ${strategies}, not ${JSON.stringify(strategy)}; it is never detected from the operating system or the filesystem.`;
+    }
+  }
+
+  return null;
+};
+
+/**
+ * The strategy one declared root receives under one declaration.
+ *
+ * A scalar applies to every root; a map applies to the roots it names and
+ * leaves the rest to the default. The declaration is assumed already checked
+ * by `describeProvisioningDefect`.
+ */
+export const strategyForRoot = (declaration, root) => {
+  if (typeof declaration === 'string') {
+    return declaration;
+  }
+
+  // Own properties only: a root called `constructor` that the map does not
+  // name must get the default, not whatever the object prototype holds.
+  return isPlainObject(declaration) && Object.hasOwn(declaration, root)
+    ? declaration[root]
+    : DEFAULT_DEPENDENCY_PROVISIONING;
+};
+
+/**
+ * How a declaration is recorded in a preview, a receipt, and evidence.
+ *
+ * A scalar is recorded as the scalar, so a clone that declared one word — or
+ * nothing — produces the exact envelope it produced before this contract, and
+ * no evidence identity churns on upgrade. A map is recorded COMPLETE: every
+ * declared root, in declaration order, with the strategy it actually receives,
+ * including the ones the maintainer left to the default. What a maintainer
+ * consents to and what a reader of the evidence sees is the mixed provisioning
+ * itself, root by root, not a summary of it (`NFR-OPER-001`, `FR-LIFE-004`).
+ */
+export const recordedProvisioning = (declaration, dependencyRoots = []) => {
+  const resolved = declaration ?? DEFAULT_DEPENDENCY_PROVISIONING;
+
+  if (typeof resolved === 'string') {
+    return resolved;
+  }
+
+  return Object.fromEntries(
+    (Array.isArray(dependencyRoots) ? dependencyRoots : [])
+      .map((root) => [root, strategyForRoot(resolved, root)]),
+  );
+};
+
 /**
  * The one place each strategy is performed.
  *
@@ -373,6 +466,12 @@ export const unavailableDependencyRoots = async ({
  * outside every path-based rule that reads it (`SG-EVAL-001`, `NFR-REL-001`).
  * That holds under both strategies, and is what keeps an evaluation
  * reproducible whichever one a project declares.
+ *
+ * The strategy is looked up per root (`TB-057`): a declaration may copy one
+ * root while it links another in the same evaluation, and each
+ * root's own attempt is refused, cleaned, and stated by exactly the rules
+ * below — a failed `copy` of one root is never served as a link, and never
+ * touches how the next root is provided.
  */
 const provideDependencyRoots = async ({
   repositoryRoot,
@@ -382,10 +481,10 @@ const provideDependencyRoots = async ({
 }) => {
   const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
   const missing = new Set(classified.missing);
-  const provide = PROVISIONERS[provisioning];
   const provided = [];
 
   for (const declared of classified.available) {
+    const provide = PROVISIONERS[strategyForRoot(provisioning, declared)];
     const destination = path.join(executionRoot, declared);
     // A root is provided at a path this function creates, or it is not provided
     // at all. A declaration naming a path the snapshot already materialized is
@@ -427,8 +526,9 @@ const provideDependencyRoots = async ({
   return {
     // The strategy that was actually applied, so a maintainer reading the
     // decision can tell which one the roots in front of them were provided by
-    // without rerunning anything (`NFR-OPER-001`).
-    provisioning,
+    // without rerunning anything (`NFR-OPER-001`). A scalar is recorded as
+    // written; a map is recorded complete, one strategy per declared root.
+    provisioning: recordedProvisioning(provisioning, dependencyRoots),
     provided,
     // Declaration order, so what a maintainer reads back is the order they
     // wrote, whichever way a root turned out to be unavailable.
@@ -477,11 +577,13 @@ export const captureSnapshot = async ({
   // repaired into the one it can. Resolving an unreadable declaration to a
   // working default is how a project ends up provisioned by a strategy it did
   // not ask for and cannot see (`FR-CFG-002`).
-  if (!DEPENDENCY_PROVISIONING_STRATEGIES.includes(dependencyProvisioning)) {
+  const provisioningDefect = describeProvisioningDefect(dependencyProvisioning, dependencyRoots);
+
+  if (provisioningDefect !== null) {
     return {
       captured: false,
       reasonCode: 'configuration-invalid',
-      detail: `Dependency provisioning strategy ${JSON.stringify(dependencyProvisioning)} is not one this gate can perform; declare ${DEPENDENCY_PROVISIONING_STRATEGIES.join(' or ')}.`,
+      detail: `Dependency provisioning ${JSON.stringify(dependencyProvisioning)} is not one this gate can perform: ${provisioningDefect}`,
     };
   }
 

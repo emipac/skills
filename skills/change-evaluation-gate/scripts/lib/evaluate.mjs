@@ -51,6 +51,7 @@ import {
   DEFAULT_DEPENDENCY_PROVISIONING,
   ISOLATION,
   captureSnapshot,
+  recordedProvisioning,
   unavailableDependencyRoots,
   verifySnapshot,
 } from './snapshot.mjs';
@@ -201,8 +202,10 @@ const buildDecision = ({
       // provided root is a graded path, so none of this moves the snapshot
       // identity the environment names.
       dependencies: dependencies ?? {
-        provisioning: policy?.execution?.dependency_provisioning
-          ?? DEFAULT_DEPENDENCY_PROVISIONING,
+        provisioning: recordedProvisioning(
+          policy?.execution?.dependency_provisioning,
+          policy?.execution?.dependency_roots ?? [],
+        ),
         provided: [],
         missing: [],
         refused: [],
@@ -893,8 +896,10 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     // clone could not have offered is still named, by the same names the graded
     // path uses (`NFR-OPER-001`, `TB-039`).
     dependencies: {
-      provisioning: policy?.execution?.dependency_provisioning
-        ?? DEFAULT_DEPENDENCY_PROVISIONING,
+      provisioning: recordedProvisioning(
+        policy?.execution?.dependency_provisioning,
+        policy?.execution?.dependency_roots ?? [],
+      ),
       provided: [],
       missing: unavailable.missing,
       refused: unavailable.refused,
