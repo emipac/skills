@@ -72,3 +72,5 @@ Do not automatically commit or push changes. Preserve upstream attribution in
 history.
 
 When reporting information to me, be very concise and sacrifice grammar for the sake of concision.
+
+Don't leave tickets behind with stale statuses, always update statuses after implementation.

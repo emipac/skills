@@ -48,6 +48,12 @@
  *    whose executable was removed denies as drift rather than re-resolving to
  *    another program (FR-EVAL-001, AC-EVAL-001, FR-PROF-010, NFR-REL-003,
  *    TB-028, TB-030).
+ *    `provided-binary-commit` — a clone whose `composer-bin` tool loads both
+ *    its own autoloader and the project's runs, under `copy`, the copy of the
+ *    pinned binary the snapshot was given — proved byte-identical first — so
+ *    unbroken code is allowed and broken code refused under both strategies,
+ *    the tool's cache lands in the copy, and the evidence names the pinned
+ *    and invoked paths (TB-056, FR-EVAL-004, NFR-SEC-001, NFR-OPER-001).
  * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
@@ -1498,9 +1504,15 @@ const vendorBinaryCommit = async () => {
     .split('\n')
     .filter((line) => line.trim().length > 0);
 
+  //
+  // Since TB-056 a binary under a provided root is invoked from the provided
+  // location, so `$0` names the execution root's `vendor/bin/gradecheck` —
+  // which under `link` is this very file: the ledger it wrote beside `$0`
+  // landed here, in the maintainer's own `vendor/bin`, through the link. One
+  // program, reached by another name.
   check(
     findings,
-    ran.length >= 2 && ran.every((line) => line === vendorBinary),
+    ran.length >= 2 && ran.every((line) => line.endsWith(`${path.sep}${VENDOR_BINARY_PATH}`)),
     `The vendor binary recorded ${JSON.stringify(ran)} rather than grading both commits itself.`,
   );
 
@@ -1645,6 +1657,178 @@ const dependencyProvisioningCommit = async () => {
   );
 
   return { name: 'dependency-provisioning-commit', ok: findings.length === 0, findings };
+};
+
+/** The `composer-bin` binary whose shim loads two autoloaders (TB-056). */
+const TWO_AUTOLOADER_BINARY = 'analyse';
+
+const TWO_AUTOLOADER_BINARY_PATH = path.join('vendor', 'bin', TWO_AUTOLOADER_BINARY);
+
+/** Where the tool writes its own cache: beside itself, as PHPStan does. */
+const TWO_AUTOLOADER_CACHE = path.join('vendor', '.cache', 'result');
+
+/**
+ * A Composer shim analogue and the autoloader it must not load twice.
+ *
+ * `vendor/bin/phpstan` sets `_composer_autoload_path` from `__DIR__` — the
+ * directory it was LAUNCHED from — and PHPStan then loads the project's
+ * autoloader from the tree it grades. Under `copy` those are two files
+ * declaring one class, and PHP reports a redeclared class; under `link` they
+ * are one realpath and `require_once` deduplicates. Node's `__dirname` and
+ * `require` cache behave identically, so this is the same mechanism with the
+ * runtime this capability has. It is not PHP, not Composer, and not PHPStan.
+ */
+const TWO_AUTOLOADER_SHIM = [
+  '#!/usr/bin/env node',
+  "const path = require('node:path');",
+  "const { mkdirSync, readFileSync, writeFileSync } = require('node:fs');",
+  '',
+  "require(path.join(__dirname, '..', 'autoload.cjs'));",
+  "require(path.resolve(process.cwd(), 'vendor', 'autoload.cjs'));",
+  '',
+  "mkdirSync(path.join(__dirname, '..', '.cache'), { recursive: true });",
+  "writeFileSync(path.join(__dirname, '..', '.cache', 'result'), `${process.cwd()}\\n`);",
+  '',
+  "const graded = readFileSync(process.argv[2], 'utf8');",
+  '',
+  'process.stdout.write(`analysed from ${__dirname}\\n`);',
+  `process.exitCode = graded.includes(${JSON.stringify(BREAKAGE)}) ? 1 : 0;`,
+  '',
+].join('\n');
+
+const TWO_AUTOLOADER_AUTOLOADER = [
+  'if (globalThis.ComposerAutoloaderInit) {',
+  '  throw new Error(`Cannot redeclare class ComposerAutoloaderInit (previously declared in ${globalThis.ComposerAutoloaderInit}) in ${__filename}`);',
+  '}',
+  'globalThis.ComposerAutoloaderInit = __filename;',
+  '',
+].join('\n');
+
+const TWO_AUTOLOADER_MAPPINGS = {
+  profiles: { backend: 'express-typescript' },
+  commands: {
+    'verification.commands.test.both[0]': {
+      runner: 'composer-bin',
+      args: [TWO_AUTOLOADER_BINARY, SOURCE],
+      timeout_seconds: 60,
+      allowed_environment: [],
+    },
+  },
+};
+
+const TWO_AUTOLOADER_FILES = {
+  '.gitignore': { contents: 'vendor/\n' },
+  [TWO_AUTOLOADER_BINARY_PATH]: { contents: TWO_AUTOLOADER_SHIM, mode: 0o755 },
+  'vendor/autoload.cjs': { contents: TWO_AUTOLOADER_AUTOLOADER },
+};
+
+const twoAutoloaderPolicy = (strategy) => ({
+  ...GATE_POLICY,
+  execution: {
+    budget_skippable: [],
+    dependency_roots: [...VENDOR_DEPENDENCY_ROOTS],
+    dependency_provisioning: strategy,
+  },
+});
+
+/**
+ * A provided binary runs from where it was provided (TB-056).
+ *
+ * An activated clone whose required check is a `composer-bin` tool that loads
+ * both its own autoloader and the project's: the receipt pins the binary in
+ * the maintainer's repository, and under `copy` the commit runs the copy the
+ * snapshot was given — proved byte-identical first — so unbroken code is
+ * allowed under both strategies, broken code is refused under both, and the
+ * tool's own cache lands in the copy rather than in the maintainer's
+ * installation (`FR-EVAL-004`, `AC-EVAL-001`, `NFR-SEC-001`, `AC-CFG-004`).
+ */
+const providedBinaryCommit = async () => {
+  const findings = [];
+
+  for (const strategy of ['link', 'copy']) {
+    const root = await fixtureRepository({
+      mappings: TWO_AUTOLOADER_MAPPINGS,
+      policy: twoAutoloaderPolicy(strategy),
+      files: TWO_AUTOLOADER_FILES,
+    });
+    const pinned = path.join(root, TWO_AUTOLOADER_BINARY_PATH);
+    const store = await storeFor(root);
+    const { preview, result } = await activateFixture(root, store);
+
+    check(findings, result.activated === true, `Activation under ${strategy} did not succeed: ${result.reasonCode}.`);
+
+    if (result.activated !== true) {
+      continue;
+    }
+
+    // The pin and the preview are the original path: consent was granted to
+    // the program where resolution found it, and nothing here re-resolves.
+    const pin = result.receipt?.runtime?.runners?.[0] ?? null;
+
+    check(findings, pin?.executable === pinned, `Under ${strategy} the receipt pinned ${pin?.executable}, not ${pinned}.`);
+    check(findings, pin?.version === null, `Under ${strategy} the pin carries a version: ${JSON.stringify(pin?.version)}.`);
+    check(
+      findings,
+      preview.commands?.[0]?.preview === `${pinned} ${SOURCE}`,
+      `Under ${strategy} the previewed command is ${preview.commands?.[0]?.preview}.`,
+    );
+
+    await writeFile(path.join(root, SOURCE), `baseline\nunder ${strategy}\n`, 'utf8');
+    await git(root, ['add', '--all']);
+
+    const allowed = await attemptCommit(root, `unbroken code graded by a two-autoloader tool under ${strategy}`);
+
+    check(
+      findings,
+      allowed.failed === false,
+      `Under ${strategy} the two-autoloader tool refused unbroken code: ${allowed.output}`,
+    );
+    check(
+      findings,
+      !allowed.output.includes('Cannot redeclare class'),
+      `Under ${strategy} the tool loaded its autoloader twice: ${allowed.output}`,
+    );
+
+    await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+    await git(root, ['add', '--all']);
+
+    const blocked = await attemptCommit(root, `broken code graded by a two-autoloader tool under ${strategy}`);
+
+    check(findings, blocked.failed === true, `Under ${strategy} broken code was committed.`);
+    check(
+      findings,
+      blocked.output.includes(REQUIRED_CHECK),
+      `Under ${strategy} the denial does not name the failing check: ${blocked.output}`,
+    );
+
+    // The tool's own writes. Under `copy` they land in the copy and the
+    // maintainer's installation is untouched; under `link` the copy IS the
+    // installation, which TB-054 states rather than hides.
+    const cacheReachedRepository = await readFile(path.join(root, TWO_AUTOLOADER_CACHE), 'utf8').then(() => true, () => false);
+
+    check(
+      findings,
+      cacheReachedRepository === (strategy === 'link'),
+      strategy === 'copy'
+        ? 'Under copy the tool\'s cache reached the maintainer\'s repository.'
+        : 'Under link the tool\'s cache did not write through; the isolation argument for copy must be restated.',
+    );
+
+    // Diagnosable from evidence: the envelope names the pinned path, the
+    // invoked path, and the root that made them differ (`NFR-OPER-001`).
+    const log = await store.readLog();
+    const latest = log.length > 0 ? await store.readEnvelope(log[log.length - 1].evidenceId) : null;
+    const program = latest?.decision?.checks?.find((entry) => entry.id === REQUIRED_CHECK)?.attempts?.[0]?.program ?? null;
+
+    check(
+      findings,
+      program?.pinned === pinned && program?.root === 'vendor'
+        && typeof program?.invoked === 'string' && program.invoked.endsWith(TWO_AUTOLOADER_BINARY_PATH),
+      `Under ${strategy} the evidence does not record the pinned and invoked program: ${JSON.stringify(program)}.`,
+    );
+  }
+
+  return { name: 'provided-binary-commit', ok: findings.length === 0, findings };
 };
 
 /** Entries the self-test subject would leave behind if it left anything. */
@@ -2481,6 +2665,7 @@ const main = async () => {
       await hookProgramSelfTest(),
       await vendorBinaryCommit(),
       await dependencyProvisioningCommit(),
+      await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
       await unprovedPrerequisiteNamesWhatWasMissing(),

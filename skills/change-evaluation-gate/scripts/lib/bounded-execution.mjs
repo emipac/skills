@@ -16,6 +16,9 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 
 import { composeArguments } from './command-descriptor.mjs';
+import {
+  locateExecutable, proveSameProgram, providedRoots, relocateSearchPath,
+} from './runner-location.mjs';
 
 const { X_OK } = constants;
 
@@ -116,7 +119,7 @@ export const environmentFor = (allowedEnvironment, source, runtimePath = '') => 
  * launch, so it decides this here rather than leaving an exit status to be
  * interpreted by something that does not (`TB-033`, `NFR-REL-003`).
  */
-const unlaunchable = async (resolution) => {
+const unlaunchable = async (resolution, program = null) => {
   for (const [role, location] of [
     ['executable', resolution?.executable],
     ['interpreter', resolution?.interpreter],
@@ -128,7 +131,14 @@ const unlaunchable = async (resolution) => {
     const usable = await access(location, X_OK).then(() => true, () => false);
 
     if (!usable) {
-      return `the pinned ${role} ${location} could not be executed, so this check never started.`;
+      // An executable invoked from a provided root is named as such, with the
+      // pin it stands for, so a copy that never arrived is diagnosable from
+      // the message alone (`NFR-OPER-001`).
+      const provenance = role === 'executable' && program?.root !== null && program?.root !== undefined
+        ? ` (the program activation pinned at ${program.pinned}, provided under ${JSON.stringify(program.root)})`
+        : '';
+
+      return `the pinned ${role} ${location}${provenance} could not be executed, so this check never started.`;
     }
   }
 
@@ -158,6 +168,8 @@ export const createBoundedExecutor = ({
     executionRoot,
     timeoutSeconds,
     budgetRemainingMs = null,
+    repositoryRoot = null,
+    dependencies = null,
   }) => {
     const resolution = resolveExecutable?.(command) ?? null;
 
@@ -170,7 +182,25 @@ export const createBoundedExecutor = ({
       };
     }
 
-    const unstartable = await unlaunchable(resolution);
+    // A provided root is where its binaries run from (`TB-056`). The pin names
+    // where activation found the program; if that lies under a dependency root
+    // the snapshot was given, the copy beside the graded tree is what runs —
+    // once per check, decided here because this is the one participant that
+    // holds the pin, the execution root, and what was provided into it. The
+    // interpreter is never re-based: it lives under no dependency root.
+    const location = await locateExecutable({
+      executable: resolution.executable,
+      repositoryRoot,
+      executionRoot,
+      roots: providedRoots(dependencies),
+    });
+    const program = { pinned: location.pinned, invoked: location.invoked, root: location.root };
+    const launch = { ...resolution, executable: location.invoked };
+
+    // The path that will be spawned is the one proved launchable. Checking the
+    // pinned path instead would let a missing copy pass here and fail opaquely
+    // inside the tool.
+    const unstartable = await unlaunchable(launch, program);
 
     if (unstartable !== null) {
       return {
@@ -178,7 +208,26 @@ export const createBoundedExecutor = ({
         exitCode: null,
         durationMs: 0,
         reasonCode: 'launch-failed',
+        program,
         ...(captureOutput ? { output: unstartable, outputTruncated: false } : {}),
+      };
+    }
+
+    // Same bytes or nothing. The copy is invoked only once it is proved to be
+    // the program activation pinned; otherwise this is pin drift and neither
+    // location is run (`NFR-REL-003`).
+    const equivalence = await proveSameProgram(location.pinned, location.invoked);
+
+    if (!equivalence.same) {
+      const detail = `the executable provided at ${location.invoked} under ${JSON.stringify(location.root)} is not the program activation pinned at ${location.pinned} (${equivalence.detail}); the pinned program is never replaced by a different one, so this check never started.`;
+
+      return {
+        executed: false,
+        exitCode: null,
+        durationMs: 0,
+        reasonCode: 'runner-pin-drift',
+        program,
+        ...(captureOutput ? { output: detail, outputTruncated: false } : {}),
       };
     }
 
@@ -207,9 +256,16 @@ export const createBoundedExecutor = ({
       };
     }
 
-    const child = spawn(resolution.executable, composition.args, {
+    // The search path follows the executable: an entry under a provided root
+    // names the provided copy, so a tool that starts a sibling binary by name
+    // finds the tree it is running from rather than the original (`TB-056`).
+    const searchPath = await relocateSearchPath({
+      runtimePath, repositoryRoot, executionRoot, roots: providedRoots(dependencies),
+    });
+
+    const child = spawn(launch.executable, composition.args, {
       cwd: path.join(executionRoot, command.working_directory ?? '.'),
-      env: environmentFor(command.allowed_environment, environment, runtimePath),
+      env: environmentFor(command.allowed_environment, environment, searchPath),
       stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       // The check leads its own process group so the whole tree can be
       // terminated on timeout or budget exhaustion.
@@ -258,6 +314,7 @@ export const createBoundedExecutor = ({
           exitCode: null,
           timedOut: true,
           durationMs: Date.now() - startedAt,
+          program,
           ...captured(),
         });
       }, limitMs);
@@ -278,6 +335,7 @@ export const createBoundedExecutor = ({
           // the more general crash a raised error otherwise reports.
           ...(LAUNCH_ERRORS.includes(error.code) ? { reasonCode: 'launch-failed' } : {}),
           durationMs: Date.now() - startedAt,
+          program,
           ...captured(),
         });
       });
@@ -296,6 +354,7 @@ export const createBoundedExecutor = ({
           exitCode: code,
           timedOut: false,
           durationMs: Date.now() - startedAt,
+          program,
           ...captured(),
         });
       });
