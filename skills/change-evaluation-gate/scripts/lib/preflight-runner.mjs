@@ -30,6 +30,7 @@ import {
   observeControlSurface,
   openStore,
   pinnedRunners,
+  provisionRuntimeInputs,
   releaseExecutionRoot,
   resolveConfiguration,
   resolveReceipt,
@@ -302,15 +303,23 @@ export const runPreflight = async ({
     // authoritative runner shares it: the path a check would find a program on
     // is the path it runs with (`TB-044`).
     const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
-    const executor = createBoundedExecutor({
-      totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
-      resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
-      environment,
-      captureOutput: true,
-      runtimePath,
-    });
 
     try {
+      // The same provisioning the authoritative runner performs, from the same
+      // owner and the same resolution `openStore` made: the approved inputs
+      // the redactor was armed with are the ones the check receives (`TB-059`).
+      const provisioned = await provisionRuntimeInputs({
+        activation, runtimeInputs: store.runtimeInputs, executionRoot,
+      });
+      const executor = createBoundedExecutor({
+        totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
+        resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
+        environment,
+        captureOutput: true,
+        runtimePath,
+        runtimeInputs: provisioned.environment,
+      });
+
       return judged(await evaluateSeam(request, {
         ...gateInputs,
         executionRoot,

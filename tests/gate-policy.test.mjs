@@ -13,9 +13,13 @@ import {
   validateDecision,
 } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
 import {
+  ENVIRONMENT_FILES_PROPERTY,
   GATE_POLICY_SUBCONTRACTS,
+  SENSITIVE_INPUTS_PROPERTY,
   authorizeDecision,
   bindingOf,
+  declaredEnvironmentFiles,
+  declaredSensitiveInputs,
   validateGatePolicy,
 } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 
@@ -393,6 +397,134 @@ const alive = (pid) => {
     return false;
   }
 };
+
+/**
+ * `TB-045`, `FR-CFG-006`, `NFR-SEC-003`. A project declares which runtime inputs
+ * are Sensitive by NAME, inside the `evidence` subcontract it already has, and
+ * the declaration is projected onto the activation request as name and source.
+ * No value can be written here, and Gate core learns no name (`SG-OWNER-001`).
+ */
+test('TB-045 FR-CFG-006 / NFR-SEC-003: Sensitive inputs are declared as environment variable names in evidence, and nothing else', () => {
+  const policy = (evidence) => ({
+    checks: { required: ['node-package.broad-tests.test'], advisory: [] },
+    budget: { total_seconds: 600 },
+    bypass: { enabled: false, marker: null },
+    execution: {},
+    evidence,
+  });
+
+  assert.equal(SENSITIVE_INPUTS_PROPERTY, 'sensitive_inputs');
+  assert.deepEqual(validateGatePolicy(policy({})), []);
+  assert.deepEqual(validateGatePolicy(policy({ sensitive_inputs: [] })), []);
+  assert.deepEqual(validateGatePolicy(policy({ sensitive_inputs: ['APP_KEY', 'mail_password', '_X1'] })), []);
+
+  // The projection: name and source only, in declared order; nothing declared
+  // projects to nothing, exactly what the command pinned before.
+  assert.deepEqual(declaredSensitiveInputs(policy({})), []);
+  assert.deepEqual(declaredSensitiveInputs(null), []);
+  assert.deepEqual(
+    declaredSensitiveInputs(policy({ sensitive_inputs: ['APP_KEY', 'MAIL_PASSWORD'] })),
+    [{ name: 'APP_KEY', source: 'environment' }, { name: 'MAIL_PASSWORD', source: 'environment' }],
+  );
+  assert.equal(JSON.stringify(declaredSensitiveInputs(policy({ sensitive_inputs: ['APP_KEY'] }))).includes('value'), false);
+
+  // Anything that is not a list of names is refused at the one path, before
+  // activation, with the value-shaped cases named explicitly.
+  for (const invalid of [
+    'APP_KEY',
+    { APP_KEY: 'value' },
+    ['APP_KEY=hunter2hunter2'],
+    ['APP KEY'],
+    ['1KEY'],
+    [''],
+    [{ name: 'APP_KEY' }],
+    [null],
+  ]) {
+    const issues = validateGatePolicy(policy({ sensitive_inputs: invalid }));
+
+    assert.equal(issues.length, 1, `expected one issue for ${JSON.stringify(invalid)}`);
+    assert.equal(issues[0].code, 'gate-policy-evidence-invalid');
+    assert.equal(issues[0].path, 'evaluation_gate.evidence.sensitive_inputs');
+  }
+
+  const duplicated = validateGatePolicy(policy({ sensitive_inputs: ['APP_KEY', 'APP_KEY'] }));
+
+  assert.equal(duplicated.length, 1);
+  assert.match(duplicated[0].message, /more than once/);
+
+  // The five-subcontract shape is untouched: the declaration lives inside
+  // `evidence`, and a sixth subcontract carrying it is still refused.
+  const sixth = validateGatePolicy({ ...policy({}), secrets: { sensitive_inputs: ['APP_KEY'] } });
+
+  assert.equal(sixth.some((issue) => issue.code === 'gate-policy-subcontract-unknown'), true);
+});
+
+/**
+ * `TB-059`, `FR-CFG-006`. Beside the names, a project declares the environment
+ * files a name may be resolved from: repository-relative paths that stay inside
+ * the repository, validated at their own path with their own diagnostic. Whether
+ * a path is tracked is a repository fact, judged at resolution time, not here.
+ */
+test('TB-059 FR-CFG-006: environment files are declared beside sensitive inputs as contained repository-relative paths', () => {
+  const policy = (evidence) => ({
+    checks: { required: ['node-package.broad-tests.test'], advisory: [] },
+    budget: { total_seconds: 600 },
+    bypass: { enabled: false, marker: null },
+    execution: {},
+    evidence,
+  });
+
+  assert.equal(ENVIRONMENT_FILES_PROPERTY, 'environment_files');
+  assert.deepEqual(validateGatePolicy(policy({ environment_files: [] })), []);
+  assert.deepEqual(
+    validateGatePolicy(policy({ sensitive_inputs: ['APP_KEY'], environment_files: ['.env', 'config/local.env'] })),
+    [],
+  );
+
+  // The projection: declaration order, nothing read, nothing declared projects
+  // to nothing.
+  assert.deepEqual(declaredEnvironmentFiles(policy({})), []);
+  assert.deepEqual(declaredEnvironmentFiles(null), []);
+  assert.deepEqual(
+    declaredEnvironmentFiles(policy({ environment_files: ['.env.testing', '.env'] })),
+    ['.env.testing', '.env'],
+  );
+
+  // A path that could leave the repository, an absolute path, a value, or
+  // anything that is not a list of paths is refused at its own path.
+  for (const invalid of [
+    '.env',
+    { '.env': 'APP_KEY' },
+    ['../.env'],
+    ['secrets/../../.env'],
+    ['/etc/environment'],
+    ['C:\\secrets\\.env'],
+    [''],
+    [null],
+    [{ path: '.env' }],
+  ]) {
+    const issues = validateGatePolicy(policy({ environment_files: invalid }));
+
+    assert.equal(issues.length, 1, `expected one issue for ${JSON.stringify(invalid)}`);
+    assert.equal(issues[0].code, 'gate-policy-evidence-invalid');
+    assert.equal(issues[0].path, 'evaluation_gate.evidence.environment_files');
+  }
+
+  const duplicated = validateGatePolicy(policy({ environment_files: ['.env', '.env'] }));
+
+  assert.equal(duplicated.length, 1);
+  assert.equal(duplicated[0].path, 'evaluation_gate.evidence.environment_files');
+  assert.match(duplicated[0].message, /more than once/);
+
+  // Each declaration is judged at its own path, so a reader is told which
+  // one to fix.
+  const both = validateGatePolicy(policy({ sensitive_inputs: ['APP KEY'], environment_files: ['../.env'] }));
+
+  assert.deepEqual(
+    both.map((issue) => issue.path).sort(),
+    ['evaluation_gate.evidence.environment_files', 'evaluation_gate.evidence.sensitive_inputs'],
+  );
+});
 
 test('AC-POL-002 / FR-POL-005: a per-check timeout terminates the whole process tree, not only the direct child', async () => {
   const workspace = await temporaryDirectory('gate-policy-tree-');

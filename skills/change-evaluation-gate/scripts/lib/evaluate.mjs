@@ -262,7 +262,14 @@ const buildDecision = ({
   };
 };
 
-const executeCheck = async ({ descriptor, executionRoot, execute, budgetRemainingMs }) => {
+const executeCheck = async ({
+  descriptor,
+  executionRoot,
+  execute,
+  budgetRemainingMs,
+  repositoryRoot = null,
+  dependencies = null,
+}) => {
   const successExitCodes = descriptor.evidence?.success_exit_codes ?? [0];
   let raw;
 
@@ -274,6 +281,13 @@ const executeCheck = async ({ descriptor, executionRoot, execute, budgetRemainin
       role: 'evaluate',
       command: descriptor.evaluate,
       executionRoot,
+      // Where the pins were resolved against, and which dependency roots this
+      // evaluation provided beside the snapshot. The executor holds the pin
+      // and this evaluation holds the snapshot; a pinned executable under a
+      // provided root is invoked from the provided copy, and only the two
+      // facts together say which ones those are (`TB-056`).
+      repositoryRoot,
+      dependencies,
       timeoutSeconds: descriptor.timeout_seconds,
       // The remaining total budget bounds this attempt as well as its own
       // confirmed timeout; whichever runs out first terminates the tree.
@@ -302,6 +316,19 @@ const executeCheck = async ({ descriptor, executionRoot, execute, budgetRemainin
       reasonCode,
       exitCode: Number.isInteger(attempt?.exitCode) ? attempt.exitCode : null,
       durationMs: Number.isInteger(attempt?.durationMs) ? attempt.durationMs : 0,
+      // The program this attempt ran: where activation pinned it, where it was
+      // invoked from, and the provided root that made those differ, or `null`.
+      // An executor that resolves no program offers nothing here
+      // (`NFR-OPER-001`, `TB-056`).
+      ...(attempt?.program && typeof attempt.program === 'object'
+        ? {
+          program: {
+            pinned: attempt.program.pinned ?? null,
+            invoked: attempt.program.invoked ?? null,
+            root: attempt.program.root ?? null,
+          },
+        }
+        : {}),
     };
   });
 
@@ -637,6 +664,11 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
       executionRoot: snapshot.executionRoot,
       execute: dependencies.execute,
       budgetRemainingMs: budget.remainingMs(),
+      repositoryRoot: request.repository.root,
+      // Established by materialization: which roots were provided, and by
+      // which strategy. Roots that were missing or refused are not in it, so
+      // nothing re-bases onto a copy that was never made.
+      dependencies: capture.dependencies,
     });
 
     capturedOutputs.push(...outputs);

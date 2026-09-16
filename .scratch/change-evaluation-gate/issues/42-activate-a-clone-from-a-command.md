@@ -1,14 +1,14 @@
 # TB-042 — Activate a clone from a command
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by: 40-let-a-maintainer-and-an-agent-observe-the-gate
 Tracker ID: 42-activate-a-clone-from-a-command
 Draft key: TB-042
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`

@@ -131,11 +131,24 @@ disagree.
 | `timeout` | `unverified` |
 | `budget-exhausted` | `unverified` |
 | `crash` | `unverified` |
+| `launch-failed` | `unverified` |
+| `runner-pin-drift` | `unverified` |
 | `malformed-output` | `unverified` |
 | `snapshot-mismatch` | `unverified` |
 | `integrity-drift` | `unverified` |
 | `coordination-failure` | `unverified` |
 | `attempt-conflict` | `unverified` |
+| `dependency-root-unavailable` | `unverified` |
+
+Every attempt a bounded executor ran also records the `program` it ran:
+`pinned`, the executable the Activation receipt pinned; `invoked`, the path
+that was spawned; and `root`, the provided dependency root that made the two
+differ, or `null`. A provided root is where its binaries run from: a pinned
+executable that lies under a dependency root the snapshot was given is invoked
+from the provided copy, after the two are proved byte-identical. A copy that
+is not the pinned program is `runner-pin-drift` and neither is run. The
+interpreter, and any executable outside a provided root, is invoked exactly as
+pinned; a root that was missing or refused re-bases nothing.
 
 Required checks bind conjunctively: an advisory outcome never compensates for a
 required one, and an evaluation-level diagnostic that normalizes to

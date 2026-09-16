@@ -851,6 +851,78 @@ test('a clone that is not configured is refused rather than configured on the wa
   );
 });
 
+/**
+ * `TB-045`, `FR-CFG-006`. The declaration a project writes in its own policy
+ * is what the command previews, what consent is granted against, and what the
+ * receipt pins — where before this slice the command pinned `[]` as a literal
+ * and no configuration could say otherwise.
+ */
+test('TB-045 FR-CFG-006: a clone declaring Sensitive inputs previews their names and pins them through the command', async (t) => {
+  const declared = configuration().replace(
+    '  evidence: {}',
+    '  evidence: {"sensitive_inputs":["APP_KEY","MAIL_PASSWORD"]}',
+  );
+  const root = await configuredClone(t, { document: declared });
+  const undeclaredRoot = await configuredClone(t);
+
+  const preview = await gate(root, ['activate']);
+
+  assert.equal(preview.exitCode, EXIT_OBSERVED);
+  assert.deepEqual(preview.document.observation.runtimeInputs, ['APP_KEY', 'MAIL_PASSWORD']);
+  assert.match(preview.stdout, /runtime inputs: APP_KEY, MAIL_PASSWORD/);
+
+  // A clone that declares nothing behaves exactly as it did.
+  const undeclared = await gate(undeclaredRoot, ['activate']);
+
+  assert.deepEqual(undeclared.document.observation.runtimeInputs, []);
+  assert.match(undeclared.stdout, /runtime inputs: none/);
+
+  const confirmed = await gate(root, ['activate', '--confirm', tokenOf(preview)]);
+
+  assert.equal(confirmed.document.mutation.performed, true);
+
+  const receipt = JSON.parse(await activationReceipt(root));
+
+  // Names only, in the order the project wrote them; no value anywhere.
+  assert.deepEqual(receipt.runtimeInputs, ['APP_KEY', 'MAIL_PASSWORD']);
+  assert.equal(JSON.stringify(receipt).includes('"value"'), false);
+
+  // The declaration is part of the configuration identity the receipt pins,
+  // so changing it after activation is trusted-configuration drift: the
+  // registered hook refuses the commit until the clone is re-pinned.
+  await writeFile(path.join(root, '.agent-framework.yaml'), configuration(), 'utf8');
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const drifted = await git(root, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate',
+    'commit', '--quiet', '--message', 'declaration changed after activation',
+  ]).then(() => null, (error) => `${error.stdout ?? ''}${error.stderr ?? ''}`);
+
+  assert.notEqual(drifted, null, 'a commit against a changed declaration must be refused until re-pinned.');
+  assert.match(drifted, /integrity-drift/);
+  assert.match(drifted, /trusted-configuration/);
+});
+
+test('TB-045 NFR-SEC-003: a declaration carrying anything but environment variable names is refused before activation', async (t) => {
+  const root = await configuredClone(t, {
+    document: configuration().replace(
+      '  evidence: {}',
+      '  evidence: {"sensitive_inputs":["APP_KEY=not-a-secret-just-a-shape"]}',
+    ),
+  });
+
+  const refused = await gate(root, ['activate']);
+
+  assert.notEqual(refused.exitCode, EXIT_OBSERVED);
+  assert.match(
+    `${refused.stderr}${JSON.stringify(refused.document)}`,
+    /evaluation_gate\.evidence\.sensitive_inputs/,
+  );
+  assert.deepEqual(await hookDirectory(root), []);
+});
+
 test('activate is a command this surface performs, and it confirms like every other one', async () => {
   assert.ok(COMMANDS.includes('activate'));
   assert.equal(CONFIRMABLE_COMMANDS.activate, '--confirm');

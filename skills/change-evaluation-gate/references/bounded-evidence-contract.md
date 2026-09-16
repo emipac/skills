@@ -132,7 +132,11 @@ cover authorization headers, credential assignments, URL user info, and private
 key blocks.
 
 Only the name and the source of a Sensitive runtime input are recorded. Its
-value never is.
+value never is. A declared input whose value the runner's environment did not
+supply is recorded under `redaction.unresolved` (name and source), so an
+envelope states which declared names it could arm a rule for and which it could
+not; the field is present only when there is one, so an envelope from a clone
+that declares nothing is unchanged.
 
 Before anything is committed to disk the store rescans exactly what it is about
 to write. If a declared value survives in any recognized form, nothing is

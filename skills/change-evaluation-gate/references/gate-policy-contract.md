@@ -17,7 +17,7 @@ therefore cannot be configured into existence (`FR-POL-004`).
 | `budget` | `total_seconds`, the confirmed total evaluation budget |
 | `bypass` | `enabled`, optional `require_reference`, and the commit-visible `marker` |
 | `execution` | execution policy, including `budget_skippable` advisory identities, the `dependency_roots` a check needs provided, and the `dependency_provisioning` strategy that provides them |
-| `evidence` | evidence policy |
+| `evidence` | evidence policy: lower retention ceilings, the `sensitive_inputs` whose values Evidence must never keep, and the `environment_files` those inputs may be resolved from |
 
 No subcontract may carry a command, runner, argument list, working directory,
 allowed environment, evidence category, profile, capability, activation, trust,
@@ -119,6 +119,108 @@ What was provided, what was not, what was refused, and which strategy provided
 them all reach the decision at `environment.dependencies`, so a check that
 failed because a root was unavailable is diagnosable without rerunning anything
 (`NFR-OPER-001`).
+
+## Sensitive inputs
+
+`evidence.sensitive_inputs` names the Sensitive runtime inputs a project's
+checks receive — a list of environment variable **names**, and nothing else.
+It lives in `evidence` because that is the only thing it governs: what the Gate
+keeps. At evaluation time each approved name is resolved to a value — from the
+environment the runner itself runs in, else from a declared environment file
+(below) — and that value is removed — raw and in every encoded form the store
+recognizes — from every envelope, blob, decision, and Lifecycle event before
+anything is written. Only the built-in patterns protect a project that
+declares nothing, and they catch a secret only in a shape they recognize
+(`NAME=value`, an authorization header, a URL with user info, a PEM block); a
+bare value in a stack trace is caught only by a declared rule (`FR-CFG-006`,
+`NFR-SEC-003`, `SG-SECRET-001`).
+
+```yaml
+evaluation_gate:
+  evidence: {"sensitive_inputs": ["APP_KEY", "MAIL_PASSWORD"]}
+```
+
+- A **value** can never be declared here. Anything that is not a list of
+  environment variable names — an assignment, an object, a duplicate — is
+  refused by plan validation before activation, as
+  `evaluation_gate.evidence.sensitive_inputs`.
+- The declaration reaches the Activation receipt as names only, through the
+  preview (`runtime inputs: APP_KEY, MAIL_PASSWORD`), so consent is granted
+  against it. It is part of the configuration identity the receipt pins:
+  **adding, removing, or renaming a declaration after activation is
+  trusted-configuration drift**, and the clone must be re-pinned before it
+  authorizes again.
+- **Approval at activation is the consent to hand the value over.** An
+  approved name reaches every check through its environment, whether or not
+  the check's descriptor lists it in `allowed_environment` — that list governs
+  pass-through of *ambient* variables and keeps exactly that meaning. The value
+  is merged after the ambient pass-through; neither can shadow the other,
+  because a name the runner's environment sets is resolved from there.
+- A declared name **resolved from no source** at evaluation time is not an
+  error and not a silent pass. The evaluation proceeds, no rule can be armed for
+  that name, and the envelope records it under `redaction.unresolved` beside
+  the armed `redaction.secrets` — with `searched`, the sources that were
+  consulted, when a file was declared. A project that declares nothing writes
+  exactly the envelope it always did.
+- Which names are Sensitive is the project's declaration; Gate core knows no
+  variable name, tool, or stack (`SG-OWNER-001`).
+
+### Environment files
+
+`evidence.environment_files` names the files a declared Sensitive input may be
+resolved from when the runner's own environment does not set it — a list of
+repository-relative **paths**, in the order they are consulted. It sits beside
+`sensitive_inputs` because it changes only where an already-declared name is
+looked up. A stock Laravel application keeps `APP_KEY` in a git-ignored `.env`
+the snapshot cannot contain and exports it from no shell; this is how its test
+suite boots inside the snapshot (`FR-CFG-006`, `TB-059`).
+
+```yaml
+evaluation_gate:
+  evidence: {"sensitive_inputs": ["APP_KEY"], "environment_files": [".env"]}
+```
+
+- **Resolution order, per approved name:** the runner's environment first;
+  then each declared file in declaration order; the first value found wins;
+  a name found nowhere is `unresolved`. A name the environment sets never has
+  a file consulted for it, and a file is opened only while some approved name
+  is still unresolved. The envelope records which source each armed name came
+  from (`redaction.secrets[].source`: `environment` or the file's declared
+  path) and what each declared file turned out to be
+  (`redaction.environmentFiles[].status`: `read`, `not-consulted`, `missing`,
+  `tracked`, or `unreadable`).
+- **Only approved names are read.** A file is parsed far enough to learn which
+  name each line assigns; a line assigning a name the receipt did not approve
+  is skipped without its value being decoded, kept, or reported. The file is
+  never copied into the snapshot, the store, or anywhere else.
+- **Grammar:** `NAME=value`; an optional `export ` prefix; unquoted values
+  (trailing ` #` comment stripped), single-quoted values (literal), and
+  double-quoted values (`\"` and `\\` unescaped); `#` comment lines; blank
+  lines. A later assignment of the same name in one file replaces an earlier
+  one. A line this grammar cannot parse for an approved name — an unterminated
+  quote, an empty value — yields no value, which is the `unresolved` case, not
+  an error. No dotenv or YAML library is involved.
+- A path that could leave the repository, an absolute path, a duplicate, or
+  anything that is not a list of paths is refused by plan validation as
+  `evaluation_gate.evidence.environment_files`. A declared file that is
+  **tracked** is refused at resolution time and never read: it is already in
+  the snapshot, and reading it again would be a second source.
+- The value reaches the check the way `materializeRuntimeInputs` has always
+  provided: an owner-only (`0600`) file inside a `0700` directory under the
+  execution root, and the check's environment. The directory is a child of the
+  execution root under the operating system's temporary directory; it is
+  outside the snapshot's path list, identity, and immutability re-check, and
+  it is removed with the root — in the runners' `finally`, by the signal
+  disposition, and by the orphan sweep. Stated plainly: a secret lives
+  transiently under the OS temporary directory, owner-only, while a check runs.
+- One resolution feeds both consumers. The values the materializer hands a
+  check are the values the redactor was armed with, before the store opened,
+  so a value cannot reach a check without also reaching the redactor
+  (`SG-SECRET-001`, `AC-EVID-001`).
+- `framework-setup` writes `sensitive_inputs: ["APP_KEY"]` and
+  `environment_files: [".env"]` into the section it drafts for a Laravel
+  profile, and nothing for any other profile. That is the profile's knowledge;
+  no variable name or file name lives in Gate core (`SG-OWNER-001`).
 
 ## Bypass
 

@@ -266,9 +266,14 @@ const configureClone = async (root, overrides = {}) => {
       ...(overrides.firstArgument === undefined ? ['            - app/Order.php'] : []),
       '          working_directory: "."',
       '          timeout_seconds: 60',
-      '          allowed_environment:',
-      '            - PATH',
-      ...(overrides.allowedEnvironment ?? []).map((name) => `            - ${name}`),
+      // `null` declares literally nothing ambient (`TB-059`); a list adds to `PATH`.
+      ...(overrides.allowedEnvironment === null
+        ? ['          allowed_environment: []']
+        : [
+          '          allowed_environment:',
+          '            - PATH',
+          ...(overrides.allowedEnvironment ?? []).map((name) => `            - ${name}`),
+        ]),
       '          evidence_category: test',
       '          source_scope: both',
       ...((overrides.prerequisites ?? []).length === 0
@@ -703,8 +708,530 @@ test('TB-026 SG-SECRET-001: a declared runtime input a check prints is redacted 
   const declared = envelope.redaction.secrets.find((secret) => secret.name === 'APP_TOKEN');
 
   assert.notEqual(declared, undefined);
-  assert.equal(declared.source, 'approved-environment-file');
+  // The receipt pins names only; the source recorded is where the runner
+  // actually read the value: its own environment (TB-045).
+  assert.equal(declared.source, 'environment');
   assert.equal('value' in declared, false, 'only the name and source of a Sensitive input may be recorded, never its value.');
+});
+
+/**
+ * A synthetic canary in a shape NO built-in pattern matches: a bare value in a
+ * stack trace, with no variable name, no `=`, no scheme, no URL. Only a rule
+ * armed from the declared value can catch it; a canary printed as `TOKEN=…`
+ * would pass on the pattern layer alone and prove nothing about `TB-045`.
+ */
+const PATTERN_INVISIBLE_CANARY = 'qz7v3m9k2p5w8r4t1y6u0n';
+
+const configureSensitiveClone = async (root, {
+  declared = [], allowedEnvironment = ['APP_KEY'], environmentFiles = [],
+} = {}) => {
+  await configureClone(root, { allowedEnvironment });
+  await writeFile(
+    path.join(root, 'tools/check.mjs'),
+    [
+      "import { readFile } from 'node:fs/promises';",
+      '',
+      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      "const key = process.env.APP_KEY ?? '';",
+      '',
+      "process.stdout.write('Error: could not connect\\n');",
+      // The bare value, alone on a line, and again inside a stack frame.
+      "process.stdout.write(`    at connect (${key})\\n`);",
+      "process.stdout.write(`${key}\\n`);",
+      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  if (declared.length > 0) {
+    const document = await readFile(path.join(root, '.agent-framework.yaml'), 'utf8');
+    const evidence = {
+      sensitive_inputs: declared,
+      ...(environmentFiles.length > 0 ? { environment_files: environmentFiles } : {}),
+    };
+
+    await writeFile(
+      path.join(root, '.agent-framework.yaml'),
+      document.replace('  evidence: {}', `  evidence: ${JSON.stringify(evidence)}`),
+      'utf8',
+    );
+  }
+};
+
+/** Every byte the store holds, so a value cannot hide in one file. */
+const storedBytes = async (root) => {
+  const store = await readStore(root);
+  const entries = await readdir(store.root, { recursive: true, withFileTypes: true });
+  const contents = [];
+
+  for (const entry of entries) {
+    if (entry.isFile()) {
+      contents.push(await readFile(path.join(entry.parentPath ?? entry.path, entry.name), 'utf8'));
+    }
+  }
+
+  return contents.join('\n');
+};
+
+test('TB-045 AC-CFG-004, NFR-SEC-003: a declared value printed in a shape no built-in pattern matches is absent from every stored byte', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY },
+  });
+
+  assert.equal(result.exitCode, 0, `expected an allow, got: ${result.lines.join('\n')}`);
+
+  const retained = [
+    await storedBytes(root),
+    await readFile(path.join(root, '.agent-framework.yaml'), 'utf8'),
+    result.lines.join('\n'),
+  ].join('\n');
+
+  assert.equal(retained.includes(PATTERN_INVISIBLE_CANARY), false, 'the raw value survived in stored bytes.');
+  assert.equal(
+    retained.includes(Buffer.from(PATTERN_INVISIBLE_CANARY).toString('base64')),
+    false,
+    'an encoded form of the value survived in stored bytes.',
+  );
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.deepEqual(envelope.redaction.secrets, [{ name: 'APP_KEY', source: 'environment' }]);
+  assert.equal('unresolved' in envelope.redaction, false);
+  assert.ok(
+    envelope.redaction.rules.some((rule) => rule.rule === 'declared:APP_KEY' && rule.count >= 2),
+    `the declared rule must be the one that caught it: ${JSON.stringify(envelope.redaction.rules)}`,
+  );
+
+  const blobs = await store.listBlobs();
+
+  assert.ok(blobs.length > 0, 'the check output must have been retained as a blob to scan.');
+});
+
+test('TB-045 AC-EVID-001: two runs printing the same declared value address one envelope, derived over redacted bytes', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const environment = { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY };
+  const first = await runHook({ cwd: root, environment });
+  const second = await runHook({ cwd: root, environment });
+
+  assert.equal(first.exitCode, 0);
+  assert.equal(second.exitCode, 0);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2, 'each attempt is logged.');
+  assert.equal(log[0].evidenceId, log[1].evidenceId, 'identical redacted content is one envelope.');
+  assert.equal((await store.readEnvelope(log[0].evidenceId)).redaction.applied > 0, true);
+});
+
+test('TB-045: a declared name this environment does not set is recorded as unresolved, not an error and not silence', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root, { declared: ['APP_KEY'] });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const environment = { ...process.env };
+
+  delete environment.APP_KEY;
+
+  const result = await runHook({ cwd: root, environment });
+
+  assert.equal(result.exitCode, 0, `an absent declared input is not an error: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  // Nothing could be armed for it, and the envelope says exactly that.
+  assert.deepEqual(envelope.redaction.secrets, []);
+  assert.deepEqual(envelope.redaction.unresolved, [{ name: 'APP_KEY', source: 'environment' }]);
+  assert.equal(JSON.stringify(envelope).includes('"value"'), false);
+});
+
+test('TB-045: a clone declaring nothing writes the envelope it always did; the pattern layer alone applies', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureSensitiveClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({
+    cwd: root,
+    environment: { ...process.env, APP_KEY: PATTERN_INVISIBLE_CANARY },
+  });
+
+  assert.equal(result.exitCode, 0);
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+
+  assert.deepEqual(envelope.redaction.secrets, []);
+  assert.equal('unresolved' in envelope.redaction, false, 'an undeclared clone gains no new envelope field.');
+  assert.deepEqual(
+    Object.keys(envelope.redaction),
+    ['version', 'secrets', 'rules', 'applied', 'redactedBytes'],
+  );
+  // And, stated so nobody overclaims: with nothing declared, a pattern-invisible
+  // value is retained. This is today's behaviour, unchanged.
+  assert.equal((await storedBytes(root)).includes(PATTERN_INVISIBLE_CANARY), true);
+});
+
+/**
+ * `TB-059` — `FR-CFG-006`, `AC-EVAL-001`, `AC-CFG-004`, `SG-SECRET-001`,
+ * `NFR-SEC-003`, `SG-EVAL-001`, `AC-EVID-001`.
+ *
+ * A stack-shaped fixture: the check needs a key the project keeps ONLY in a
+ * git-ignored environment file, beside a second value nobody declared. Before
+ * this slice the check failed inside the snapshot with the key absent; after
+ * it, the approved name is resolved from the declared file, handed to the
+ * check through its environment regardless of `allowed_environment`, scrubbed
+ * from every stored byte, and gone with the execution root.
+ *
+ * Every value here is a synthetic literal invented for the fixture.
+ */
+const FILE_CANARY = 'k8r2w9m4x7c1v5b3n6q0zj';
+
+const DECOY_CANARY = 'decoy-h4j7l2p9s5d8f1g6a3';
+
+/** A check that boots only with the key, prints it bare, and reports what else it saw. */
+const configureKeyedClone = async (root, {
+  environmentFiles = ['.env'], declared = ['APP_KEY'], allowedEnvironment = null, envFile = null,
+} = {}) => {
+  await configureSensitiveClone(root, { declared, environmentFiles, allowedEnvironment });
+  await writeFile(
+    path.join(root, 'tools/check.mjs'),
+    [
+      "import { readFile } from 'node:fs/promises';",
+      '',
+      "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+      "const key = process.env.APP_KEY ?? '';",
+      '',
+      "if (key === '') {",
+      "  process.stdout.write('No application encryption key has been specified.\\n');",
+      '  process.exit(1);',
+      '}',
+      '',
+      // The bare value inside a stack frame, matching no built-in pattern.
+      "process.stdout.write(`    at boot (${key})\\n`);",
+      'process.stdout.write(`key length ${key.length}\\n`);',
+      "process.stdout.write(`decoy ${process.env.OTHER_SECRET ?? 'absent'}\\n`);",
+      "process.stdout.write(`home ${process.env.HOME ?? 'absent'}\\n`);",
+      'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+      "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  await writeFile(path.join(root, '.gitignore'), '.env\n', 'utf8');
+  await runFile('git', ['add', '--all'], { cwd: root, env: isolatedGitEnvironment() });
+  await runFile('git', [
+    '-c', 'user.email=gate@example.test', '-c', 'user.name=Gate Hook Runner',
+    'commit', '--quiet', '--message', 'configure',
+  ], { cwd: root, env: isolatedGitEnvironment() });
+
+  if (envFile !== null) {
+    await writeFile(path.join(root, '.env'), envFile, 'utf8');
+  }
+};
+
+/** The runner's environment with nothing of the fixture in it. */
+const bareEnvironment = () => {
+  const environment = { ...process.env };
+
+  delete environment.APP_KEY;
+  delete environment.OTHER_SECRET;
+
+  return environment;
+};
+
+const inlineOutputOf = (envelope) => envelope.retention.attempts
+  .map((attempt) => attempt.inline ?? '')
+  .join('\n');
+
+test('TB-059 FR-CFG-006 / AC-EVAL-001: a key kept only in a git-ignored environment file reaches the check, and no stored byte keeps it', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureKeyedClone(root, { envFile: `APP_KEY=${FILE_CANARY}\nOTHER_SECRET=${DECOY_CANARY}\n` });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  // The store elides every host path, so the real root is observed through
+  // the evaluate seam, and the owner-only file through the executor, while
+  // the check is about to run.
+  const observed = { executionRoot: null, inputFile: null, mode: null, contents: null };
+  const allowed = await runHook({
+    cwd: root,
+    environment: bareEnvironment(),
+    evaluate: async (request, dependencies) => {
+      observed.executionRoot = dependencies.executionRoot;
+
+      return realEvaluate(request, {
+        ...dependencies,
+        execute: async (options) => {
+          const { stat } = await import('node:fs/promises');
+
+          observed.inputFile = path.join(options.executionRoot, '.change-evaluation-gate-runtime-inputs', 'APP_KEY');
+          observed.mode = (await stat(observed.inputFile)).mode & 0o777;
+          observed.contents = await readFile(observed.inputFile, 'utf8');
+
+          return dependencies.execute(options);
+        },
+      });
+    },
+  });
+
+  assert.equal(allowed.exitCode, 0, `the check must boot with the resolved key: ${allowed.lines.join('\n')}`);
+  assert.equal(observed.mode, 0o600, 'the materialized value is owner-only while the check runs.');
+  assert.equal(observed.contents, FILE_CANARY);
+  assert.equal(
+    observed.executionRoot.startsWith(await realpath(tmpdir())),
+    true,
+    'the transient lives under the OS temporary directory, and nowhere else.',
+  );
+
+  // The same commit with a required failure still blocks: nothing about
+  // handing the key over changed what is graded.
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const denied = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  assert.notEqual(denied.exitCode, 0);
+  assert.equal(denied.reasonCode, 'denied');
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+
+  assert.equal(log.length, 2);
+
+  const envelope = await store.readEnvelope(log[0].evidenceId);
+  const inline = inlineOutputOf(envelope);
+
+  // What the check saw: the key (redacted here), no decoy, no ambient variable
+  // its descriptor did not list — it listed none.
+  assert.match(inline, /at boot \(\[redacted]\)/, `the check must have printed the redacted key: ${inline}`);
+  assert.match(inline, new RegExp(`key length ${FILE_CANARY.length}`));
+  assert.match(inline, /decoy absent/, 'the undeclared name in the file reached the check.');
+  assert.match(inline, /home absent/, 'an ambient variable the descriptor did not list reached the check.');
+
+  // Names and sources only, and the file's own status.
+  assert.deepEqual(envelope.redaction.secrets, [{ name: 'APP_KEY', source: '.env' }]);
+  assert.equal('unresolved' in envelope.redaction, false);
+  assert.deepEqual(envelope.redaction.environmentFiles, [{ path: '.env', status: 'read' }]);
+  assert.ok(envelope.redaction.rules.some((rule) => rule.rule === 'declared:APP_KEY' && rule.count >= 1));
+  assert.ok((await store.listBlobs()).length > 0, 'the check output must be retained as a blob to scan.');
+
+  // Every stored byte, every recognized form, both values.
+  const retained = [
+    await storedBytes(root),
+    await readFile(path.join(root, '.agent-framework.yaml'), 'utf8'),
+    allowed.lines.join('\n'),
+    denied.lines.join('\n'),
+  ].join('\n');
+
+  for (const canary of [FILE_CANARY, DECOY_CANARY]) {
+    for (const form of [
+      canary,
+      Buffer.from(canary).toString('base64'),
+      Buffer.from(canary).toString('base64url'),
+      Buffer.from(canary).toString('hex'),
+      encodeURIComponent(canary),
+    ]) {
+      assert.equal(retained.includes(form), false, `a form of ${canary === FILE_CANARY ? 'the key' : 'the decoy'} survived in stored bytes.`);
+    }
+  }
+
+  assert.equal(retained.includes('OTHER_SECRET'), false, 'the undeclared name was never read, so it is nowhere.');
+
+  // The execution root, and the owner-only file beneath it, are gone. (The
+  // log entry keeps the root's path for diagnosis, as it always has; host-path
+  // redaction is its own gap and not this slice's.)
+  assert.equal(log[0].execution.executionRoot, observed.executionRoot, 'the log names the root the check ran in.');
+  assert.equal(
+    await readdir(observed.executionRoot).then(() => true, () => false),
+    false,
+    'the execution root must be removed with the evaluation.',
+  );
+  assert.equal(await readFile(observed.inputFile, 'utf8').then(() => true, () => false), false);
+});
+
+test('TB-059: the runner environment beats the declared file, which is then not consulted', async (t) => {
+  const root = await throwawayRepository(t);
+  const fromEnvironment = 'env-first-a1b2c3d4e5f6g7h8';
+
+  await configureKeyedClone(root, { envFile: `APP_KEY=${FILE_CANARY}\n` });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: { ...bareEnvironment(), APP_KEY: fromEnvironment } });
+
+  assert.equal(result.exitCode, 0, result.lines.join('\n'));
+
+  const store = await readStore(root);
+  const envelope = await store.readEnvelope((await store.readLog())[0].evidenceId);
+
+  assert.match(inlineOutputOf(envelope), new RegExp(`key length ${fromEnvironment.length}`), 'the environment value is the one handed over.');
+  assert.deepEqual(envelope.redaction.secrets, [{ name: 'APP_KEY', source: 'environment' }]);
+  assert.deepEqual(envelope.redaction.environmentFiles, [{ path: '.env', status: 'not-consulted' }]);
+  assert.equal((await storedBytes(root)).includes(FILE_CANARY), false, 'the file value was read although the environment set the name.');
+});
+
+test('TB-059: a declared name in neither the environment nor the file is unresolved, with where it was looked for; the decoy is still never read', async (t) => {
+  const root = await throwawayRepository(t);
+
+  // The TB-045 check, which does not need the key, so the commit is graded.
+  await configureSensitiveClone(root, { declared: ['APP_KEY'], environmentFiles: ['.env'] });
+  await writeFile(path.join(root, '.gitignore'), '.env\n', 'utf8');
+  await writeFile(path.join(root, '.env'), `OTHER_SECRET=${DECOY_CANARY}\n`, 'utf8');
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  assert.equal(result.exitCode, 0, `an unresolved input is not an error: ${result.lines.join('\n')}`);
+
+  const store = await readStore(root);
+  const envelope = await store.readEnvelope((await store.readLog())[0].evidenceId);
+
+  assert.deepEqual(envelope.redaction.secrets, []);
+  assert.deepEqual(envelope.redaction.unresolved, [{ name: 'APP_KEY', source: 'environment', searched: ['environment', '.env'] }]);
+  assert.deepEqual(envelope.redaction.environmentFiles, [{ path: '.env', status: 'read' }]);
+  assert.equal((await storedBytes(root)).includes(DECOY_CANARY), false);
+});
+
+test('TB-059 FR-CFG-006: a declared file that is tracked is refused, never read, and the name stays unresolved', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureKeyedClone(root);
+  // Tracked: the file is in the snapshot already, so it is a second source.
+  await writeFile(path.join(root, '.gitignore'), '', 'utf8');
+  await writeFile(path.join(root, '.env'), `APP_KEY=${FILE_CANARY}\n`, 'utf8');
+  await runFile('git', ['add', '--all'], { cwd: root, env: isolatedGitEnvironment() });
+  await runFile('git', [
+    '-c', 'user.email=gate@example.test', '-c', 'user.name=Gate Hook Runner',
+    'commit', '--quiet', '--message', 'track the file',
+  ], { cwd: root, env: isolatedGitEnvironment() });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const result = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  // The check needs the key and did not get it: a real required failure.
+  assert.equal(result.reasonCode, 'denied', result.lines.join('\n'));
+
+  const store = await readStore(root);
+  const envelope = await store.readEnvelope((await store.readLog())[0].evidenceId);
+
+  assert.match(inlineOutputOf(envelope), /No application encryption key/);
+  assert.deepEqual(envelope.redaction.environmentFiles, [{ path: '.env', status: 'tracked' }]);
+  assert.deepEqual(envelope.redaction.unresolved, [{ name: 'APP_KEY', source: 'environment', searched: ['environment'] }]);
+});
+
+test('TB-059 SG-EVAL-001 / NFR-REL-001: the materialized input moves neither the snapshot identity nor its immutability re-check', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureKeyedClone(root, { envFile: `APP_KEY=${FILE_CANARY}\n` });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const withInput = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  assert.equal(withInput.exitCode, 0, withInput.lines.join('\n'));
+
+  // Same tracked content, nothing to materialize: the file is gone, so the
+  // check fails, but the identity of what was graded is the same identity.
+  await rm(path.join(root, '.env'));
+
+  const withoutInput = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  assert.equal(withoutInput.reasonCode, 'denied');
+
+  const store = await readStore(root);
+  const log = await store.readLog();
+  const first = await store.readEnvelope(log[0].evidenceId);
+  const second = await store.readEnvelope(log[1].evidenceId);
+
+  assert.equal(first.decision.snapshot.id, second.decision.snapshot.id, 'the runtime-input directory is outside the identity.');
+  assert.equal(
+    first.decision.diagnostics.some((diagnostic) => diagnostic.reasonCode === 'snapshot-mismatch'),
+    false,
+    'the immutability re-check must not see the runtime-input directory.',
+  );
+  assert.equal(first.decision.outcome, 'passed');
+});
+
+test('TB-059 AC-EVID-001: two runs printing a value resolved from the file address one envelope', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureKeyedClone(root, { envFile: `APP_KEY=${FILE_CANARY}\n` });
+  await publishReceipt(root, { runtimeInputs: ['APP_KEY'] });
+  await stage(root, 'baseline\nrepaired\n');
+
+  const first = await runHook({ cwd: root, environment: bareEnvironment() });
+  const second = await runHook({ cwd: root, environment: bareEnvironment() });
+
+  assert.equal(first.exitCode, 0);
+  assert.equal(second.exitCode, 0);
+
+  const log = await (await readStore(root)).readLog();
+
+  assert.equal(log.length, 2);
+  assert.equal(log[0].evidenceId, log[1].evidenceId, 'redaction preceded persistence on both runs.');
+});
+
+test('TB-059 FR-CFG-006: an interrupted run leaves the owner-only file to the sweep, which removes it with the root', async (t) => {
+  const { materializeRuntimeInputs, RUNTIME_INPUT_DIRECTORY } = await import(
+    '../skills/change-evaluation-gate/scripts/lib/security-control.mjs'
+  );
+  const { sweepOrphanedExecutionRoots, EXECUTION_ROOT_RETENTION_MS } = await import(
+    '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs'
+  );
+  const { utimes, stat } = await import('node:fs/promises');
+  const sweepRoot = await realpath(await temporaryRoot('gate-hook-runner-sweep-'));
+
+  t.after(() => rm(sweepRoot, { recursive: true, force: true }));
+
+  // What a run interrupted by SIGKILL leaves: a root under the gate's prefix
+  // holding the materialized input, and no `finally` that ever ran.
+  const abandoned = path.join(sweepRoot, 'gate-hook-runner-exec-interrupted');
+
+  await mkdir(abandoned, { recursive: true });
+
+  const materialized = await materializeRuntimeInputs({
+    approved: ['APP_KEY'],
+    inputs: [{ name: 'APP_KEY', source: '.env', value: FILE_CANARY }],
+    executionRoot: abandoned,
+  });
+  const inputFile = path.join(abandoned, RUNTIME_INPUT_DIRECTORY, 'APP_KEY');
+
+  assert.equal((await stat(inputFile)).mode & 0o777, 0o600);
+
+  const stale = new Date(Date.now() - EXECUTION_ROOT_RETENTION_MS - 60_000);
+
+  await utimes(abandoned, stale, stale);
+
+  const swept = await sweepOrphanedExecutionRoots({ temporaryRoot: sweepRoot });
+
+  assert.deepEqual(swept.removed, [abandoned]);
+  assert.equal(await stat(inputFile).then(() => true, () => false), false, 'the owner-only file must be gone with the root.');
+  assert.equal(await stat(materialized.directory).then(() => true, () => false), false);
 });
 
 test("TB-026 FR-EVID-003: the ceilings applied are the clone's own evaluation_gate.evidence limits", async (t) => {

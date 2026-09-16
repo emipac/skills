@@ -69,6 +69,11 @@ export const REASON_OUTCOMES = Object.freeze({
   // crash or a timeout: reporting it as a verdict tells a maintainer their code
   // was rejected by a tool that never read a line of it (NFR-REL-003).
   'launch-failed': 'unverified',
+  // The copy of a pinned executable provided beside the snapshot is not the
+  // program activation pinned, byte for byte. Neither is run: substituting a
+  // program activation never proved is never a recovery (`TB-056`, `TB-024`,
+  // `NFR-REL-003`).
+  'runner-pin-drift': 'unverified',
   'malformed-output': 'unverified',
   'snapshot-mismatch': 'unverified',
   // A dependency root the project declared could not be provided to the

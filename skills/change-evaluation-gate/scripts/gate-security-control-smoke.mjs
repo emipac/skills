@@ -30,6 +30,27 @@
  *    Trusted policy, and neither advances trust nor authorizes; a hash-bound
  *    approval advances only once both policies pass (`AC-CFG-003`,
  *    `SG-CFG-001`).
+ * 5. `configured-declaration` — a Sensitive input declared in the clone's OWN
+ *    configuration (`evaluation_gate.evidence.sensitive_inputs`) reaches the
+ *    preview, the receipt, and the store through `gate activate` and a real
+ *    commit; a check that prints the value in a shape no built-in pattern
+ *    matches leaves no recognized form of it anywhere the clone keeps; and the
+ *    same name absent from the environment is recorded as unresolved rather
+ *    than erroring or passing silently. Scenario 1 supplies its declaration
+ *    from the fixture, which is exactly what no project could do before
+ *    `TB-045` (`AC-CFG-004`, `NFR-SEC-003`, `FR-CFG-006`).
+ * 6. `declared-environment-file` — a stack-shaped clone whose check boots only
+ *    with a key the project keeps in a git-ignored environment file beside a
+ *    value nobody declared, and whose descriptor allows no ambient variable:
+ *    through `gate activate` and real commits by the shipped hook, the
+ *    approved name is resolved from the declared file, reaches the check, is
+ *    absent from every byte the clone keeps in every recognized form, and its
+ *    owner-only materialization is gone with the execution root; the decoy
+ *    reaches neither the check nor the store; a required failure still
+ *    blocks; and with the file removed the same commit fails inside the
+ *    snapshot exactly as every such project did before `TB-059`, recorded as
+ *    unresolved with the sources searched (`FR-CFG-006`, `AC-EVAL-001`,
+ *    `AC-CFG-004`, `SG-EVAL-001`, `SG-SECRET-001`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -773,6 +794,506 @@ const packagedPolicyTransition = () => {
   return { name: 'packaged-policy-transition', ok: findings.length === 0, findings };
 };
 
+/** The packaged operator command, run the way a maintainer or an agent runs it. */
+const PACKAGED_COMMAND = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gate.mjs');
+
+const runPackagedCommand = (cwd, args, environment = {}) => runFile(
+  process.execPath,
+  [PACKAGED_COMMAND, ...args],
+  { cwd, env: { ...gitEnvironment(), ...environment } },
+).then(
+  (result) => ({ exitCode: 0, stdout: result.stdout, stderr: result.stderr }),
+  (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }),
+);
+
+/**
+ * A synthetic canary in a shape NO built-in pattern matches: a bare value
+ * inside a stack frame, with no variable name, no `=`, no scheme, no URL. Only
+ * a rule armed from the declared value can catch it. Scenario 1 prints its
+ * canary beside recognizable labels and would pass on the pattern layer alone.
+ */
+const DECLARED_CANARY = 'wq4n8k2vz7m1p5r9t3y6x0';
+
+const DECLARED_INPUT = 'APP_KEY';
+
+/** A required check that fails loudly and prints the declared value bare. */
+const DECLARED_CHECK_SCRIPT = [
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  `const key = process.env.${DECLARED_INPUT} ?? '';`,
+  '',
+  "process.stdout.write('Error: connection refused\\n');",
+  'process.stdout.write(`    at connect (${key})\\n`);',
+  'process.stdout.write(`${key}\\n`);',
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+/** The clone configuration: the same one check, now declaring one Sensitive input. */
+const declaredConfiguration = () => runnerConfiguration()
+  .replace("            - PATH\n", `            - PATH\n            - ${DECLARED_INPUT}\n`)
+  .replace('  evidence: {}', `  evidence: {"sensitive_inputs":["${DECLARED_INPUT}"]}`);
+
+const commitAttempt = (root, message, environment) => runFile('git', [
+  '-c', 'user.email=gate@example.test',
+  '-c', 'user.name=Gate Security Control Smoke',
+  'commit', '--quiet', '--message', message,
+], { cwd: root, env: { ...gitEnvironment(), ...environment } }).then(
+  () => ({ failed: false, output: '' }),
+  (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+/**
+ * A declaration written in the clone's own configuration, reaching the store
+ * through `gate activate` and a real commit — the reachability `TB-045` is
+ * about. Scenario 1 proves the redactor with a declaration the fixture supplies
+ * itself; until this slice no project could supply one, so every real clone
+ * ran with no declared secret and the pattern layer alone.
+ *
+ * The check prints the declared value in a shape no built-in pattern matches,
+ * the commit is denied by a real required failure, and no recognized form of
+ * the value survives anywhere the clone keeps: the store, the receipt, the hook,
+ * the configuration, or the runner's own output (`AC-CFG-004`, `NFR-SEC-003`,
+ * `FR-CFG-006`). A second commit with the declared name absent from the
+ * environment is not an error and not silent: the envelope names it as
+ * unresolved.
+ */
+const configuredDeclaration = async () => {
+  const findings = [];
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-declared-repo-`);
+
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), DECLARED_CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), declaredConfiguration(), 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'baseline',
+  ]);
+
+  // The preview names the declared input, so consent is granted against it.
+  const preview = await runPackagedCommand(repositoryRoot, ['activate']);
+
+  check(findings, preview.exitCode === 0, `The activation preview exited ${preview.exitCode}: ${preview.stderr}`);
+  check(
+    findings,
+    preview.stdout.includes(`runtime inputs: ${DECLARED_INPUT}`),
+    `The preview did not name the declared input: ${preview.stdout}`,
+  );
+
+  const previewed = await runPackagedCommand(repositoryRoot, ['activate', '--json']);
+  const token = JSON.parse(previewed.stdout || '{}').observation?.confirmationToken ?? '';
+  const confirmed = await runPackagedCommand(repositoryRoot, ['activate', '--confirm', token, '--json']);
+  const confirmedDocument = JSON.parse(confirmed.stdout || '{}');
+
+  check(
+    findings,
+    confirmedDocument.mutation?.performed === true,
+    `The command did not activate the clone: ${confirmed.stdout}${confirmed.stderr}`,
+  );
+
+  if (confirmedDocument.mutation?.performed !== true) {
+    return { name: 'configured-declaration', ok: false, findings };
+  }
+
+  const common = (await git(repositoryRoot, ['rev-parse', '--git-common-dir'])).stdout.trim();
+  const gitDirectory = path.resolve(repositoryRoot, common);
+  const receiptPath = path.join(gitDirectory, 'change-evaluation-gate/evidence/activation/receipt.json');
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+
+  check(
+    findings,
+    JSON.stringify(receipt.runtimeInputs) === JSON.stringify([DECLARED_INPUT]),
+    `The receipt did not pin the declared name: ${JSON.stringify(receipt.runtimeInputs)}.`,
+  );
+
+  // A real commit, denied by a real required failure that printed the value.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nBROKEN\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const denied = await commitAttempt(repositoryRoot, 'prints the declared value', {
+    [DECLARED_INPUT]: DECLARED_CANARY,
+  });
+
+  check(findings, denied.failed === true, 'The failing check was not denied.');
+  check(
+    findings,
+    !denied.output.includes(DECLARED_CANARY),
+    'The declared value reached the runner output shown to the committer.',
+  );
+
+  const storeRoot = path.join(gitDirectory, 'change-evaluation-gate');
+  const store = await openEvidenceStore({ repositoryRoot, identity: storeIdentity() });
+  const log = await store.readLog();
+
+  check(findings, log.length === 1, `Expected one logged envelope, found ${log.length}.`);
+
+  const envelope = log.length > 0 ? await store.readEnvelope(log[0].evidenceId) : null;
+
+  check(
+    findings,
+    JSON.stringify(envelope?.redaction?.secrets) === JSON.stringify([{ name: DECLARED_INPUT, source: 'environment' }]),
+    `The envelope did not record the declared input by name and source: ${JSON.stringify(envelope?.redaction?.secrets)}.`,
+  );
+  check(
+    findings,
+    (envelope?.redaction?.rules ?? []).some((rule) => rule.rule === `declared:${DECLARED_INPUT}` && rule.count >= 2),
+    `The declared rule did not catch the bare value: ${JSON.stringify(envelope?.redaction?.rules)}.`,
+  );
+  check(findings, (await store.listBlobs()).length > 0, 'No output blob was retained to scan.');
+
+  // Every byte the clone keeps: store, receipt, hook, configuration, worktree.
+  const retained = [
+    await treeContents(storeRoot),
+    await treeContents(path.join(gitDirectory, 'hooks')),
+    await readFile(path.join(repositoryRoot, '.agent-framework.yaml'), 'utf8'),
+    denied.output,
+  ].join('\n');
+
+  for (const form of secretForms(DECLARED_CANARY)) {
+    check(
+      findings,
+      !retained.includes(form),
+      `A recognized form of the declared value survived in retained state (${form.slice(0, 6)}…).`,
+    );
+  }
+
+  check(findings, retained.includes(DECLARED_INPUT), 'The declared input name was not retained.');
+
+  // The same declared name, absent from the environment: not an error, not
+  // silent. The commit is graded, and the envelope says nothing was armed.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nrepaired\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const environment = { ...process.env };
+
+  delete environment[DECLARED_INPUT];
+
+  const allowed = await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'declared input absent from the environment',
+  ], { cwd: repositoryRoot, env: { ...environment, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } }).then(
+    () => ({ failed: false, output: '' }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  check(findings, allowed.failed === false, `An absent declared input was treated as an error: ${allowed.output}`);
+
+  const afterLog = await store.readLog();
+  const latest = afterLog.length > 1 ? await store.readEnvelope(afterLog.at(-1).evidenceId) : null;
+
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.unresolved) === JSON.stringify([{ name: DECLARED_INPUT, source: 'environment' }]),
+    `The envelope did not record the absent declared input as unresolved: ${JSON.stringify(latest?.redaction)}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.secrets) === '[]',
+    'An absent declared input was recorded as armed.',
+  );
+
+  return { name: 'configured-declaration', ok: findings.length === 0, findings };
+};
+
+/**
+ * A synthetic key in a shape no built-in pattern matches, and a synthetic
+ * decoy that must never be read. Neither is a credential; both are invented
+ * for this fixture.
+ */
+const FILE_CANARY = 'p9x2k7m4w1r8c5v3b6n0zq';
+
+const DECOY_CANARY = 'decoy-t3y6u9i2o5p8a1s4d7';
+
+const DECLARED_FILE = '.env';
+
+/**
+ * Where the check reports what it observed of its own execution root. The
+ * store elides every host path, so the only way to learn where the check ran
+ * and what the owner-only file looked like while it ran is for the check to
+ * say so out of band. Removed before and after each run.
+ */
+const OBSERVATION_FILE = path.join(tmpdir(), `${CAPABILITY}-envfile-observation.json`);
+
+/** A required check that boots only with the key, and prints it bare. */
+const KEYED_CHECK_SCRIPT = [
+  "import { readFile, stat, writeFile } from 'node:fs/promises';",
+  "import path from 'node:path';",
+  '',
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  `const key = process.env.${DECLARED_INPUT} ?? '';`,
+  `const inputFile = path.join(process.cwd(), '.change-evaluation-gate-runtime-inputs', '${DECLARED_INPUT}');`,
+  'const observed = await stat(inputFile).then(',
+  '  (entry) => ({ present: true, mode: entry.mode & 0o777 }),',
+  '  () => ({ present: false, mode: null }),',
+  ');',
+  '',
+  `await writeFile(${JSON.stringify(OBSERVATION_FILE)}, JSON.stringify({`,
+  '  executionRoot: process.cwd(),',
+  '  inputFile,',
+  '  ...observed,',
+  '  sameValue: observed.present && (await readFile(inputFile, "utf8")) === key,',
+  "}), 'utf8');",
+  '',
+  "if (key === '') {",
+  "  process.stdout.write('No application encryption key has been specified.\\n');",
+  '  process.exit(1);',
+  '}',
+  '',
+  'process.stdout.write(`    at boot (${key})\\n`);',
+  'process.stdout.write(`key length ${key.length}\\n`);',
+  "process.stdout.write(`decoy ${process.env.OTHER_SECRET ?? 'absent'}\\n`);",
+  "process.stdout.write(`home ${process.env.HOME ?? 'absent'}\\n`);",
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+/**
+ * The clone configuration: the same one check, declaring the input AND the
+ * file, and allowing NO ambient variable at all — so the only way the key can
+ * reach the check is the approval the receipt pinned.
+ */
+const keyedConfiguration = () => runnerConfiguration()
+  .replace('          allowed_environment:\n            - PATH\n', '          allowed_environment: []\n')
+  .replace(
+    '  evidence: {}',
+    `  evidence: {"sensitive_inputs":["${DECLARED_INPUT}"],"environment_files":["${DECLARED_FILE}"]}`,
+  );
+
+/** The runner's environment with nothing of the fixture in it. */
+const bareEnvironment = () => {
+  const environment = { ...gitEnvironment() };
+
+  delete environment[DECLARED_INPUT];
+  delete environment.OTHER_SECRET;
+
+  return environment;
+};
+
+const commitWith = (root, message, environment) => runFile('git', [
+  '-c', 'user.email=gate@example.test',
+  '-c', 'user.name=Gate Security Control Smoke',
+  'commit', '--quiet', '--message', message,
+], { cwd: root, env: environment }).then(
+  () => ({ failed: false, output: '' }),
+  (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+const declaredEnvironmentFile = async () => {
+  const findings = [];
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-envfile-repo-`);
+
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), KEYED_CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await writeFile(path.join(repositoryRoot, '.gitignore'), `${DECLARED_FILE}\n`, 'utf8');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), keyedConfiguration(), 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'baseline',
+  ]);
+  // The git-ignored file, written after the baseline so it is in no commit.
+  await writeFile(
+    path.join(repositoryRoot, DECLARED_FILE),
+    `# local settings\n${DECLARED_INPUT}=${FILE_CANARY}\nOTHER_SECRET=${DECOY_CANARY}\n`,
+    'utf8',
+  );
+
+  const tracked = (await git(repositoryRoot, ['ls-files', '--', DECLARED_FILE])).stdout.trim();
+
+  check(findings, tracked === '', `The fixture's environment file is tracked: ${tracked}`);
+
+  const preview = await runPackagedCommand(repositoryRoot, ['activate'], bareEnvironment());
+
+  check(findings, preview.exitCode === 0, `The activation preview exited ${preview.exitCode}: ${preview.stderr}`);
+  check(
+    findings,
+    preview.stdout.includes(`runtime inputs: ${DECLARED_INPUT}`),
+    `The preview did not name the declared input: ${preview.stdout}`,
+  );
+
+  const previewed = await runPackagedCommand(repositoryRoot, ['activate', '--json'], bareEnvironment());
+  const token = JSON.parse(previewed.stdout || '{}').observation?.confirmationToken ?? '';
+  const confirmed = await runPackagedCommand(repositoryRoot, ['activate', '--confirm', token, '--json'], bareEnvironment());
+  const confirmedDocument = JSON.parse(confirmed.stdout || '{}');
+
+  check(
+    findings,
+    confirmedDocument.mutation?.performed === true,
+    `The command did not activate the clone: ${confirmed.stdout}${confirmed.stderr}`,
+  );
+
+  if (confirmedDocument.mutation?.performed !== true) {
+    return { name: 'declared-environment-file', ok: false, findings };
+  }
+
+  const common = (await git(repositoryRoot, ['rev-parse', '--git-common-dir'])).stdout.trim();
+  const gitDirectory = path.resolve(repositoryRoot, common);
+  const receipt = JSON.parse(await readFile(
+    path.join(gitDirectory, 'change-evaluation-gate/evidence/activation/receipt.json'),
+    'utf8',
+  ));
+
+  check(
+    findings,
+    JSON.stringify(receipt.runtimeInputs) === JSON.stringify([DECLARED_INPUT]),
+    `The receipt did not pin the declared name: ${JSON.stringify(receipt.runtimeInputs)}.`,
+  );
+
+  // A real commit by the shipped hook, with the key in no environment: it
+  // boots, because the approved name was resolved from the declared file.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nrepaired\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+  await rm(OBSERVATION_FILE, { force: true });
+
+  const allowed = await commitWith(repositoryRoot, 'boots with the resolved key', bareEnvironment());
+
+  check(findings, allowed.failed === false, `The check did not boot with the resolved key: ${allowed.output}`);
+
+  // What the check saw while it ran, and what is left of it now.
+  const observed = JSON.parse(await readFile(OBSERVATION_FILE, 'utf8').catch(() => 'null'));
+
+  await rm(OBSERVATION_FILE, { force: true });
+  check(findings, observed !== null, 'The check left no observation of its execution root.');
+  check(findings, observed?.present === true, 'The owner-only input file was not beside the check while it ran.');
+  check(findings, observed?.mode === 0o600, `The input file was not owner-only: ${observed?.mode?.toString(8)}.`);
+  check(findings, observed?.sameValue === true, 'The input file and the environment did not carry one value.');
+  check(
+    findings,
+    typeof observed?.executionRoot === 'string' && isInside(await realpath(tmpdir()), observed.executionRoot),
+    `The check did not run under the OS temporary directory: ${observed?.executionRoot}.`,
+  );
+  check(
+    findings,
+    typeof observed?.inputFile === 'string' && !existsSync(observed.inputFile),
+    `The owner-only input file survived the evaluation: ${observed?.inputFile}.`,
+  );
+  check(
+    findings,
+    typeof observed?.executionRoot === 'string' && !existsSync(observed.executionRoot),
+    `The execution root survived the evaluation: ${observed?.executionRoot}.`,
+  );
+
+  // The same clone with a required failure is still denied.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nBROKEN\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+
+  const denied = await commitWith(repositoryRoot, 'a required failure', bareEnvironment());
+
+  check(findings, denied.failed === true, 'The failing check was not denied.');
+
+  const storeRoot = path.join(gitDirectory, 'change-evaluation-gate');
+  const store = await openEvidenceStore({ repositoryRoot, identity: storeIdentity() });
+  const log = await store.readLog();
+
+  check(findings, log.length === 2, `Expected two logged envelopes, found ${log.length}.`);
+
+  const envelope = log.length > 0 ? await store.readEnvelope(log[0].evidenceId) : null;
+  const inline = (envelope?.retention?.attempts ?? []).map((attempt) => attempt.inline ?? '').join('\n');
+
+  check(findings, /at boot \(\[redacted]\)/.test(inline), `The check did not print the redacted key: ${inline}`);
+  check(findings, inline.includes(`key length ${FILE_CANARY.length}`), 'The value the check received is not the file value.');
+  check(findings, inline.includes('decoy absent'), 'The undeclared name in the file reached the check.');
+  check(findings, inline.includes('home absent'), 'An ambient variable the descriptor did not list reached the check.');
+  check(
+    findings,
+    JSON.stringify(envelope?.redaction?.secrets) === JSON.stringify([{ name: DECLARED_INPUT, source: DECLARED_FILE }]),
+    `The envelope did not record the input by name and file source: ${JSON.stringify(envelope?.redaction?.secrets)}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(envelope?.redaction?.environmentFiles) === JSON.stringify([{ path: DECLARED_FILE, status: 'read' }]),
+    `The envelope did not record the declared file's status: ${JSON.stringify(envelope?.redaction?.environmentFiles)}.`,
+  );
+  check(findings, (await store.listBlobs()).length > 0, 'No output blob was retained to scan.');
+
+  // The stored decision names no host path at all, so the observation above
+  // is the only place the real root was ever written — and it is gone.
+  check(
+    findings,
+    typeof observed?.executionRoot !== 'string' || !JSON.stringify(envelope).includes(observed.executionRoot),
+    'The stored envelope carries the host path of the execution root.',
+  );
+
+  // Every byte the clone keeps: store, receipt, hook, configuration, and what
+  // the committer was shown. Neither value, in any recognized form.
+  const retained = [
+    await treeContents(storeRoot),
+    await treeContents(path.join(gitDirectory, 'hooks')),
+    await readFile(path.join(repositoryRoot, '.agent-framework.yaml'), 'utf8'),
+    allowed.output,
+    denied.output,
+  ].join('\n');
+
+  for (const canary of [FILE_CANARY, DECOY_CANARY]) {
+    for (const form of secretForms(canary)) {
+      check(
+        findings,
+        !retained.includes(form),
+        `A recognized form of ${canary === FILE_CANARY ? 'the key' : 'the decoy'} survived in retained state (${form.slice(0, 6)}…).`,
+      );
+    }
+  }
+
+  check(findings, retained.includes(DECLARED_INPUT), 'The declared input name was not retained.');
+  check(findings, !retained.includes('OTHER_SECRET'), 'The undeclared name was read from the file.');
+
+  // With the file gone, the same commit fails inside the snapshot exactly as
+  // every such project did before this slice — and the envelope says why.
+  await rm(path.join(repositoryRoot, DECLARED_FILE));
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nrepaired again\n', 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+  await rm(OBSERVATION_FILE, { force: true });
+
+  const withoutFile = await commitWith(repositoryRoot, 'no key anywhere', bareEnvironment());
+  const unprovisioned = JSON.parse(await readFile(OBSERVATION_FILE, 'utf8').catch(() => 'null'));
+
+  await rm(OBSERVATION_FILE, { force: true });
+  check(findings, withoutFile.failed === true, 'A check that needs the key booted without it.');
+  check(findings, unprovisioned?.present === false, 'An input file was materialized with nothing resolved.');
+
+  const afterLog = await store.readLog();
+  const latest = afterLog.length > 2 ? await store.readEnvelope(afterLog.at(-1).evidenceId) : null;
+  const latestInline = (latest?.retention?.attempts ?? []).map((attempt) => attempt.inline ?? '').join('\n');
+
+  check(findings, latestInline.includes('No application encryption key'), `The check did not fail for the missing key: ${latestInline}`);
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.unresolved) === JSON.stringify([
+      { name: DECLARED_INPUT, source: 'environment', searched: ['environment'] },
+    ]),
+    `The envelope did not record the absent input as unresolved with its searched sources: ${JSON.stringify(latest?.redaction)}.`,
+  );
+  check(
+    findings,
+    JSON.stringify(latest?.redaction?.environmentFiles) === JSON.stringify([{ path: DECLARED_FILE, status: 'missing' }]),
+    `The envelope did not record the missing file: ${JSON.stringify(latest?.redaction?.environmentFiles)}.`,
+  );
+  // The snapshot's own re-check saw nothing beside the tracked content: the
+  // runtime-input directory is outside the identity and its verification.
+  // (Identity equality with and without the input, over one tracked tree, is
+  // proved by the runner's unit suite.)
+  for (const stored of [envelope, latest]) {
+    check(
+      findings,
+      !(stored?.decision?.diagnostics ?? []).some((diagnostic) => diagnostic.reasonCode === 'snapshot-mismatch'),
+      'The immutability re-check saw the runtime-input directory.',
+    );
+  }
+
+  return { name: 'declared-environment-file', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -783,6 +1304,8 @@ const main = async () => {
       await packagedDrift(),
       await packagedRunnerDrift(),
       packagedPolicyTransition(),
+      await configuredDeclaration(),
+      await declaredEnvironmentFile(),
     ];
   } finally {
     for (const root of temporaryRoots) {

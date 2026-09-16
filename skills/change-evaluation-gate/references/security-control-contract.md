@@ -86,6 +86,28 @@ them. Redaction at the persistence boundary (`redaction.mjs`,
 written; a value that survives redaction is `unsafe-capture` and the decision
 becomes `sensitive-capture-unsafe` / `unverified`.
 
+**What a real clone declares, and where it is resolved.** A project names its
+Sensitive inputs in `evaluation_gate.evidence.sensitive_inputs` and, beside
+them, the environment files a name may be resolved from in
+`evaluation_gate.evidence.environment_files` (see the
+[Gate policy contract](./gate-policy-contract.md)). `gate activate` projects
+the names onto the activation request, the preview shows them, and the receipt
+pins them. Both packaged runners then reach one seam with the receipt, the
+configuration, and the repository in hand — `openStore` in `hook-runner.mjs` —
+and that seam resolves every approved name once, through `runtime-inputs.mjs`:
+the runner's environment first, then each declared file in order, first value
+found, else unresolved. The resolved `{ name, source, value }` set arms the
+redactor before the store opens and is returned to the runner, which hands the
+same set to `materializeRuntimeInputs` once the execution root exists
+(`provisionRuntimeInputs`). The materializer's environment is merged into each
+check's environment after the ambient pass-through, regardless of
+`allowed_environment`. One resolution, two consumers: a value cannot reach a
+check without reaching the redactor. A name no source supplies is recorded in
+the envelope under `redaction.unresolved`, with the sources searched, rather
+than erroring or passing silently; a declared file's own status is recorded
+under `redaction.environmentFiles`. Nothing copies an environment file, and
+only approved names are ever read from one.
+
 ## Gate control-surface drift (`NFR-SEC-004`, `AC-SEC-001`)
 
 `CONTROL_SURFACES` is the closed set the Activation receipt pins:
