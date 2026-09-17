@@ -18,9 +18,8 @@
  * therefore never be handed the mutating seam by accident.
  */
 
-import { createHash } from 'node:crypto';
-
 import { evaluate } from './evaluate.mjs';
+import { contentIdentity } from './evidence-identity.mjs';
 import { FIX_OPERATION, FIX_ROLE } from './mutation.mjs';
 import { authorizationFor } from './policy.mjs';
 
@@ -40,9 +39,9 @@ export {
  */
 export const MUTATION_OUTCOMES = Object.freeze(['applied', 'failed', 'unverified', 'not-run']);
 
-const identity = (value) => `sha256:${createHash('sha256')
-  .update(JSON.stringify(value))
-  .digest('hex')}`;
+// The fix identity is the one content-identity scheme this Gate has, so key
+// order never changes it (NFR-AUD-001).
+const identity = contentIdentity;
 
 const classifyMutation = (attempt, successExitCodes) => {
   if (!attempt || typeof attempt !== 'object') {

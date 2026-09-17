@@ -757,11 +757,14 @@ const packagedObservation = async () => {
   // Refusal, by name, of the operation a separate contract owns and of every
   // invocation that would preview and confirm in one run (`TB-041`). `activate`
   // is no longer among them: `TB-042` moved it into the command registry, and
-  // its own two invocations are proved by `gate-activation-smoke`.
+  // its own two invocations are proved by `gate-activation-smoke`. `--repair`
+  // is no longer a selector anything owns either — `repair` is a command — so
+  // `gate status --repair` is refused as a selector `status` does not take,
+  // and still repairs nothing (`TB-050`).
   for (const [args, owner] of [
     [['fix'], 'gate fix'],
     [['activate', '--confirm'], 'gate activate --confirm <token>'],
-    [['status', '--repair'], 'gate repair'],
+    [['status', '--repair'], null],
     [['locks', '--recover'], 'gate locks --recover <token>'],
     [['prune', '--confirm'], 'gate prune --confirm <token>'],
     [['repair', '--preview', '--confirm', prune.observation?.confirmationToken ?? 'x'], 'gate repair --confirm <token>'],

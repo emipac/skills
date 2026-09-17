@@ -18,6 +18,13 @@
  * repository and a loopback HTTP server on an ephemeral port. It never touches
  * this repository's Git state and requires no external service or framework.
  *
+ * SAFETY: every fixture is a throwaway repository created under the OS
+ * temporary directory and removed afterwards. `assertThrowawayRepository`
+ * refuses any root that is not under that directory or that lies inside this
+ * repository. This capability *removes* fixture roots, so that guard is
+ * checked again immediately before every removal, not only at fixture
+ * creation.
+ *
  * Usage:
  *   node skills/change-evaluation-gate/scripts/runtime-binding-smoke.mjs [--json]
  *
@@ -25,16 +32,20 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { evaluate } from './lib/evaluate.mjs';
 import { validateDecision } from './lib/evaluation-contract.mjs';
 
 const CAPABILITY = 'gate-runtime-binding-smoke';
+
+/** This repository. No fixture may ever touch its Git state or its files. */
+const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const PROBE = 'public/app.txt';
 
@@ -44,10 +55,35 @@ const temporaryRoots = [];
 
 const servers = [];
 
+const isInside = (parent, candidate) => candidate === parent
+  || candidate.startsWith(`${parent}${path.sep}`);
+
+/** The guard. Nothing in this capability reads, writes, or removes outside a throwaway root. */
+const assertThrowawayRepository = async (root) => {
+  const resolved = await realpath(root).catch(() => path.resolve(root));
+  const temporaryRoot = await realpath(tmpdir()).catch(() => path.resolve(tmpdir()));
+  const frameworkRoot = await realpath(FRAMEWORK_ROOT).catch(() => FRAMEWORK_ROOT);
+
+  if (!isInside(temporaryRoot, resolved)) {
+    throw new Error(`${CAPABILITY} refuses to operate outside the OS temporary directory: ${resolved}.`);
+  }
+
+  if (isInside(frameworkRoot, resolved)) {
+    throw new Error(`${CAPABILITY} refuses to operate inside this repository: ${resolved}.`);
+  }
+
+  return resolved;
+};
+
 const temporaryDirectory = async (prefix) => {
-  const directory = await mkdtemp(path.join(tmpdir(), prefix));
+  // The guard before the first write: a temporary directory that resolves
+  // inside this repository is refused before anything is created in it.
+  await assertThrowawayRepository(tmpdir());
+
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), prefix)));
 
   temporaryRoots.push(directory);
+  await assertThrowawayRepository(directory);
 
   return directory;
 };
@@ -62,6 +98,7 @@ const git = (cwd, args) => runFile('git', args, { cwd });
 const divergedRepository = async () => {
   const root = await temporaryDirectory('gate-binding-repo-');
 
+  await assertThrowawayRepository(root);
   await mkdir(path.join(root, 'public'), { recursive: true });
   await writeFile(path.join(root, PROBE), 'baseline\n', 'utf8');
   await git(root, ['init', '--quiet']);
@@ -283,6 +320,9 @@ const main = async () => {
     }
 
     for (const root of temporaryRoots) {
+      // The guard again, immediately before the only recursive removal in this
+      // capability. A fixture root that somehow escaped is never deleted.
+      await assertThrowawayRepository(root);
       await rm(root, { recursive: true, force: true });
     }
   }

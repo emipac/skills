@@ -1,14 +1,14 @@
 # TB-050 — Close three gaps the audit found
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 50-close-three-gaps-the-audit-found
 Draft key: TB-050
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`

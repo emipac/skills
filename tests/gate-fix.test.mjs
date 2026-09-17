@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import { evaluate } from '../skills/change-evaluation-gate/scripts/lib/evaluate.mjs';
 import { runFix } from '../skills/change-evaluation-gate/scripts/lib/fix.mjs';
+import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/evidence-identity.mjs';
 import { validateDecision } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
 import { collectChecks } from '../skills/change-evaluation-gate/scripts/lib/gate-core.mjs';
 import laravelProvider from '../skills/change-evaluation-gate/scripts/lib/providers/laravel.mjs';
@@ -396,6 +397,18 @@ test('AC-POL-004 and AC-PROF-005: explicit fix mutates in the declared order and
   assert.notEqual(result.reevaluation.snapshot.id, priorDecision.snapshot.id);
   assert.equal(result.supersededEvaluationId, priorDecision.evaluationId);
   assert.deepEqual(result.diagnostics, []);
+
+  // NFR-AUD-001 (TB-050): the fix identity is the one content-identity scheme,
+  // so it recomputes from the same facts spelled with their keys in another
+  // order. A key-order-dependent digest would disagree with this.
+  assert.match(result.fixId, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(result.fixId, contentIdentity({
+    supersededEvaluationId: priorDecision.evaluationId,
+    steps: result.mutations.map(({ checkId, order }) => ({ order, checkId })),
+    sessionId: worktreeRequest(root, 'fix').invocation.sessionId,
+    repository: root,
+    operation: 'fix',
+  }));
 
   // No evaluation, before or after the fix, ever invoked a mutating command.
   assert.deepEqual([...new Set(evaluated.map(({ role }) => role))], ['evaluate']);

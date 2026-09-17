@@ -175,12 +175,12 @@ export const CONFIRMABLE_COMMANDS = Object.freeze({
  * `TB-040` stated these as data precisely so a later slice could move entries
  * OUT of them as it implemented each one, rather than growing a second parser
  * beside them. `TB-041` moved `--recover`, `--confirm`, `--confirmation`, and
- * `--token` out; what is left belongs to `gate repair` — which is now its own
- * command rather than a selector of somebody else's — and to `gate fix`, whose
- * risk profile is a different contract's.
+ * `--token` out and made `repair` a first-class command, so `--repair` is no
+ * longer a selector anything owns: it is refused like any other selector no
+ * command takes (`TB-050`). What is left belongs to `gate fix`, whose risk
+ * profile is a different contract's.
  */
 export const CONFIRMED_SELECTORS = Object.freeze({
-  '--repair': 'gate repair',
   '--fix': 'gate fix',
 });
 
