@@ -118,6 +118,16 @@ and not executed first is the most common thing a contract gets wrong.>
 
 None — can start immediately.
 
+<!-- The audit reads this section by its grammar, not by every id it mentions.
+A section whose first line begins with None declares no blockers, whatever
+finished tickets the prose goes on to name. Otherwise each blocker is a TB-NNN
+that begins a line (optionally bulleted or backticked); text after it on the
+same line is explanation:
+- `TB-001` — the seam this ticket extends.
+- `TB-002` — the policy it consumes.
+A header `Blocked by:` line is cross-checked against this section and warns
+when they disagree; it never adds an edge. -->
+
 ## Unresolved Assumptions
 
 None.

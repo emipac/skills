@@ -457,6 +457,25 @@ const PLATFORM_BASE_PATH = Object.freeze(
 );
 
 /**
+ * Find one of the platform's own utilities, in the platform's own directories
+ * and nowhere else.
+ *
+ * This is resolution, not lookup: the ambient `PATH` — a version manager, a
+ * package-manager prefix, whatever shell invoked the gate — is never consulted,
+ * so a utility found here is the one the operating system ships, at a recorded
+ * absolute path, exactly as a runner is pinned to a concrete executable
+ * (`TB-024`, `NFR-REL-001`). A platform with no such fixed directories
+ * resolves nothing, and the caller proceeds without the utility.
+ *
+ * @param {string} name a bare utility name
+ * @returns {string|null} the absolute path, or `null` when no such utility ships
+ */
+export const locatePlatformUtility = (name) => locateOnPath(
+  name,
+  { PATH: PLATFORM_BASE_PATH.join(path.delimiter) },
+);
+
+/**
  * The search path a set of resolved runners needs in order to start.
  *
  * Its first entries are derived from the pins themselves — the directory of

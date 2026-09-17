@@ -1,14 +1,14 @@
 # TB-055 — Clone a dependency tree when the system can
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: TB-054
 Tracker ID: 55-clone-a-dependency-tree-when-the-system-can
 Draft key: TB-055
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`

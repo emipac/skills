@@ -42,7 +42,10 @@
  */
 
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import {
+  lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, statfs, symlink, writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -868,12 +871,25 @@ const linkedTemporaryRootFixture = async () => {
  * (`TB-057`): the mapped root is a real directory the tool resolves inside the
  * execution root, the unmapped one is a link, the record names both, and the
  * identity is the same as under either scalar.
+ *
+ * The `copy` pass also answers what the copy cost (`TB-055`). The dependency
+ * root carries a payload large enough that a clone and a byte copy cannot be
+ * confused, the free space of the volume is read before and after, and the
+ * mechanism the capture RECORDED must agree with what was MEASURED: a root
+ * recorded as cloned consumed almost nothing, a root recorded as byte-copied
+ * consumed its size. Which of the two this environment does is observed here
+ * and carried into the manifest, never predicted from the platform's name.
+ * The root also carries a relative link, which must still be the same
+ * relative link afterwards, and the source and destination paths both
+ * contain a space, because a program is being handed them (`AC-PORT-001`).
  */
+const PROVISIONED_PAYLOAD_BYTES = 32 * 1024 * 1024;
+
 const dependencyProvisioningFixture = async () => {
   const declared = 'installed';
   const unmapped = 'installed-too';
   const locator = 'export const loadedFrom = import.meta.dirname;\n';
-  const source = await repositoryWithHistory('gate-portability-provisioning-');
+  const source = await repositoryWithHistory('gate portability provisioning-');
 
   await writeFile(path.join(source, '.gitignore'), `${declared}/\n${unmapped}/\n`);
   await mkdir(path.join(source, unmapped), { recursive: true });
@@ -885,17 +901,25 @@ const dependencyProvisioningFixture = async () => {
       'process.stdout.write(loadedFrom);',
     ].join('\n'),
   );
-  await mkdir(path.join(source, declared), { recursive: true });
+  await mkdir(path.join(source, declared, 'nested'), { recursive: true });
   await writeFile(path.join(source, declared, 'locate.mjs'), locator);
+  await writeFile(path.join(source, declared, 'nested', 'payload.bin'), randomBytes(PROVISIONED_PAYLOAD_BYTES));
+  await symlink(path.join('nested', 'payload.bin'), path.join(source, declared, 'payload-link'));
   await git(source, ['add', '--all']);
   await commit(source, 'a project whose tool asks where its dependency lives');
 
   const findings = [];
   const observed = {};
   const canonicalSource = await realpath(source);
+  const freeBytes = async (location) => {
+    const space = await statfs(location);
+
+    return space.bavail * space.bsize;
+  };
 
   for (const strategy of ['link', 'copy']) {
-    const executionRoot = await temporaryDirectory(`gate-portability-provisioning-${strategy}-`);
+    const executionRoot = await temporaryDirectory(`gate portability provisioning ${strategy}-`);
+    const before = await freeBytes(executionRoot);
     const captured = await captureSnapshot({
       repositoryRoot: source,
       kind: 'git-index',
@@ -904,6 +928,7 @@ const dependencyProvisioningFixture = async () => {
       dependencyRoots: [declared],
       dependencyProvisioning: strategy,
     });
+    const consumedBytes = before - await freeBytes(executionRoot);
 
     if (!captured.captured) {
       findings.push(`the ${strategy} snapshot was not captured: ${captured.detail}`);
@@ -916,6 +941,56 @@ const dependencyProvisioningFixture = async () => {
       findings.push(`the ${strategy} capture provided ${JSON.stringify(captured.dependencies)}.`);
 
       continue;
+    }
+
+    const mechanism = captured.dependencies.mechanisms?.[declared] ?? null;
+
+    if (strategy === 'link' && 'mechanisms' in captured.dependencies) {
+      findings.push(`under link the record carries a copy mechanism: ${JSON.stringify(captured.dependencies)}.`);
+    }
+
+    if (strategy === 'copy') {
+      if (mechanism?.mechanism === 'clone') {
+        if (!(consumedBytes < PROVISIONED_PAYLOAD_BYTES / 4)) {
+          findings.push(`the copy was recorded as a clone by ${mechanism.program} but consumed ${consumedBytes} of the ${PROVISIONED_PAYLOAD_BYTES}-byte tree.`);
+        }
+
+        if (typeof mechanism.program !== 'string' || !path.isAbsolute(mechanism.program)) {
+          findings.push(`the clone does not record the absolute path of the program that performed it: ${JSON.stringify(mechanism)}.`);
+        }
+      } else if (mechanism?.mechanism === 'byte-copy') {
+        if (!(consumedBytes > PROVISIONED_PAYLOAD_BYTES / 2)) {
+          findings.push(`the copy was recorded as a byte copy but consumed only ${consumedBytes} of the ${PROVISIONED_PAYLOAD_BYTES}-byte tree.`);
+        }
+
+        if (mechanism.program !== null) {
+          findings.push(`a byte copy names a program: ${JSON.stringify(mechanism)}.`);
+        }
+      } else {
+        findings.push(`the copy recorded no mechanism: ${JSON.stringify(captured.dependencies)}.`);
+      }
+
+      const provided = path.join(executionRoot, declared);
+      const linkTarget = await readlink(path.join(provided, 'payload-link')).catch(() => null);
+
+      if (linkTarget !== path.join('nested', 'payload.bin')) {
+        findings.push(`the relative link inside the copied tree became ${JSON.stringify(linkTarget)}.`);
+      }
+
+      const same = (await readFile(path.join(provided, 'nested', 'payload.bin')))
+        .equals(await readFile(path.join(source, declared, 'nested', 'payload.bin')));
+
+      if (!same) {
+        findings.push('the copied payload differs from the source.');
+      }
+
+      // NFR-SEC-001, whichever mechanism ran: a write into the provided root,
+      // in place and through the link, reaches nothing in the repository.
+      await writeFile(path.join(provided, 'payload-link'), 'written through the copy\n');
+
+      if ((await readFile(path.join(source, declared, 'nested', 'payload.bin'))).length !== PROVISIONED_PAYLOAD_BYTES) {
+        findings.push('a write into the copied root reached the repository.');
+      }
     }
 
     const attempt = await executeCheck({
@@ -932,6 +1007,8 @@ const dependencyProvisioningFixture = async () => {
     observed[strategy] = {
       executionRoot,
       snapshotId: captured.snapshot.id,
+      mechanism,
+      consumedBytes,
       loadedFrom: (attempt.output ?? '').trim(),
       // SG-EVAL-001: a provided root is outside the identity under both
       // strategies, so the immutability re-check still holds after a tool has
@@ -968,7 +1045,7 @@ const dependencyProvisioningFixture = async () => {
   }
 
   // The mixed declaration: one root mapped `copy`, the other left to `link`.
-  const mixedRoot = await temporaryDirectory('gate-portability-provisioning-mixed-');
+  const mixedRoot = await temporaryDirectory('gate portability provisioning mixed-');
   const mixed = await captureSnapshot({
     repositoryRoot: source,
     kind: 'git-index',
@@ -981,8 +1058,10 @@ const dependencyProvisioningFixture = async () => {
   if (!mixed.captured) {
     findings.push(`the mixed snapshot was not captured: ${mixed.detail}`);
   } else {
+    const mixedMechanism = mixed.dependencies.mechanisms?.[declared] ?? null;
     const expected = {
       provisioning: { [declared]: 'copy', [unmapped]: 'link' },
+      mechanisms: { [declared]: mixedMechanism },
       provided: [declared, unmapped],
       missing: [],
       refused: [],
@@ -990,6 +1069,12 @@ const dependencyProvisioningFixture = async () => {
 
     if (JSON.stringify(mixed.dependencies) !== JSON.stringify(expected)) {
       findings.push(`the mixed capture recorded ${JSON.stringify(mixed.dependencies)} rather than each root's strategy.`);
+    }
+
+    // One environment, one answer: the mixed pass copied the same root onto
+    // the same volume, so it was performed by the same mechanism.
+    if (observed.copy && mixedMechanism?.mechanism !== observed.copy.mechanism?.mechanism) {
+      findings.push(`the mixed capture copied ${declared} by ${JSON.stringify(mixedMechanism)} while the scalar copy used ${JSON.stringify(observed.copy.mechanism)}.`);
     }
 
     const mappedIsLink = await lstat(path.join(mixedRoot, declared)).then((entry) => entry.isSymbolicLink(), () => null);
@@ -1031,11 +1116,17 @@ const dependencyProvisioningFixture = async () => {
   return {
     ok: findings.length === 0,
     detail: findings.length === 0
-      ? `The same tool, unchanged, resolved its dependency to ${observed.link.loadedFrom} under link and to ${observed.copy.loadedFrom} under copy; under a map naming only ${declared} it was a real directory beside a linked ${unmapped}; the snapshot identity, its path list, and its re-check were the same under all three.`
+      ? `The same tool, unchanged, resolved its dependency to ${observed.link.loadedFrom} under link and to ${observed.copy.loadedFrom} under copy; the copy was performed by ${observed.copy.mechanism.mechanism}${observed.copy.mechanism.program === null ? '' : ` through ${observed.copy.mechanism.program}`} and consumed ${observed.copy.consumedBytes} bytes of a ${PROVISIONED_PAYLOAD_BYTES}-byte tree; under a map naming only ${declared} it was a real directory beside a linked ${unmapped}; the snapshot identity, its path list, and its re-check were the same under all three.`
       : findings.join(' '),
     observed: {
       link: observed.link?.loadedFrom ?? null,
       copy: observed.copy?.loadedFrom ?? null,
+      // What the copy cost on this environment, as measured, beside the
+      // mechanism the capture recorded for it: the two must agree, and a
+      // reader of the manifest sees both (`TB-055`, `NFR-OPER-001`).
+      copyMechanism: observed.copy?.mechanism ?? null,
+      copyConsumedBytes: observed.copy?.consumedBytes ?? null,
+      copyTreeBytes: PROVISIONED_PAYLOAD_BYTES,
       mixed: mixed.captured ? mixed.dependencies.provisioning : null,
     },
   };

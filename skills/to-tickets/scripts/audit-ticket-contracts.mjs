@@ -107,9 +107,6 @@ const traceIds = (value) => [...value.matchAll(
   /\b(?:(?:FR|NFR|AC|SG)-[A-Z0-9]+-\d{3}|RISK-\d{3}|Q-\d{3})\b/g,
 )].map((match) => match[0]);
 
-const blockerIds = (value) => [...value.matchAll(/\bTB-\d{3}\b/g)]
-  .map((match) => match[0]);
-
 const uniqueSorted = (values) => [...new Set(values)].sort();
 const addError = (errors, code, message) => errors.push({ code, message });
 
@@ -117,33 +114,100 @@ const idsWithPrefix = (values, prefixes) => values.filter(
   (id) => prefixes.some((prefix) => id.startsWith(prefix)),
 );
 
-const graphHasCycle = (graph) => {
+// A `## Blocked By` section has a grammar, and a blocker is read from that
+// grammar rather than from every ticket id the prose happens to mention.
+//
+//   None[. explanation mentioning finished tickets]     -> no blockers
+//   [- ]`TB-nnn`[ — explanation | , explanation]         -> blocked by TB-nnn
+//
+// The section declares no blockers when its first content line begins with
+// `None`; anything it goes on to say is explanation, whatever ids it names.
+// Otherwise a blocker is a ticket id that begins a content line (after an
+// optional bullet, bold, or backticks); ids later on the same line belong to
+// the explanation. A bulleted `- TB-nnn` item under a `None` section is a
+// contradiction: `None` wins, and the item is reported as a warning.
+const leadingBlockerPattern = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|`)*\s*(TB-\d{3})\b/;
+const bulletedBlockerPattern = /^\s*(?:[-*+]\s+|\d+[.)]\s+)(?:\*\*|`)*\s*(TB-\d{3})\b/;
+const nonePattern = /^\s*(?:[-*+]\s+)?(?:\*\*|`|_)*None\b/i;
+
+export const parseBlockedBy = (lines) => {
+  const content = lines
+    .join('\n')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n')
+    .filter((line) => line.trim());
+
+  if (content.length > 0 && nonePattern.test(content[0])) {
+    return {
+      declaredNone: true,
+      blockers: [],
+      contradictions: uniqueSorted(content
+        .map((line) => line.match(bulletedBlockerPattern)?.[1])
+        .filter(Boolean)),
+    };
+  }
+
+  return {
+    declaredNone: false,
+    blockers: uniqueSorted(content
+      .map((line) => line.match(leadingBlockerPattern)?.[1])
+      .filter(Boolean)),
+    contradictions: [],
+  };
+};
+
+// The front-matter `Blocked by:` line is a cross-check on the section, never
+// a second source of edges. Entries may be ticket ids or tracker slugs, which
+// resolve through each ticket's own `Tracker ID:` line.
+const headerBlockedBy = (contents) => {
+  const value = contents.match(/^Blocked by:[ \t]*(.*)$/m)?.[1]?.trim() ?? '';
+
+  return value === '' ? null : value.split(/\s*,\s*/).filter(Boolean);
+};
+
+const trackerId = (contents) => contents.match(/^Tracker ID:[ \t]*(.*)$/m)?.[1]?.trim() || null;
+
+// Returns the first cycle found as a path (`[a, b, a]`), or null.
+const findBlockerCycle = (graph) => {
   const visiting = new Set();
   const visited = new Set();
+  const stack = [];
 
   const visit = (id) => {
     if (visiting.has(id)) {
-      return true;
+      return [...stack.slice(stack.indexOf(id)), id];
     }
 
     if (visited.has(id)) {
-      return false;
+      return null;
     }
 
     visiting.add(id);
+    stack.push(id);
 
     for (const blocker of graph.get(id) ?? []) {
-      if (graph.has(blocker) && visit(blocker)) {
-        return true;
+      const cycle = graph.has(blocker) ? visit(blocker) : null;
+
+      if (cycle) {
+        return cycle;
       }
     }
 
+    stack.pop();
     visiting.delete(id);
     visited.add(id);
-    return false;
+    return null;
   };
 
-  return [...graph.keys()].some(visit);
+  for (const id of graph.keys()) {
+    const cycle = visit(id);
+
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
 };
 
 export const auditTicketSet = (
@@ -170,6 +234,11 @@ export const auditTicketSet = (
   const coveredSafeguardIds = new Set();
   const coveredRiskDecisionIds = new Set();
   const graph = new Map();
+  const trackerIndex = new Map(tickets.flatMap((ticket) => {
+    const slug = trackerId(ticket.contents);
+
+    return slug ? [[slug, ticket.id]] : [];
+  }));
 
   if (parentContents === null) {
     addError(
@@ -442,9 +511,31 @@ export const auditTicketSet = (
       }
     }
 
-    const blockerText = sections.get(normalize('Blocked By'))?.lines.join('\n') ?? '';
-    const blockers = uniqueSorted(blockerIds(blockerText));
+    const blockedBy = parseBlockedBy(sections.get(normalize('Blocked By'))?.lines ?? []);
+    const { blockers } = blockedBy;
     graph.set(ticket.id, blockers);
+
+    for (const contradiction of blockedBy.contradictions) {
+      warnings.push({
+        code: 'contradictory-blocker',
+        message: `${ticket.id} Blocked By declares None but lists ${contradiction}; None wins`,
+      });
+    }
+
+    const headerBlockers = headerBlockedBy(ticket.contents);
+
+    if (headerBlockers !== null) {
+      const resolvedHeader = uniqueSorted(headerBlockers.map(
+        (entry) => trackerIndex.get(entry) ?? entry,
+      ));
+
+      if (JSON.stringify(resolvedHeader) !== JSON.stringify(blockers)) {
+        warnings.push({
+          code: 'blocker-header-mismatch',
+          message: `${ticket.id} header Blocked by (${resolvedHeader.join(', ')}) disagrees with its Blocked By section (${blockers.join(', ') || 'none'})`,
+        });
+      }
+    }
 
     for (const blocker of blockers) {
       if (blocker === ticket.id) {
@@ -516,8 +607,14 @@ export const auditTicketSet = (
     }
   }
 
-  if (graphHasCycle(graph)) {
-    addError(errors, 'blocker-cycle', 'Ticket blocker graph contains a cycle');
+  const cycle = findBlockerCycle(graph);
+
+  if (cycle) {
+    addError(
+      errors,
+      'blocker-cycle',
+      `Ticket blocker graph contains a cycle: ${cycle.join(' → ')}`,
+    );
   }
 
   const coverageChecks = [

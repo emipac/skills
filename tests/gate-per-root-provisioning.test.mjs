@@ -56,6 +56,22 @@ const PROVISIONING_PATH = 'evaluation_gate.execution.dependency_provisioning';
 
 const isolatedGit = () => ({ ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' });
 
+/**
+ * The mechanism record a copied root carries since `TB-055`, taken from the
+ * capture itself: which mechanism performed the copy is a fact about this
+ * environment, and this suite asserts the record's shape and its placement,
+ * not which filesystem the suite happens to run on.
+ */
+const mechanismsOf = (dependencies, roots) => Object.fromEntries(
+  roots.map((root) => {
+    const record = dependencies.mechanisms?.[root];
+
+    assert.ok(['clone', 'byte-copy'].includes(record?.mechanism), `${root} records no copy mechanism.`);
+
+    return [root, record];
+  }),
+);
+
 const git = (cwd, args) => runFile('git', args, { cwd, env: isolatedGit() });
 
 const temporary = async (t, prefix) => {
@@ -206,6 +222,7 @@ test('TB-057 FR-EVAL-004: in one evaluation the mapped root is a real directory 
   assert.equal(captured.captured, true, captured.detail);
   assert.deepEqual(captured.dependencies, {
     provisioning: { [COPIED]: 'copy', [LINKED]: 'link' },
+    mechanisms: mechanismsOf(captured.dependencies, [COPIED]),
     provided: [COPIED, LINKED],
     missing: [],
     refused: [],
@@ -244,7 +261,13 @@ test('TB-057 AC-CFG-001: a scalar declaration and an absent one produce exactly 
 
   assert.deepEqual(absent.dependencies, { provisioning: 'link', provided: [COPIED, LINKED], missing: [], refused: [] });
   assert.deepEqual(link.dependencies, absent.dependencies);
-  assert.deepEqual(copy.dependencies, { provisioning: 'copy', provided: [COPIED, LINKED], missing: [], refused: [] });
+  assert.deepEqual(copy.dependencies, {
+    provisioning: 'copy',
+    mechanisms: mechanismsOf(copy.dependencies, [COPIED, LINKED]),
+    provided: [COPIED, LINKED],
+    missing: [],
+    refused: [],
+  });
   assert.equal(await isLink(path.join(absent.snapshot.executionRoot, COPIED)), true);
   assert.equal(await isLink(path.join(copy.snapshot.executionRoot, LINKED)), false);
 });
@@ -428,6 +451,7 @@ test('TB-057 AC-EVAL-001, NFR-OPER-001: a mixed evaluation passes good code, blo
   assert.equal(passed.outcome, 'passed');
   assert.deepEqual(passed.environment.dependencies, {
     provisioning: { [COPIED]: 'copy', [LINKED]: 'link' },
+    mechanisms: mechanismsOf(passed.environment.dependencies, [COPIED]),
     provided: [COPIED, LINKED],
     missing: [],
     refused: [],

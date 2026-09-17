@@ -1,12 +1,12 @@
 # FS-004 — Read a blocker as a blocker, and not as a mention
 
-Status: ready-for-agent
-Labels: ready-for-agent, defect
+Status: done
+Labels: done, defect
 Blocked by:
 Tracker ID: 04-read-a-blocker-as-a-blocker-and-not-as-a-mention
 Draft key: FS-004
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. `to-tickets` owns the delivery-contract
 audit every ticket set in this repository is validated by, and this is a

@@ -19,11 +19,13 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { constants as fileConstants } from 'node:fs';
-import { cp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, stat, statfs, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { locatePlatformUtility } from './command-descriptor.mjs';
 
 const runFile = promisify(execFile);
 
@@ -151,7 +153,162 @@ export const recordedProvisioning = (declaration, dependencyRoots = []) => {
 };
 
 /**
- * The one place each strategy is performed.
+ * The mechanisms a `copy` can be performed by, recorded per copied root.
+ *
+ * `clone` is a copy-on-write clone performed by the platform's own copy
+ * program; `byte-copy` is this runtime's own `fs.cp`. Both keep the promise
+ * `copy` makes — a real directory whose contents resolve inside the execution
+ * root — and differ only in what they cost, which is exactly what a maintainer
+ * diagnosing a slow evaluation needs to read (`NFR-OPER-001`, `TB-055`).
+ * Neither is ever a `link`: falling from one mechanism to the other is not the
+ * degradation `TB-054` prohibits, because the observable result is the same.
+ */
+export const COPY_MECHANISMS = Object.freeze(['clone', 'byte-copy']);
+
+/** The platform copy program a clone is asked of, by its bare name. */
+const COPY_PROGRAM = 'cp';
+
+/**
+ * The ways a copy program can be asked for a clone, tried in order.
+ *
+ * Two copy-program lineages spell the request differently: `-c` asks for a
+ * clone through `clonefile(2)`; `--reflink=always` asks for a reflink and, by
+ * the `always`, refuses to degrade into a byte copy. Each spelling is tried
+ * against the program that was found and judged by what it does, never by
+ * which lineage the program is assumed to be (`NFR-PORT-002`). `-R -P` is
+ * common to both: recurse, and keep links as links, which is what `fs.cp`
+ * below does with `dereference: false`. `--` ends option parsing so a path is
+ * only ever a path.
+ */
+const CLONE_REQUESTS = Object.freeze([
+  Object.freeze(['-c', '-R', '-P']),
+  Object.freeze(['--reflink=always', '-R', '-P']),
+]);
+
+/**
+ * How much the probe writes to learn whether a clone happens here.
+ *
+ * Free space is read exactly, in filesystem blocks, so the question is only
+ * whether a byte copy of this much can be told from a clone of it under
+ * whatever else the machine is doing during the few milliseconds the probe
+ * takes. Eight mebibytes is far above that noise and far below any cost that
+ * would matter to a preflight running on every agent turn.
+ */
+const CLONE_PROBE_BYTES = 8 * 1024 * 1024;
+
+const freeBytes = async (location) => {
+  const observed = await statfs(location);
+
+  return observed.bavail * observed.bsize;
+};
+
+/**
+ * Whether one program can clone into `executionRoot`, learned by making it try.
+ *
+ * This is a capability probe, not a platform test. Nothing here reads the
+ * operating system, its release, or the filesystem's name (`NFR-PORT-002`):
+ * a probe file is written, the program is asked to clone it with each spelling
+ * in turn, and the free space of the volume before and after says whether the
+ * clone happened. A byte copy of the probe consumes its size; a clone consumes
+ * nothing. That measurement is the same evidence that established this
+ * contract, and it is why a program that quietly byte-copies when asked to
+ * clone — which one lineage does on a volume that cannot — is still recorded
+ * truthfully as no clone.
+ *
+ * The probe is paid once per capture that copies anything, never once per
+ * root and never once per file. A capture that links every root pays nothing.
+ *
+ * `fs.cp`'s own `COPYFILE_FICLONE` was measured first and consumes the full
+ * size of what it copies on the environment this repository claims;
+ * `COPYFILE_FICLONE_FORCE` returns `ENOSYS` there, on a volume where the
+ * platform program clones the same file for free. Asking the program is what
+ * makes `copy` cheap where the system can make it so.
+ *
+ * @param {object} input the resolved program, or `null`, and where to probe
+ * @returns {Promise<{program: string, request: readonly string[]}|null>}
+ */
+const probeCloneCapability = async ({ program, executionRoot }) => {
+  if (typeof program !== 'string' || program === '') {
+    return null;
+  }
+
+  const probeRoot = path.join(executionRoot, `.clone-probe-${randomUUID()}`);
+  const source = path.join(probeRoot, 'source');
+
+  try {
+    await mkdir(probeRoot, { recursive: true });
+    // Random content: a volume that compresses transparently would make a byte
+    // copy of a repetitive file look as cheap as a clone.
+    await writeFile(source, randomBytes(CLONE_PROBE_BYTES));
+
+    for (const [index, request] of CLONE_REQUESTS.entries()) {
+      const destination = path.join(probeRoot, `copy-${index}`);
+      // eslint-disable-next-line no-await-in-loop
+      const before = await freeBytes(probeRoot);
+      // eslint-disable-next-line no-await-in-loop
+      const accepted = await runFile(program, [...request, '--', source, destination])
+        .then(() => true, () => false);
+      // eslint-disable-next-line no-await-in-loop
+      const consumed = before - await freeBytes(probeRoot);
+
+      if (accepted && consumed < CLONE_PROBE_BYTES / 2) {
+        return { program, request };
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await rm(probeRoot, { recursive: true, force: true }).catch(() => {});
+  }
+};
+
+/**
+ * Whether a clone can span `source` and `destination` at all.
+ *
+ * A clone shares blocks with its source, so it is only ever possible inside
+ * one volume; the probe ran on the destination's volume, so it answers for a
+ * source on the same one and for no other. A comparison of device numbers is
+ * a fact about the two paths, not about the platform.
+ */
+const shareVolume = async (source, destination) => {
+  const [first, second] = await Promise.all([stat(source), stat(path.dirname(destination))]);
+
+  return first.dev === second.dev;
+};
+
+/**
+ * `TB-054`'s byte copy: proved, and the mechanism every `copy` falls back to.
+ *
+ * `COPYFILE_FICLONE` is kept because it is free and reflinks where the runtime
+ * implements it; what it is worth here was measured and is stated above.
+ *
+ * One correction, found by holding the two mechanisms to the same tree
+ * (`TB-055`): `fs.cp` rewrites a relative link to an absolute one by default,
+ * and the absolute path it writes names the SOURCE tree — a `bin/tool ->
+ * ../tool/tool` inside the copy came out pointing into the maintainer's own
+ * installation, which is the realpath escape `copy` exists to close and a
+ * write-through `NFR-SEC-001` forbids. `verbatimSymlinks` keeps the link
+ * exactly as written, which is what the platform program does and what a
+ * relative link inside a self-contained tree means.
+ */
+const byteCopy = (source, destination) => cp(source, destination, {
+  recursive: true,
+  force: false,
+  errorOnExist: true,
+  // Links inside a dependency tree are kept as links. Resolving them would
+  // follow a cycle forever and multiply what is on disk; a relative link
+  // still resolves inside the copy, which is the whole point.
+  dereference: false,
+  verbatimSymlinks: true,
+  mode: fileConstants.COPYFILE_FICLONE,
+});
+
+/**
+ * The one place each strategy is performed. Each returns the mechanism record
+ * for the root it provided, or nothing when the strategy has no mechanism to
+ * record.
  *
  * `link` passes `'junction'` rather than `'dir'`. The argument is a Node fs
  * parameter, not a branch: every platform but Windows ignores it outright, and
@@ -161,42 +318,39 @@ export const recordedProvisioning = (declaration, dependencyRoots = []) => {
  * through the catch below. A junction needs an absolute target, which is what
  * the caller resolves and passes.
  *
- * `copy` asks for a copy-on-write clone through `COPYFILE_FICLONE`. The flag is
- * a request, never a requirement: where the clone cannot be performed the call
- * still succeeds as a full byte copy. That is one code path that is correct
- * everywhere, with only speed and disk varying, and it is why nothing here has
- * to know which filesystem it is on.
+ * `copy` asks the probed program for a clone when there is one and the two
+ * paths share a volume, and otherwise — or when the program fails part way —
+ * performs the byte copy. A failed clone attempt removes what it created
+ * before the byte copy starts, so no mechanism ever builds on the partial
+ * tree another one left. The record says which mechanism performed the copy
+ * and, for a clone, which program: the invoked path is inside the trust
+ * boundary of every check that runs against the tree it provided.
  *
- * What the request is worth was measured rather than assumed, and the answer on
- * the environment this repository claims is: nothing. Copying a 256 MiB file
- * with the flag consumed 256 MiB of free space, exactly as copying it without
- * the flag did, on an APFS volume where the system `cp -c` clones the same file
- * for free. `COPYFILE_FICLONE_FORCE`, which fails rather than falling back,
- * returns `ENOSYS` there. So a forced attempt would report "this filesystem
- * cannot clone" about one that plainly can, and catching it to learn which
- * happened would record a falsehood. The applied strategy is recorded instead,
- * because that is the part a maintainer can act on; whether the filesystem
- * cloned underneath is not.
- *
- * The consequence is stated rather than hidden: under `copy`, a dependency tree
- * costs its real bytes and its real seconds on this environment, which is
- * exactly why `copy` is declared by a project and never chosen for one.
- *
- * `copy` never degrades into `link`. A copy that cannot be performed leaves the
- * root unprovided and named, which is a stated failure the evaluation reports.
+ * `copy` never degrades into `link`. A copy that cannot be performed by either
+ * mechanism leaves the root unprovided and named, which is a stated failure
+ * the evaluation reports.
  */
 const PROVISIONERS = Object.freeze({
-  link: (source, destination) => symlink(source, destination, 'junction'),
-  copy: (source, destination) => cp(source, destination, {
-    recursive: true,
-    force: false,
-    errorOnExist: true,
-    // Links inside a dependency tree are kept as links. Resolving them would
-    // follow a cycle forever and multiply what is on disk; a relative link
-    // still resolves inside the copy, which is the whole point.
-    dereference: false,
-    mode: fileConstants.COPYFILE_FICLONE,
-  }),
+  link: async (source, destination) => {
+    await symlink(source, destination, 'junction');
+
+    return null;
+  },
+  copy: async (source, destination, { clone = null } = {}) => {
+    if (clone !== null && await shareVolume(source, destination)) {
+      try {
+        await runFile(clone.program, [...clone.request, '--', source, destination]);
+
+        return { mechanism: 'clone', program: clone.program };
+      } catch {
+        await rm(destination, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+
+    await byteCopy(source, destination);
+
+    return { mechanism: 'byte-copy', program: null };
+  },
 });
 
 const NUL_SEPARATED = /\0/;
@@ -478,13 +632,30 @@ const provideDependencyRoots = async ({
   executionRoot,
   dependencyRoots,
   provisioning,
+  copyProgram,
 }) => {
   const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
   const missing = new Set(classified.missing);
   const provided = [];
+  const mechanisms = {};
+  // The clone capability is learned on the first root that copies, and only
+  // then: a capture that links every root never resolves a program and never
+  // writes a probe (`TB-055`). Once learned it serves every further root.
+  let cloneCapability;
+  const cloneFor = async () => {
+    if (cloneCapability === undefined) {
+      cloneCapability = await probeCloneCapability({
+        program: copyProgram === undefined ? locatePlatformUtility(COPY_PROGRAM) : copyProgram,
+        executionRoot,
+      });
+    }
+
+    return cloneCapability;
+  };
 
   for (const declared of classified.available) {
-    const provide = PROVISIONERS[strategyForRoot(provisioning, declared)];
+    const strategy = strategyForRoot(provisioning, declared);
+    const provide = PROVISIONERS[strategy];
     const destination = path.join(executionRoot, declared);
     // A root is provided at a path this function creates, or it is not provided
     // at all. A declaration naming a path the snapshot already materialized is
@@ -504,8 +675,16 @@ const provideDependencyRoots = async ({
       // eslint-disable-next-line no-await-in-loop
       await mkdir(path.dirname(destination), { recursive: true });
       // eslint-disable-next-line no-await-in-loop
-      await provide(path.resolve(repositoryRoot, declared), destination);
+      const record = await provide(path.resolve(repositoryRoot, declared), destination, {
+        // eslint-disable-next-line no-await-in-loop
+        clone: strategy === 'copy' ? await cloneFor() : null,
+      });
+
       provided.push(declared);
+
+      if (record !== null) {
+        mechanisms[declared] = record;
+      }
     } catch {
       // A strategy that could not be performed here is a stated condition, not
       // a silent degradation into the other one: the check would fail inside
@@ -529,6 +708,12 @@ const provideDependencyRoots = async ({
     // without rerunning anything (`NFR-OPER-001`). A scalar is recorded as
     // written; a map is recorded complete, one strategy per declared root.
     provisioning: recordedProvisioning(provisioning, dependencyRoots),
+    // And, for each root a copy provided, the mechanism that performed it and
+    // the program that was invoked (`TB-055`). A mechanism is a fact about a
+    // copy that happened, so a capture in which nothing was copied — every
+    // clone that declares `link` or nothing — records none, and its envelope
+    // is byte for byte what it was before this contract.
+    ...(Object.keys(mechanisms).length > 0 ? { mechanisms } : {}),
     provided,
     // Declaration order, so what a maintainer reads back is the order they
     // wrote, whichever way a root turned out to be unavailable.
@@ -564,6 +749,11 @@ export const captureSnapshot = async ({
   runGit = defaultRunGit,
   dependencyRoots = [],
   dependencyProvisioning = DEFAULT_DEPENDENCY_PROVISIONING,
+  // The copy program a clone is asked of. Left undefined, it is resolved from
+  // the platform's own utility directories; `null` says there is none, and a
+  // path names one — which is how a fixture stands in a program that cannot
+  // be found or refuses the tree, and proves the byte copy still provides it.
+  copyProgram = undefined,
 }) => {
   if (!SNAPSHOT_KINDS.includes(kind)) {
     return {
@@ -623,6 +813,7 @@ export const captureSnapshot = async ({
       executionRoot,
       dependencyRoots,
       provisioning: dependencyProvisioning,
+      copyProgram,
     });
 
     return {
