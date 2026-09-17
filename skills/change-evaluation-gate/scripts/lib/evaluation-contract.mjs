@@ -15,7 +15,7 @@
 import { CHECK_OUTCOMES, POLICY_BINDINGS, resolveOutcome } from './check-descriptor.mjs';
 import { CONTRACT_STATUSES } from './delivery-contract.mjs';
 import { GRADER_SURFACE_KINDS } from './grader-surface.mjs';
-import { ISOLATION } from './snapshot.mjs';
+import { COPY_MECHANISMS, ISOLATION } from './snapshot.mjs';
 
 export const PROTOCOL_VERSION = '1.0';
 
@@ -603,14 +603,29 @@ export const validateDecision = (decision) => {
   // `provisioning` is one strategy every root shared, or — since `TB-057` — a
   // map from each declared root to the strategy it received, so a reader of
   // a mixed evaluation is never told a scalar that was true of no root.
+  //
+  // `mechanisms`, since `TB-055`, names for each root a copy provided which
+  // mechanism performed it and which program was invoked. It is a fact about a
+  // copy that happened, so it is absent when none did — the envelope of a clone
+  // that links everything is untouched — and may name only roots that were
+  // provided.
   const provisioned = decision.environment?.dependencies;
   const isProvisioningRecord = (value) => typeof value === 'string'
     || (isPlainObject(value)
       && Object.values(value).every((strategy) => typeof strategy === 'string'));
+  const isMechanismRecord = (value) => isPlainObject(value)
+    && COPY_MECHANISMS.includes(value.mechanism)
+    && (value.program === null || typeof value.program === 'string');
+  const isMechanismMap = (value, provided) => value === undefined
+    || (isPlainObject(value)
+      && Object.entries(value).every(([root, record]) => isDeclarationList(provided)
+        && provided.includes(root)
+        && isMechanismRecord(record)));
 
   if (!isPlainObject(provisioned)
     || !isProvisioningRecord(provisioned.provisioning)
     || !isDeclarationList(provisioned.provided)
+    || !isMechanismMap(provisioned.mechanisms, provisioned.provided)
     || !isDeclarationList(provisioned.missing)
     || !isDeclarationList(provisioned.refused)) {
     errors.push({

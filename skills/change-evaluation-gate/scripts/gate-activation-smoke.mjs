@@ -1932,15 +1932,26 @@ const mixedProvisioningCommit = async () => {
     `The mixed-declaration denial does not name the failing check: ${blocked.output}.`,
   );
 
-  // Diagnosable from evidence: the envelope names every root's strategy.
+  // Diagnosable from evidence: the envelope names every root's strategy, and
+  // for the root that was copied, the mechanism that performed the copy and
+  // the program it invoked (`TB-055`). Which mechanism is a fact about this
+  // environment, so it is read from the record and only its shape is judged.
   const log = await store.readLog();
   const latest = log.length > 0 ? await store.readEnvelope(log[log.length - 1].evidenceId) : null;
   const recorded = latest?.decision?.environment?.dependencies ?? null;
+  const mechanism = recorded?.mechanisms?.[PROVISIONED_ROOT] ?? null;
 
+  check(
+    findings,
+    ['clone', 'byte-copy'].includes(mechanism?.mechanism)
+      && (mechanism.mechanism === 'clone' ? path.isAbsolute(mechanism.program ?? '') : mechanism.program === null),
+    `The evidence does not record the mechanism that copied ${PROVISIONED_ROOT}: ${JSON.stringify(recorded)}.`,
+  );
   check(
     findings,
     JSON.stringify(recorded) === JSON.stringify({
       provisioning: { [PROVISIONED_ROOT]: 'copy', [UNMAPPED_ROOT]: 'link' },
+      mechanisms: { [PROVISIONED_ROOT]: mechanism },
       provided: [PROVISIONED_ROOT, UNMAPPED_ROOT],
       missing: [],
       refused: [],
