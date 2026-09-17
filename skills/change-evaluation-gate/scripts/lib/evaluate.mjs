@@ -734,7 +734,12 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
 
   return persistEvidence(
     buildDecision(graded),
-    { store: dependencies.evidenceStore ?? null, outputs: capturedOutputs, graded },
+    {
+      store: dependencies.evidenceStore ?? null,
+      outputs: capturedOutputs,
+      graded,
+      housekeeping: dependencies.housekeeping ?? null,
+    },
   );
 };
 
@@ -914,7 +919,9 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
   // record is what would let an unchanged verdict repeat without bound
   // (`RISK-010`, `AC-EVID-002`).
   if (outcome !== 'passed') {
-    return persistEvidence(decision, { store, outputs: [], graded });
+    return persistEvidence(decision, {
+      store, outputs: [], graded, housekeeping: dependencies.housekeeping ?? null,
+    });
   }
 
   return {
@@ -1001,7 +1008,9 @@ export const evaluate = async (request, dependencies = {}) => {
  * decision `unverified`, because evidence that might carry a raw Sensitive
  * value is not evidence (SG-SECRET-001, RISK-006).
  */
-const persistEvidence = async (decision, { store, outputs, graded }) => {
+const persistEvidence = async (decision, {
+  store, outputs, graded, housekeeping = null,
+}) => {
   if (store === null || typeof store.appendEvidence !== 'function') {
     return decision;
   }
@@ -1009,7 +1018,10 @@ const persistEvidence = async (decision, { store, outputs, graded }) => {
   let result;
 
   try {
-    result = await store.appendEvidence({ decision, outputs });
+    // What the runner's orphan sweep reclaimed before this evaluation, handed
+    // to the store for the run-local log entry; it is a fact about this run
+    // on this machine, never about what was evaluated (`TB-058`).
+    result = await store.appendEvidence({ decision, outputs, housekeeping });
   } catch (error) {
     // A store that cannot be written is a diagnosable local fault, never a
     // reason to withhold a completed decision (NFR-OPER-001).

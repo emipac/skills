@@ -703,8 +703,7 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
     // The one operation this surface still does not perform, refused by name.
     [['fix'], 'gate fix'],
     // A selector that names another command's work. `gate status` never
-    // repairs as a side effect, whatever it is asked with.
-    [['status', '--repair'], 'gate repair'],
+    // fixes as a side effect, whatever it is asked with.
     [['status', '--fix'], 'gate fix'],
     // A bare token is not a confirmation: it has to name the selector it
     // confirms, so a stray argument can never be spent as one.
@@ -730,6 +729,18 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
     assert.equal(refused.stdout, '');
   }
 
+  // `--repair` is no longer a selector anything owns: `repair` is a command
+  // (`TB-041`), so the stale refused-selector entry is gone (`TB-050`). It is
+  // still refused — as a selector `gate status` does not take — and still
+  // repairs nothing as a side effect.
+  const staleRepair = await observe(root, ['status', '--repair']);
+
+  assert.equal(staleRepair.exitCode, EXIT_UNRUNNABLE);
+  assert.equal(staleRepair.document.ok, false);
+  assert.equal(staleRepair.document.failure.reasonCode, 'unknown-selector');
+  assert.equal(staleRepair.document.failure.ownedBy, null);
+  assert.equal(staleRepair.stdout, '');
+
   // Nothing can be forced, because nothing here changes anything.
   for (const flag of ['--force', '--yes']) {
     const forced = await observe(root, ['status', flag]);
@@ -744,8 +755,9 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
   // `TB-042` moved `activate` out in turn, once the three seams `runActivation`
   // leaves abstract had real implementations to bind.
   assert.deepEqual(CONFIRMED_COMMANDS, { fix: 'gate fix' });
-  assert.deepEqual(CONFIRMED_SELECTORS, { '--repair': 'gate repair', '--fix': 'gate fix' });
+  assert.deepEqual(CONFIRMED_SELECTORS, { '--fix': 'gate fix' });
   assert.equal(CONFIRMED_SELECTORS['--recover'], undefined);
+  assert.equal(CONFIRMED_SELECTORS['--repair'], undefined);
   assert.equal(CONFIRMED_COMMANDS.repair, undefined);
   assert.equal(CONFIRMED_COMMANDS.activate, undefined);
   assert.deepEqual(

@@ -296,7 +296,9 @@ export const runPreflight = async ({
     // owner: either runner's turn collects what any interrupted run abandoned,
     // and neither says a word about it (TB-038). A turn that materializes
     // nothing has nothing to reclaim beside it and nothing to reclaim for.
-    await sweepOrphanedExecutionRoots();
+    // What was reclaimed is recorded on the evidence log entry this turn
+    // appends, when it appends one (`TB-058`).
+    const housekeeping = await sweepOrphanedExecutionRoots();
 
     const executionRoot = await createExecutionRoot('gate-preflight-exec-');
     // Computed once and shared by execution and proof, for the reason the
@@ -328,6 +330,7 @@ export const runPreflight = async ({
         // environment fault as a finding about their code (`TB-044`).
         resolvePrerequisite: createPrerequisiteResolver({ searchPath: runtimePath, environment }),
         execute: executor.execute,
+        housekeeping,
       }));
     } finally {
       await releaseExecutionRoot(executionRoot);

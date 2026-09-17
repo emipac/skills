@@ -24,7 +24,9 @@
 
 import { execFile } from 'node:child_process';
 import { constants, rmSync } from 'node:fs';
-import { access, lstat, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
+import {
+  access, lstat, mkdtemp, readdir, readFile, realpath, rm, rmdir, utimes,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -109,9 +111,37 @@ export const EXECUTION_ROOT_RETENTION_MS = 24 * 60 * 60 * 1000;
 /**
  * Housekeeping ceilings. The maintainer is waiting on the gate, not on a sweep,
  * so the sweep gives up rather than delaying a commit.
+ *
+ * The deadline is the bound on what one run spends reclaiming, and it is held
+ * *inside* an orphan, not only between orphans (`TB-058`). An orphan that
+ * carries a copied dependency tree is tens of thousands of entries and takes
+ * well over a second to unlink whichever program does it — cloning made it
+ * cheap to create, not cheap to remove — so a sweep that only looked at the
+ * clock between roots spent 1.7 s on a single one and reclaimed one per run
+ * (measured: three `vendor`-sized orphans, 33,973 files each, took three runs
+ * of 1.7–1.8 s). Removal now proceeds entry by entry, bottom-up, and stops
+ * where the deadline falls; what is left is a smaller orphan the next run
+ * continues, and a run overshoots the deadline by at most one batch of
+ * removals plus one directory listing. The bound one run may spend is
+ * therefore `SWEEP_DEADLINE_MS` plus that overshoot. Measured against the
+ * same three orphans (42,491 entries each, files and directories): 29 runs,
+ * the longest 264 ms, roughly 4,400 entries reclaimed per run and ten runs
+ * per orphan.
+ *
+ * That trade is deliberate. Partial removal of an orphan is progress, not
+ * damage: it is past retention, under the gate's own prefix, and nothing
+ * will ever read it again, so the only thing a half-removed one costs is
+ * being finished later. Every evaluation sweeps — a commit and every preflight
+ * turn that has a subject alike — so a quarter-second slice per evaluation
+ * clears a copied tree within some ten turns, and accumulation is bounded by
+ * the rate of interruption against the rate of evaluation rather than by one
+ * commit's patience: it falls behind only when more than one evaluation in
+ * ten is killed (`RISK-002`, `RISK-003`).
  */
 const SWEEP_ENTRY_CEILING = 512;
 const SWEEP_DEADLINE_MS = 250;
+/** Removals issued between two looks at the clock; bounds the overshoot. */
+const SWEEP_REMOVAL_BATCH = 64;
 
 /** Live roots this process owns, so a caught signal knows what to remove. */
 const liveExecutionRoots = new Set();
@@ -256,12 +286,19 @@ export const releaseExecutionRoot = async (root) => {
  * an unreadable temporary directory, an unremovable root, a racing sweep in a
  * concurrent runner — is simply the end of this sweep.
  *
+ * What it reclaimed is returned so the runner can record it beside the
+ * evidence it writes (`NFR-OPER-001`, `TB-058`): the roots removed outright,
+ * the roots it started on and left for a later run, and how many entries went
+ * in all. Nothing about it reaches the maintainer directly.
+ *
  * @param {object} [options]
  * @param {string} [options.temporaryRoot] directory to sweep; must be the system
  *   temporary directory or a directory inside it
  * @param {number} [options.olderThanMs] the age ceiling
  * @param {() => number} [options.now] clock seam
- * @returns {Promise<{ removed: string[], considered: number }>} for tests; callers ignore it
+ * @returns {Promise<{
+ *   removed: string[], considered: number, unfinished: string[], entries: number, elapsedMs: number,
+ * }>} `removed` and `considered` are what `TB-038` returned; the rest is what `TB-058` adds
  */
 export const sweepOrphanedExecutionRoots = async ({
   temporaryRoot = tmpdir(),
@@ -269,6 +306,9 @@ export const sweepOrphanedExecutionRoots = async ({
   now = Date.now,
 } = {}) => {
   const removed = [];
+  const unfinished = [];
+  const tally = { entries: 0 };
+  const started = now();
   let considered = 0;
 
   try {
@@ -279,10 +319,12 @@ export const sweepOrphanedExecutionRoots = async ({
     // create workspaces in, and nowhere else. Never the repository, never the
     // Evidence store, never a path a maintainer chose.
     if (sweepRoot !== systemRoot && !containedWithin(systemRoot, sweepRoot)) {
-      return { removed, considered };
+      return {
+        removed, considered, unfinished, entries: tally.entries, elapsedMs: now() - started,
+      };
     }
 
-    const deadline = now() + SWEEP_DEADLINE_MS;
+    const deadline = started + SWEEP_DEADLINE_MS;
     const entries = await readdir(sweepRoot);
 
     for (const entry of entries) {
@@ -308,9 +350,23 @@ export const sweepOrphanedExecutionRoots = async ({
           continue;
         }
 
+        const before = tally.entries;
         // eslint-disable-next-line no-await-in-loop
-        await rm(candidate, { recursive: true, force: false });
-        removed.push(candidate);
+        const finished = await reclaimTree(candidate, { deadline, now, tally });
+
+        if (finished) {
+          removed.push(candidate);
+        } else if (tally.entries > before) {
+          // Removing a direct child touched the root's mtime, which would make
+          // this orphan look like a live root for another day. Its age is a
+          // fact about when it was abandoned, not about this sweep, so the
+          // mtime the sweep found is put back and the next run continues from
+          // here. A restore that fails costs one more retention window — safe,
+          // and bounded.
+          // eslint-disable-next-line no-await-in-loop
+          await utimes(candidate, described.atime, described.mtime).catch(() => {});
+          unfinished.push(candidate);
+        }
       } catch {
         // A root that cannot be read or removed stays; nothing is said.
       }
@@ -319,7 +375,86 @@ export const sweepOrphanedExecutionRoots = async ({
     // A sweep that cannot run at all is a sweep that reclaimed nothing.
   }
 
-  return { removed, considered };
+  return {
+    removed, considered, unfinished, entries: tally.entries, elapsedMs: now() - started,
+  };
+};
+
+/**
+ * Remove as much of one orphan as the deadline allows, one entry at a time.
+ *
+ * Bottom-up: a directory is removed after everything under it, so stopping
+ * anywhere leaves a tree that is still a tree, still under the prefix, and
+ * still older than retention — a smaller orphan, not a broken one. A symbolic
+ * link (or junction) is an entry that is unlinked, never a directory that is
+ * entered, so a linked dependency root is a single removal that never reaches
+ * the installation it points at (`SG-LIFE-001`, `TB-054`). An entry that
+ * cannot be removed is left where it is and the walk carries on past it; the
+ * root is then reported unfinished, exactly as it is when the clock ran out.
+ *
+ * @param {string} directory the directory to remove
+ * @param {{ deadline: number, now: () => number, tally: { entries: number } }} budget
+ * @returns {Promise<boolean>} whether `directory` is gone
+ */
+const reclaimTree = async (directory, { deadline, now, tally }) => {
+  const listed = await readdir(directory, { withFileTypes: true });
+  const leaves = [];
+  let complete = true;
+
+  for (const entry of listed) {
+    // `isDirectory` on a directory entry is false for a link to one.
+    if (!entry.isDirectory()) {
+      leaves.push(path.join(directory, entry.name));
+
+      continue;
+    }
+
+    if (now() >= deadline) {
+      return false;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const gone = await reclaimTree(path.join(directory, entry.name), { deadline, now, tally })
+      .catch(() => false);
+
+    complete = complete && gone;
+  }
+
+  for (let offset = 0; offset < leaves.length; offset += SWEEP_REMOVAL_BATCH) {
+    if (now() >= deadline) {
+      return false;
+    }
+
+    // `rm` without `recursive` on a file or link is one unlink, with the
+    // platform's own handling of a linked directory; on a real directory it
+    // refuses, which is what keeps a leaf a leaf.
+    // eslint-disable-next-line no-await-in-loop
+    const outcomes = await Promise.allSettled(
+      leaves.slice(offset, offset + SWEEP_REMOVAL_BATCH).map((leaf) => rm(leaf, { force: false })),
+    );
+
+    for (const outcome of outcomes) {
+      if (outcome.status === 'fulfilled') {
+        tally.entries += 1;
+      } else {
+        complete = false;
+      }
+    }
+  }
+
+  if (!complete) {
+    return false;
+  }
+
+  // An empty directory that will not go — an unwritable parent, most often —
+  // is left, and what was under it is still counted as reclaimed.
+  const gone = await rmdir(directory).then(() => true, () => false);
+
+  if (gone) {
+    tally.entries += 1;
+  }
+
+  return gone;
 };
 
 /** The environment variable that names an activation self-test subject. */
@@ -1017,8 +1152,9 @@ export const runHook = async ({
 
   // What earlier interrupted runs abandoned, reclaimed before this run adds
   // its own. Bounded and silent: it can neither delay this commit nor change
-  // anything the maintainer is told (TB-038).
-  await sweepOrphanedExecutionRoots();
+  // anything the maintainer is told (TB-038). What it reclaimed goes into
+  // the evidence log entry this run appends, and nowhere else (`TB-058`).
+  const housekeeping = await sweepOrphanedExecutionRoots();
 
   const executionRoot = await createExecutionRoot('gate-hook-runner-exec-');
   // What the pinned programs need in order to start at all (TB-028), computed
@@ -1084,6 +1220,7 @@ export const runHook = async ({
       // the check that blocked it and commit against the weakened policy with
       // no re-consent and no signal (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
       controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
+      housekeeping,
     });
   } catch (error) {
     // A runner that crashed produced no decision. It denies, and it says so,

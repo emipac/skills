@@ -35,6 +35,13 @@
  * runtime, and no external toolchain is required. It never touches this
  * repository's Git state and never deletes anything automatically.
  *
+ * SAFETY: every fixture is a throwaway repository created under the OS
+ * temporary directory and removed afterwards. `assertThrowawayRepository`
+ * refuses any root that is not under that directory or that lies inside this
+ * repository. This capability *removes* files — confirmed prunes and fixture
+ * cleanup — so that guard is checked again immediately before every removal,
+ * not only at fixture creation.
+ *
  * The store it exercises is cooperative local state, not tamper-proof: this
  * capability proves the gate's own behavior, never that a machine owner cannot
  * edit these files (SG-TRUST-001).
@@ -46,9 +53,10 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { createBoundedExecutor } from './lib/bounded-execution.mjs';
@@ -64,6 +72,9 @@ import { createRedactor } from './lib/redaction.mjs';
 
 const CAPABILITY = 'gate-evidence-prune-smoke';
 
+/** This repository. No fixture may ever touch its Git state or its files. */
+const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
 const SOURCE = 'app/Order.php';
 
 /** A value that must never survive into the persisted store. */
@@ -77,10 +88,35 @@ const runFile = promisify(execFile);
 
 const temporaryRoots = [];
 
+const isInside = (parent, candidate) => candidate === parent
+  || candidate.startsWith(`${parent}${path.sep}`);
+
+/** The guard. Nothing in this capability reads, writes, or removes outside a throwaway root. */
+const assertThrowawayRepository = async (root) => {
+  const resolved = await realpath(root).catch(() => path.resolve(root));
+  const temporaryRoot = await realpath(tmpdir()).catch(() => path.resolve(tmpdir()));
+  const frameworkRoot = await realpath(FRAMEWORK_ROOT).catch(() => FRAMEWORK_ROOT);
+
+  if (!isInside(temporaryRoot, resolved)) {
+    throw new Error(`${CAPABILITY} refuses to operate outside the OS temporary directory: ${resolved}.`);
+  }
+
+  if (isInside(frameworkRoot, resolved)) {
+    throw new Error(`${CAPABILITY} refuses to operate inside this repository: ${resolved}.`);
+  }
+
+  return resolved;
+};
+
 const temporaryDirectory = async (prefix) => {
-  const directory = await mkdtemp(path.join(tmpdir(), prefix));
+  // The guard before the first write: a temporary directory that resolves
+  // inside this repository is refused before anything is created in it.
+  await assertThrowawayRepository(tmpdir());
+
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), prefix)));
 
   temporaryRoots.push(directory);
+  await assertThrowawayRepository(directory);
 
   return directory;
 };
@@ -114,6 +150,7 @@ const CHECK_SCRIPT = [
 const fixtureRepository = async () => {
   const root = await temporaryDirectory('gate-evidence-smoke-repo-');
 
+  await assertThrowawayRepository(root);
   await mkdir(path.join(root, 'app'), { recursive: true });
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
@@ -499,6 +536,9 @@ const confirmedPrunePreservesAuditTrail = async () => {
 
   check(findings, preview.blobs.length === 1, 'The preview selected the wrong number of blobs.');
 
+  // The guard again, immediately before the first confirmed removal from a store.
+  await assertThrowawayRepository(store.root);
+
   const result = await store.confirmPrune({ preview, confirmation: preview.confirmationToken });
 
   check(findings, result.pruned === true, 'A matching confirmation did not prune.');
@@ -698,6 +738,9 @@ const alteredPreviewRemovesNothing = async () => {
 
   // And a fresh, unaltered preview still prunes exactly what it names.
   const honest = await store.previewPrune({ evaluationIds: [first.decision.evaluationId] });
+
+  await assertThrowawayRepository(store.root);
+
   const pruned = await store.confirmPrune({ preview: honest, confirmation: honest.confirmationToken });
 
   check(findings, pruned.pruned === true, 'An honest preview no longer prunes after a refusal.');
@@ -734,6 +777,9 @@ const main = async () => {
     ];
   } finally {
     for (const root of temporaryRoots) {
+      // The guard again, immediately before the only recursive removal in this
+      // capability. A fixture root that somehow escaped is never deleted.
+      await assertThrowawayRepository(root);
       await rm(root, { recursive: true, force: true });
     }
   }

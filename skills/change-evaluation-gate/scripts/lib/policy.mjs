@@ -10,9 +10,8 @@
  * Verification (SG-OWNER-001); nothing here defines, copies, or rewrites one.
  */
 
-import { createHash } from 'node:crypto';
-
 import { EVIDENCE_FORMAT } from './evaluation-contract.mjs';
+import { contentIdentity } from './evidence-identity.mjs';
 import { describeProvisioningDefect } from './snapshot.mjs';
 
 /**
@@ -442,9 +441,11 @@ export const BYPASS_REJECTIONS = Object.freeze([
   'nothing-to-bypass',
 ]);
 
-const digest = (value) => `sha256:${createHash('sha256')
-  .update(JSON.stringify(value))
-  .digest('hex')}`;
+// The bypass identity and its evidence identity are the one content-identity
+// scheme this Gate has, so key order never changes either (NFR-AUD-001). The
+// bypass identity is what the clone-local ledger records and compares against
+// when it refuses a second use (FR-POL-008, SG-BYP-001).
+const digest = contentIdentity;
 
 const isFilled = (value) => typeof value === 'string' && value.trim().length > 0;
 

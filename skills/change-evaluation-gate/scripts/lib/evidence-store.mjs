@@ -119,6 +119,31 @@ export const containedWithin = (owner, candidate) => {
 };
 
 /**
+ * The log entry's record of what a runner's orphan sweep reclaimed, or nothing.
+ *
+ * Present only when at least one entry was removed. The roots it names are
+ * the ones reclaimed in full and the ones a run started on and left for a
+ * later one; each is a path under the system temporary directory, a run-local
+ * fact like the execution root beside it (`TB-058`).
+ */
+const reclaimedRecord = (housekeeping) => {
+  const entries = Number.isInteger(housekeeping?.entries) ? housekeeping.entries : 0;
+
+  if (entries <= 0) {
+    return {};
+  }
+
+  return {
+    reclaimed: {
+      roots: [...(housekeeping.removed ?? [])],
+      unfinished: [...(housekeeping.unfinished ?? [])],
+      entries,
+      elapsedMs: Number.isFinite(housekeeping.elapsedMs) ? Math.round(housekeeping.elapsedMs) : null,
+    },
+  };
+};
+
+/**
  * The load-bearing identity of one prune preview.
  *
  * Everything a removal acts on and nothing that merely describes when it was
@@ -460,7 +485,7 @@ export const openEvidenceStore = async ({
    * The envelope is content-addressed and written atomically; the append-only
    * log then names it. Re-appending identical evidence rewrites nothing.
    */
-  const appendEvidence = async ({ decision, outputs = [] } = {}) => {
+  const appendEvidence = async ({ decision, outputs = [], housekeeping = null } = {}) => {
     const evaluationId = decision?.evaluationId ?? null;
     const pending = [];
     const attempts = [];
@@ -682,6 +707,14 @@ export const openEvidenceStore = async ({
             durationMs: attempt?.durationMs ?? null,
           }))
         )),
+        // What the runner's sweep of abandoned execution roots reclaimed
+        // before this run, so a maintainer asking where their disk went can
+        // read it here (`NFR-OPER-001`, `TB-058`). It is a fact about this
+        // machine and this run, which is why it lives on the log entry and
+        // not in the addressed envelope, and it is recorded only when
+        // something was reclaimed: a run whose sweep found nothing writes
+        // exactly the entry it always did.
+        ...reclaimedRecord(housekeeping),
       },
     };
 

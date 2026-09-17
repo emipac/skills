@@ -20,8 +20,10 @@ import {
   bindingOf,
   declaredEnvironmentFiles,
   declaredSensitiveInputs,
+  resolveBypass,
   validateGatePolicy,
 } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
+import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/evidence-identity.mjs';
 
 const runFile = promisify(execFile);
 
@@ -929,4 +931,75 @@ test('SG-POL-001 / NFR-REL-003: reauthorizing a decision never upgrades a record
 
   assert.equal(reauthorized.outcome, 'unverified');
   assert.equal(reauthorized.authorization, 'deny');
+});
+
+/**
+ * TB-050 — `NFR-AUD-001`, `SG-BYP-001`, `FR-POL-008`.
+ *
+ * The bypass identity is what the clone-local ledger records and later
+ * compares against to refuse a second use, so it must be the one
+ * content-identity scheme: two grants stating the same facts with their keys
+ * in another order are one bypass, not two.
+ */
+test('NFR-AUD-001: the bypass identity and its evidence identity never depend on key order', () => {
+  const snapshotId = `sha256:${'a'.repeat(64)}`;
+  const policy = {
+    checks: { required: ['node-package.broad-tests.test'], advisory: [] },
+    budget: { total_seconds: 600 },
+    bypass: { enabled: true, require_reference: true, marker: 'Gate-Bypass' },
+    execution: {},
+    evidence: {},
+  };
+  const checks = [{ id: 'node-package.broad-tests.test', outcome: 'failed' }];
+  const resolve = (grant, ledger = null) => resolveBypass({
+    grant, policy, snapshotId, outcome: 'failed', checks, ledger,
+  });
+
+  // The same actor, spelled with its keys in two orders.
+  const first = resolve({
+    actor: { name: 'release-owner', source: 'operator' },
+    reason: 'Production incident hotfix',
+    reference: 'INC-4711',
+    requestedAt: '2026-08-10T09:00:00.000Z',
+    snapshotId,
+  });
+  const second = resolve({
+    snapshotId,
+    requestedAt: '2026-08-10T09:00:00.000Z',
+    reference: 'INC-4711',
+    reason: 'Production incident hotfix',
+    actor: { source: 'operator', name: 'release-owner' },
+  });
+
+  assert.equal(first.applied, true);
+  assert.equal(second.applied, true);
+  assert.match(first.id, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(first.id, second.id, 'Key order changed the bypass identity.');
+  assert.equal(first.evidence.id, second.evidence.id, 'Key order changed the bypass evidence identity.');
+
+  // The identity recomputes from its stated facts under the one scheme, with
+  // the keys spelled in yet another order.
+  assert.equal(first.id, contentIdentity({
+    requestedAt: '2026-08-10T09:00:00.000Z',
+    reference: 'INC-4711',
+    reason: 'Production incident hotfix',
+    actor: { source: 'operator', name: 'release-owner' },
+    snapshotId,
+  }));
+
+  // And a ledger that recorded the first spelling refuses the second (FR-POL-008).
+  const consumed = [first.id];
+  const replayed = resolve(
+    {
+      snapshotId,
+      actor: { source: 'operator', name: 'release-owner' },
+      requestedAt: '2026-08-10T09:00:00.000Z',
+      reason: 'Production incident hotfix',
+      reference: 'INC-4711',
+    },
+    { isConsumed: (id) => consumed.includes(id), consume: () => {} },
+  );
+
+  assert.equal(replayed.applied, false);
+  assert.equal(replayed.rejectionCode, 'bypass-already-consumed');
 });
