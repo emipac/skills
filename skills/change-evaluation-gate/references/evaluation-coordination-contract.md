@@ -4,6 +4,20 @@ Gate execution is serialized per clone, shares only work that is provably
 identical and still running, and answers `unverified` whenever coordination
 cannot be trusted.
 
+**Built and not switched on.** This contract is implemented and tested, and no
+production runner binds it: neither the hook runner nor the preflight runner
+passes a coordination seam to `evaluate`, so every evaluation today is the
+single-client gate described under Failure below and serializes nothing.
+`gate locks` inspects a lock no evaluation acquires. Switching it on means a
+runner binds the seam. Even then only the file lock below could apply: every
+hook invocation is its own process, so the in-process half of this contract —
+queueing, the subscriber map, and in-flight sharing — has nobody to share with
+in this deployment model. That is a property of the deployment, not a defect.
+The module stays as built rather than being removed: this project has
+repeatedly connected complete subsystems no entry point could reach
+(`TB-040`, `TB-041`, `TB-042`, `TB-044`), and deletion forecloses that
+(`TB-051`).
+
 ## What the lock is keyed on
 
 One lock per **resolved, canonical Git common directory**, at

@@ -1527,7 +1527,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
             <tr><td><strong>uninstall</strong></td><td>Removes project-installed assets. Requires deactivation first.</td></tr>
             <tr><td><strong>cleanup</strong></td><td>Removes only Gate keys from <code>.agent-framework.yaml</code>. Never deletes the file.</td></tr>
             <tr><td><strong>prune</strong></td><td>Removes evidence output blobs you selected by evaluation, age, or reclaimed size. Envelopes, decisions, events, and a tombstone for every removed blob are always kept.</td></tr>
-            <tr><td><strong>locks</strong></td><td>Inspects the coordination lock. Reports a free lock, a live holder, or a stale one; recovers a stale holder only against its own token, and never takes a live one.</td></tr>
+            <tr><td><strong>locks</strong></td><td>Inspects the coordination lock. Reports a free lock, a live holder, or a stale one; recovers a stale holder only against its own token, and never takes a live one. Coordination is built and not switched on: no evaluation acquires this lock today, so it reports free unless something else wrote it.</td></tr>
           </tbody>
         </table>
       </div>

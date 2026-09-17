@@ -53,6 +53,19 @@ What a decision may claim, which Grader surfaces a change touched, and when
 served HTTP or browser evidence is bound to the evaluated snapshot are defined
 by the
 [task scope and Grader integrity contract](references/task-scope-and-integrity-contract.md).
+Two parts of that contract are built and not switched on. Delivery contracts:
+both the hook runner and the preflight runner pass no contract reference
+(`contractRef: null`), so every decision the Gate produces today is
+`regression-only` with empty acceptance coverage — `acceptanceCriteria`,
+`provedAcceptanceCriteria`, and `acceptanceGaps` are always empty and the only
+limitation is the fixed regression-only one — and the acceptance-coverage
+machinery computes nothing on any run; switching it on means a runner passes
+the repository's delivery-contract reference. Served-source runtime binding: no
+runner binds a runtime resolver, so a check that declares `smoke` or `browser`
+evidence is `unverified` on every run with `prerequisite-missing` — a reason no
+reader can act on, because no runtime was ever asked; switching it on means a
+runner binds that resolver. Neither is wired by this skill, and neither claim
+above should be read as something the Gate does now.
 Evaluation itself never mutates: mutation is reachable only through the separate
 operation defined by the
 [explicit fix contract](references/explicit-fix-contract.md), which requires a
@@ -61,10 +74,20 @@ Where evidence is stored, what it may retain, how Sensitive values are redacted
 before persistence, and how an operator previews and confirms selective blob
 pruning without losing the audit trail are defined by the
 [bounded Evidence and Lifecycle event contract](references/bounded-evidence-contract.md).
-How concurrent evaluations across clients and linked worktrees serialize per Git
-common directory, when in-flight work may be shared, and why coordination that
-cannot be trusted is `unverified` are defined by the
+How concurrent evaluations across clients and linked worktrees would serialize
+per Git common directory, when in-flight work could be shared, and why
+coordination that cannot be trusted is `unverified` are defined by the
 [evaluation coordination contract](references/evaluation-coordination-contract.md).
+That coordination is built and not switched on: neither runner passes the
+coordination seam to evaluation, so every evaluation today is a single-client
+gate that serializes nothing, and `gate locks` inspects a lock no evaluation
+acquires. Switching it on means a runner binds that seam. Even then only the
+file lock could apply here: every hook invocation is its own process, so the
+in-process half of that module — the queue, the subscriber map, in-flight
+sharing — has nobody to share with in this deployment model. That is a fact
+about how the Gate is deployed, not a defect in the code, and it is why the
+code stays: this project has repeatedly connected complete subsystems no entry
+point could reach rather than deleting them.
 Configuring policy never runs an evaluation. Show the complete candidate policy before invoking
 the `framework-setup` Gate configuration command, and install it only after the
 maintainer explicitly confirms that preview.
