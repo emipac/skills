@@ -812,3 +812,287 @@ test('TB-043 SG-EVAL-001, NFR-REL-001: the root\'s spelling moves no snapshot id
   );
   void t;
 });
+
+/**
+ * TB-058. The sweep's bound holds inside an orphan, not only between orphans.
+ *
+ * A copied dependency tree made an orphan tens of thousands of entries, and a
+ * deadline checked only between roots let one root spend seven times the
+ * deadline and stop the sweep at one reclaimed per run. These fixtures plant
+ * orphans heavy enough that no single run can finish one, and prove that every
+ * run stays within the stated bound, that a partially removed orphan is
+ * finished by later runs, and that what was reclaimed is readable from the
+ * evidence log.
+ */
+
+/** The bound one run may spend: the deadline plus its stated overshoot, with slack for CI. */
+const SWEEP_RUN_BOUND_MS = 250;
+const SWEEP_RUN_SLACK_MS = 750;
+
+/**
+ * Plant one orphan of `directories` × `filesPerDirectory` files, nested two
+ * levels the way a vendor tree is, and age it past retention.
+ */
+const plantHeavyOrphan = async (sweepRoot, name, { directories, filesPerDirectory }) => {
+  const root = path.join(sweepRoot, name);
+
+  for (let index = 0; index < directories; index += 1) {
+    const directory = path.join(root, 'vendor', `package-${index % 16}`, `src-${index}`);
+
+    // eslint-disable-next-line no-await-in-loop
+    await mkdir(directory, { recursive: true });
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(Array.from({ length: filesPerDirectory }, (_, file) => (
+      writeFile(path.join(directory, `File${file}.php`), '<?php\n', 'utf8')
+    )));
+  }
+
+  await age(root, EXECUTION_ROOT_RETENTION_MS + 60_000);
+
+  return root;
+};
+
+const countEntries = async (directory) => {
+  const listed = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  let total = listed.length;
+
+  for (const entry of listed) {
+    if (entry.isDirectory()) {
+      // eslint-disable-next-line no-await-in-loop
+      total += await countEntries(path.join(directory, entry.name));
+    }
+  }
+
+  return total;
+};
+
+test('TB-058 RISK-003, AC-EVAL-006: a partially removed orphan is left safe, its age is kept, and a later run finishes it', async (t) => {
+  const sweepRoot = await throwawayDirectory(t, 'gate-exec-root-partial-');
+  const outside = await throwawayDirectory(t, 'gate-exec-root-partial-outside-');
+
+  await mkdir(path.join(outside, 'installed'), { recursive: true });
+  await writeFile(path.join(outside, 'installed/keep.txt'), 'keep\n', 'utf8');
+
+  const orphan = await plantHeavyOrphan(sweepRoot, 'gate-preflight-exec-heavy', {
+    directories: 12,
+    filesPerDirectory: 4,
+  });
+  const young = path.join(sweepRoot, 'gate-hook-runner-exec-young');
+
+  await mkdir(path.join(young, 'snapshot'), { recursive: true });
+  await writeFile(path.join(young, 'snapshot/Order.php'), 'in flight\n', 'utf8');
+  // A linked dependency root inside the orphan, pointing outside it.
+  await symlink(path.join(outside, 'installed'), path.join(orphan, 'node_modules'));
+  await age(orphan, EXECUTION_ROOT_RETENTION_MS + 60_000);
+
+  const before = await countEntries(orphan);
+  const ageBefore = (await lstat(orphan)).mtimeMs;
+  // A clock that runs out after a few looks, so the deadline falls inside the
+  // orphan deterministically rather than by how fast this machine unlinks.
+  let ticks = 0;
+  const hurried = () => Date.now() + (ticks += 1) * 20;
+
+  const first = await sweepOrphanedExecutionRoots({ temporaryRoot: sweepRoot, now: hurried });
+
+  assert.deepEqual(first.removed, [], 'the clock ran out inside the orphan, so it is not reported removed.');
+  assert.deepEqual(first.unfinished, [orphan], 'the orphan the run started on is reported as left for a later run.');
+  assert.equal(first.entries > 0, true, 'the run reclaimed something before the deadline.');
+
+  const remaining = await countEntries(orphan);
+
+  assert.equal(remaining < before, true, 'part of the orphan is gone.');
+  assert.equal(remaining > 0, true, 'and part of it is still there: a smaller orphan, not a finished one.');
+  assert.equal(
+    (await lstat(orphan)).mtimeMs,
+    ageBefore,
+    'the orphan\'s own age is put back, so the next run still sees it past retention.',
+  );
+  assert.equal(
+    await readFile(path.join(young, 'snapshot/Order.php'), 'utf8'),
+    'in flight\n',
+    'SG-LIFE-001: a root younger than retention beside it is untouched.',
+  );
+  assert.equal(
+    await readFile(path.join(outside, 'installed/keep.txt'), 'utf8'),
+    'keep\n',
+    'SG-LIFE-001: the installation a linked root pointed at is never reached.',
+  );
+
+  let runs = 1;
+  let finished = first;
+
+  while (finished.removed.length === 0 && runs < 50) {
+    // eslint-disable-next-line no-await-in-loop
+    finished = await sweepOrphanedExecutionRoots({ temporaryRoot: sweepRoot });
+    runs += 1;
+  }
+
+  assert.deepEqual(finished.removed, [orphan], `the orphan is finished by a later run (took ${runs}).`);
+  assert.deepEqual(finished.unfinished, []);
+  assert.equal(await stat(orphan).then(() => true).catch(() => false), false, 'the orphan is gone.');
+  assert.equal(
+    await readFile(path.join(outside, 'installed/keep.txt'), 'utf8'),
+    'keep\n',
+    'SG-LIFE-001: still never reached.',
+  );
+  assert.equal(
+    await readFile(path.join(young, 'snapshot/Order.php'), 'utf8'),
+    'in flight\n',
+    'SG-LIFE-001: still untouched.',
+  );
+});
+
+test('TB-058 RISK-002, RISK-003: N copy-weight orphans are fully reclaimed within a stated number of runs, and no run exceeds the stated bound', async (t) => {
+  const sweepRoot = await throwawayDirectory(t, 'gate-exec-root-heavy-');
+  const shape = { directories: 256, filesPerDirectory: 40 };
+  const orphans = [];
+
+  for (const name of ['gate-hook-runner-exec-one', 'gate-preflight-exec-two', 'gate-hook-runner-exec-three']) {
+    // eslint-disable-next-line no-await-in-loop
+    orphans.push(await plantHeavyOrphan(sweepRoot, name, shape));
+  }
+
+  const entriesPerOrphan = await countEntries(orphans[0]);
+  // Plus one per orphan: the root directory itself is the last entry removed.
+  const totalEntries = (entriesPerOrphan + 1) * orphans.length;
+  const durations = [];
+  const reclaimed = [];
+  let removedRoots = [];
+  let entries = 0;
+  // The stated bound on runs: the deadline reclaims some thousands of entries
+  // per run on any machine this suite runs on; a run that reclaims fewer than
+  // five hundred is a machine this bound was not measured on, and the fixture
+  // says so rather than looping without end.
+  const runCeiling = Math.ceil(totalEntries / 500) + orphans.length;
+
+  while (removedRoots.length < orphans.length && durations.length < runCeiling) {
+    const started = performance.now();
+    // eslint-disable-next-line no-await-in-loop
+    const result = await sweepOrphanedExecutionRoots({ temporaryRoot: sweepRoot });
+
+    durations.push(performance.now() - started);
+    reclaimed.push(result.entries);
+    entries += result.entries;
+    removedRoots = [...removedRoots, ...result.removed];
+  }
+
+  assert.deepEqual(
+    removedRoots.sort(),
+    [...orphans].sort(),
+    `every orphan is reclaimed in full within ${runCeiling} runs (took ${durations.length}).`,
+  );
+  assert.deepEqual(await rootsUnder(sweepRoot), [], 'nothing under the prefix is left.');
+  assert.equal(entries, totalEntries, 'every entry of every orphan was counted as reclaimed exactly once.');
+  assert.equal(
+    durations.length > orphans.length,
+    true,
+    `the fixture must be heavy enough that no run finishes an orphan alone (${entriesPerOrphan} entries per orphan; ${durations.length} runs).`,
+  );
+
+  const longest = Math.max(...durations);
+
+  assert.equal(
+    longest <= SWEEP_RUN_BOUND_MS + SWEEP_RUN_SLACK_MS,
+    true,
+    `RISK-003: no run spent more than the stated bound on the sweep (longest ${Math.round(longest)} ms; per run: ${durations.map(Math.round).join(', ')}).`,
+  );
+  t.diagnostic(`TB-058: ${orphans.length} orphans of ${entriesPerOrphan} entries cleared in ${durations.length} runs; longest ${Math.round(longest)} ms; per run ${reclaimed.join(', ')} entries.`);
+});
+
+test('TB-058: a link-weight orphan is reclaimed in one run exactly as before', async (t) => {
+  const sweepRoot = await throwawayDirectory(t, 'gate-exec-root-link-orphan-');
+  const outside = await throwawayDirectory(t, 'gate-exec-root-link-outside-');
+
+  await mkdir(path.join(outside, 'vendor/pkg'), { recursive: true });
+  await writeFile(path.join(outside, 'vendor/pkg/autoload.php'), '<?php\n', 'utf8');
+
+  const orphan = path.join(sweepRoot, 'gate-hook-runner-exec-linked');
+
+  await mkdir(path.join(orphan, 'app'), { recursive: true });
+  await writeFile(path.join(orphan, 'app/Order.php'), 'content\n', 'utf8');
+  await symlink(path.join(outside, 'vendor'), path.join(orphan, 'vendor'));
+  await age(orphan, EXECUTION_ROOT_RETENTION_MS + 60_000);
+
+  const result = await sweepOrphanedExecutionRoots({ temporaryRoot: sweepRoot });
+
+  assert.deepEqual(result.removed, [orphan], 'a root holding a link and a few files is reclaimed whole in one run.');
+  assert.deepEqual(result.unfinished, []);
+  assert.equal(result.considered, 1);
+  assert.equal(result.entries, 4, 'the file, its directory, the link, and the root: the link counted once and never entered.');
+  assert.equal(await stat(orphan).then(() => true).catch(() => false), false);
+  assert.equal(
+    await readFile(path.join(outside, 'vendor/pkg/autoload.php'), 'utf8'),
+    '<?php\n',
+    'SG-LIFE-001: the linked installation is intact.',
+  );
+});
+
+test('TB-058 NFR-OPER-001: what a run reclaimed is recorded on its evidence log entry, and only when it reclaimed something', async (t) => {
+  const repository = await throwawayRepository(t);
+  const temporaryRoot = await throwawayDirectory(t, 'gate-exec-root-recorded-');
+  const abandoned = path.join(temporaryRoot, 'gate-preflight-exec-abandoned');
+
+  await configureClone(repository);
+  await publishReceipt(repository);
+  await stage(repository, 'baseline\nrepaired\n');
+  await mkdir(path.join(abandoned, 'snapshot'), { recursive: true });
+  await writeFile(path.join(abandoned, 'snapshot/Order.php'), 'abandoned\n', 'utf8');
+  await age(abandoned, EXECUTION_ROOT_RETENTION_MS + 60_000);
+
+  const commit = () => new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', HOOK_RUNNER_DRIVER], {
+      cwd: repository,
+      env: { ...isolatedGitEnvironment(), TMPDIR: temporaryRoot },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout.resume();
+    child.stderr.resume();
+    child.on('close', (exitCode) => resolve(exitCode));
+  });
+  const common = (await runFile('git', ['rev-parse', '--git-common-dir'], {
+    cwd: repository,
+    env: isolatedGitEnvironment(),
+  })).stdout.trim();
+  const readLog = async () => (await readFile(
+    path.resolve(repository, common, 'change-evaluation-gate/evidence/log.ndjson'),
+    'utf8',
+  )).trim().split('\n').map((line) => JSON.parse(line));
+
+  assert.equal(await commit(), 0, 'the reclaiming commit is allowed on its own terms.');
+
+  const [first] = await readLog();
+
+  assert.deepEqual(
+    first.execution.reclaimed,
+    {
+      roots: [abandoned],
+      unfinished: [],
+      entries: 3,
+      elapsedMs: first.execution.reclaimed.elapsedMs,
+    },
+    'the log entry names the root the sweep reclaimed and how much of it.',
+  );
+  assert.equal(Number.isInteger(first.execution.reclaimed.elapsedMs), true);
+  assert.equal(
+    first.execution.reclaimed.elapsedMs <= SWEEP_RUN_BOUND_MS + SWEEP_RUN_SLACK_MS,
+    true,
+    'and how long it spent, within the bound.',
+  );
+
+  // The same commit again, with nothing left to reclaim.
+  await stage(repository, 'baseline\nrepaired again\n');
+  assert.equal(await commit(), 0);
+
+  const [, second] = await readLog();
+
+  assert.equal(
+    'reclaimed' in second.execution,
+    false,
+    'a run whose sweep reclaimed nothing writes exactly the entry it always did.',
+  );
+  assert.deepEqual(
+    Object.keys(second.execution),
+    ['executionRoot', 'attempts'],
+  );
+});

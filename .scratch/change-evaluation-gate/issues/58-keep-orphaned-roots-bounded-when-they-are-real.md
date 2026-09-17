@@ -1,14 +1,14 @@
 # TB-058 — Keep orphaned roots bounded when they are real
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by: TB-054
 Tracker ID: 58-keep-orphaned-roots-bounded-when-they-are-real
 Draft key: TB-058
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`

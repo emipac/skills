@@ -68,6 +68,12 @@
  *    execution root; a root an earlier abandoned run left behind is reclaimed
  *    by the next commit, and those commits still deny and allow exactly as they
  *    did before (TB-038, AC-CFG-004, AC-EVAL-004, SG-SECRET-001, NFR-REL-001).
+ *    `heavy-orphans-reclaimed-across-commits` — orphans that weigh what a
+ *    copied dependency tree weighs are reclaimed across real commits, no
+ *    commit spends more than the stated bound on the sweep, every commit is
+ *    denied and allowed exactly as it would have been, and each commit's
+ *    evidence log entry records what its sweep reclaimed (TB-058, RISK-002,
+ *    RISK-003, NFR-OPER-001).
  * 9. `commented-configuration-pins-what-the-file-holds` — a clone whose
  *    configuration a maintainer annotated by hand activates on the policy the
  *    file holds: the receipt pins the identity the uncommented document has,
@@ -2686,6 +2692,142 @@ const interruptedCommitLeavesNoRoot = async () => {
   return { name: 'interrupted-commit-leaves-no-root', ok: findings.length === 0, findings };
 };
 
+/** The bound one commit may spend on the sweep (`TB-058`), with slack for a loaded machine. */
+const SWEEP_RUN_BOUND_MS = 250;
+const SWEEP_RUN_SLACK_MS = 750;
+
+/**
+ * TB-058: orphans that weigh what a copied dependency tree weighs are reclaimed
+ * across real commits, each commit spends a bounded time on the sweep, and
+ * every commit still decides exactly as it would have.
+ *
+ * The orphans are planted directly rather than by copying a real `vendor`:
+ * what the sweep is measured against is entry count, not bytes, and a few
+ * thousand small files under a nested tree is the shape that made the earlier
+ * sweep spend seven times its deadline on one root. Each commit's sweep cost
+ * is read from the evidence log entry that commit appended, which is where a
+ * maintainer would read it (`NFR-OPER-001`, `RISK-003`).
+ */
+const heavyOrphansReclaimedAcrossCommits = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+  const store = await storeFor(root);
+  const { result } = await activateFixture(root, store);
+
+  check(findings, result.activated === true, `Activation did not succeed: ${result.reasonCode}.`);
+
+  if (result.activated !== true) {
+    return { name: 'heavy-orphans-reclaimed-across-commits', ok: false, findings };
+  }
+
+  const temporaryRoot = await temporaryDirectory('gate-activation-smoke-heavy-tmp-');
+  const stale = new Date(Date.now() - EXECUTION_ROOT_RETENTION_MS - 3_600_000);
+  const orphans = [
+    path.join(temporaryRoot, 'gate-hook-runner-exec-abandoned-one'),
+    path.join(temporaryRoot, 'gate-preflight-exec-abandoned-two'),
+  ];
+
+  for (const orphan of orphans) {
+    for (let index = 0; index < 200; index += 1) {
+      const directory = path.join(orphan, 'vendor', `package-${index % 8}`, `src-${index}`);
+
+      await mkdir(directory, { recursive: true });
+      await Promise.all(Array.from({ length: 40 }, (_, file) => (
+        writeFile(path.join(directory, `File${file}.php`), '<?php\n', 'utf8')
+      )));
+    }
+
+    await utimes(orphan, stale, stale);
+  }
+
+  const commitIn = (message) => runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Activation Smoke',
+    'commit', '--quiet', '--message', message,
+  ], { cwd: root, env: { ...gitEnvironment(), TMPDIR: temporaryRoot } }).then(
+    () => ({ failed: false, output: '' }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  // Alternating denied and allowed commits, so the decisions are proved
+  // unaffected on both outcomes while the sweep works through the orphans.
+  const sweeps = [];
+  let commits = 0;
+
+  while ((await executionRootsUnder(temporaryRoot)).length > 0 && commits < 40) {
+    const denyThisOne = commits % 2 === 0;
+
+    await writeFile(
+      path.join(root, SOURCE),
+      denyThisOne ? `baseline\n${BREAKAGE}\n${commits}\n` : `baseline\nrepaired ${commits}\n`,
+      'utf8',
+    );
+    await git(root, ['add', '--all']);
+
+    const outcome = await commitIn(`commit ${commits} while orphans are reclaimed`);
+
+    check(
+      findings,
+      outcome.failed === denyThisOne,
+      `Commit ${commits} was ${outcome.failed ? 'denied' : 'allowed'} while it should have been ${denyThisOne ? 'denied' : 'allowed'}: ${outcome.output}.`,
+    );
+
+    const log = await store.readLog();
+    const entry = log[log.length - 1];
+
+    check(
+      findings,
+      entry?.execution?.reclaimed !== undefined && entry.execution.reclaimed.entries > 0,
+      `Commit ${commits} reclaimed part of an orphan but its evidence log entry does not say so: ${JSON.stringify(entry?.execution ?? null)}.`,
+    );
+    sweeps.push(entry?.execution?.reclaimed ?? null);
+    commits += 1;
+  }
+
+  const remaining = await executionRootsUnder(temporaryRoot);
+
+  check(
+    findings,
+    remaining.length === 0,
+    `${orphans.length} heavy orphans were not reclaimed within ${commits} commits: ${JSON.stringify(remaining)}.`,
+  );
+  check(
+    findings,
+    commits > orphans.length,
+    `The orphans were not heavy enough to prove partial removal: cleared in ${commits} commits.`,
+  );
+
+  const longest = Math.max(...sweeps.map((sweep) => sweep?.elapsedMs ?? 0));
+
+  check(
+    findings,
+    longest <= SWEEP_RUN_BOUND_MS + SWEEP_RUN_SLACK_MS,
+    `RISK-003: a commit spent ${longest} ms on the sweep, past the stated bound of ${SWEEP_RUN_BOUND_MS} ms (${sweeps.map((sweep) => sweep?.elapsedMs ?? null).join(', ')}).`,
+  );
+  check(
+    findings,
+    sweeps.flatMap((sweep) => sweep?.roots ?? []).sort().join('\n') === [...orphans].sort().join('\n'),
+    `The evidence log does not name every reclaimed orphan exactly once: ${JSON.stringify(sweeps.map((sweep) => sweep?.roots ?? null))}.`,
+  );
+
+  // One more allowed commit with nothing left to reclaim: the entry it appends
+  // carries no sweep record, exactly as before this contract.
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired at last\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const final = await commitIn('a commit with nothing to reclaim');
+  const log = await store.readLog();
+
+  check(findings, final.failed === false, `The clone stopped allowing once the orphans were gone: ${final.output}.`);
+  check(
+    findings,
+    log[log.length - 1]?.execution !== undefined && !('reclaimed' in log[log.length - 1].execution),
+    'A commit whose sweep reclaimed nothing still recorded a sweep.',
+  );
+
+  return { name: 'heavy-orphans-reclaimed-across-commits', ok: findings.length === 0, findings };
+};
+
 /**
  * A requirement this evaluation environment cannot satisfy, declared by the
  * clone the way it declares its commands.
@@ -2973,6 +3115,7 @@ const main = async () => {
       await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),
+      await heavyOrphansReclaimedAcrossCommits(),
       await unprovedPrerequisiteNamesWhatWasMissing(),
       await commentedConfigurationPinsWhatTheFileHolds(),
     ];
