@@ -238,6 +238,43 @@ is supplied to evaluation out of band — the process request carries no policy
 override — and names its actor, reason, optional reference, request time, and
 the exact snapshot identity it applies to.
 
+### Where a grant comes from
+
+A grant enters from outside the evaluation, and from exactly one place: a
+confirmed `gate bypass` (`TB-052`). It is the same two invocations every
+mutating command on the operator surface takes. `gate bypass --reason <text>
+[--reference <ref>] [--actor <name>]` materializes the staged index through the
+same capture the authoritative runner uses, prints the snapshot identity a
+commit would carry and the paths it stages, applies the policy's own
+`resolveBypass` rule to the grant it would write — so a disabled policy, an
+unconfigured marker, a missing reason, or a missing policy-required reference
+is refused by the same code the hook would refuse it with — and offers a token
+only when the grant is grantable. The token binds the snapshot identity: staging
+anything between the preview and the confirmation refuses the confirmation.
+
+The confirmation writes one grant file, `bypass/grant.json` under the
+clone-local Evidence store, holding the five identity fields and the marker,
+and appends one `bypass` Lifecycle event. There is one pending grant per clone,
+never a queue; a later confirmation replaces it.
+
+The authoritative runner reads the grant once, before any check process
+starts, hands it and the clone's durable one-shot ledger to evaluation, and
+removes the file afterwards whether the grant was applied or refused — a grant
+is spent by the commit attempt that reads it, and only a fresh `gate bypass`
+grants another. Nothing on the evaluation path writes a grant: a check runs
+after the grant was read and inside a materialized root, and a file that is not
+of the published grant shape yields no grant at all rather than a partial one
+(`SG-BYP-001`, `SG-CFG-001`, `SG-EVAL-001`).
+
+The preflight runner honours no grant. It grades the working tree, not the
+index, so its snapshot identity is never the one a grant names; and it
+authorizes nothing, so there is nothing for a bypass to change and no reason to
+let a preview spend a maintainer's one shot.
+
+A denied commit on a clone whose policy enables bypass says so, naming
+`gate bypass`; a clone whose policy disables it prints exactly what it always
+printed (`FR-POL-008`).
+
 A grant is refused, leaving the graded outcome untouched, when:
 
 | Rejection | Meaning |
@@ -261,10 +298,20 @@ states `tamperEvident: false`, and the Gate never claims to prevent raw Git
 `--no-verify`, hook removal, or machine-owner tampering (`SG-TRUST-001`,
 `RISK-001`).
 
+### The commit-visible marker
+
+An applied bypass carries the configured marker in the decision, in the
+ledger record, and in the `bypass` Lifecycle event, and the hook prints it
+beside the `bypassed / allow` line. That is where its commit visibility ends
+today, and this contract says so rather than implying more: the authoritative
+surface is `pre-commit`, which runs before a commit message exists and answers
+by exit status alone, so the hook cannot write the marker into the message.
+The maintainer carries the printed marker into the message; a later slice
+that registers a message-shaping hook would be where the Gate emits it itself.
+
 ## Declared but not yet implemented
 
-- Bypass evidence is identified inside the decision but is not written to disk;
-  evidence persistence and pruning are a later slice.
-- The commit-visible marker is supplied by the decision; emitting it into the
-  commit is the activated Git adapter's responsibility.
-- The one-shot ledger is an injected seam; its durable store is a later slice.
+- Bypass evidence is identified inside the decision and persisted with it in
+  the decision's own envelope; it is not a separate envelope of its own.
+- The commit-visible marker is printed for the maintainer and recorded, not
+  written into the commit message (see above).

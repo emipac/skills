@@ -49,10 +49,28 @@ and evaluation consumes them through the
 [evaluation process contract](references/evaluation-process-contract.md).
 The five subcontracts, their limits, and the supported bypass are defined by the
 [Gate policy contract](references/gate-policy-contract.md).
+The bypass switch is wired: a policy with `bypass.enabled: true` and a
+`marker` makes `gate bypass` grantable, a denied commit on such a clone names
+that command, and a policy with bypass disabled behaves exactly as it always
+has. A grant comes from that command and from nowhere else; never write one by
+hand and never import the policy library to construct one.
 What a decision may claim, which Grader surfaces a change touched, and when
 served HTTP or browser evidence is bound to the evaluated snapshot are defined
 by the
 [task scope and Grader integrity contract](references/task-scope-and-integrity-contract.md).
+Two parts of that contract are built and not switched on. Delivery contracts:
+both the hook runner and the preflight runner pass no contract reference
+(`contractRef: null`), so every decision the Gate produces today is
+`regression-only` with empty acceptance coverage — `acceptanceCriteria`,
+`provedAcceptanceCriteria`, and `acceptanceGaps` are always empty and the only
+limitation is the fixed regression-only one — and the acceptance-coverage
+machinery computes nothing on any run; switching it on means a runner passes
+the repository's delivery-contract reference. Served-source runtime binding: no
+runner binds a runtime resolver, so a check that declares `smoke` or `browser`
+evidence is `unverified` on every run with `prerequisite-missing` — a reason no
+reader can act on, because no runtime was ever asked; switching it on means a
+runner binds that resolver. Neither is wired by this skill, and neither claim
+above should be read as something the Gate does now.
 Evaluation itself never mutates: mutation is reachable only through the separate
 operation defined by the
 [explicit fix contract](references/explicit-fix-contract.md), which requires a
@@ -61,10 +79,20 @@ Where evidence is stored, what it may retain, how Sensitive values are redacted
 before persistence, and how an operator previews and confirms selective blob
 pruning without losing the audit trail are defined by the
 [bounded Evidence and Lifecycle event contract](references/bounded-evidence-contract.md).
-How concurrent evaluations across clients and linked worktrees serialize per Git
-common directory, when in-flight work may be shared, and why coordination that
-cannot be trusted is `unverified` are defined by the
+How concurrent evaluations across clients and linked worktrees would serialize
+per Git common directory, when in-flight work could be shared, and why
+coordination that cannot be trusted is `unverified` are defined by the
 [evaluation coordination contract](references/evaluation-coordination-contract.md).
+That coordination is built and not switched on: neither runner passes the
+coordination seam to evaluation, so every evaluation today is a single-client
+gate that serializes nothing, and `gate locks` inspects a lock no evaluation
+acquires. Switching it on means a runner binds that seam. Even then only the
+file lock could apply here: every hook invocation is its own process, so the
+in-process half of that module — the queue, the subscriber map, in-flight
+sharing — has nobody to share with in this deployment model. That is a fact
+about how the Gate is deployed, not a defect in the code, and it is why the
+code stays: this project has repeatedly connected complete subsystems no entry
+point could reach rather than deleting them.
 Configuring policy never runs an evaluation. Show the complete candidate policy before invoking
 the `framework-setup` Gate configuration command, and install it only after the
 maintainer explicitly confirms that preview.
@@ -108,7 +136,7 @@ this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
 beside the `SKILL.md` you are reading rather than assuming a path: an installed
 skill sits wherever the client placed it, so the same literal path does not hold
 across projects. The command is `activate`, `status`, `locks`, `prune`,
-`repair`, `update`, `deactivate`, `uninstall`, or `cleanup`. Add `--json` for
+`repair`, `update`, `deactivate`, `uninstall`, `cleanup`, or `bypass`. Add `--json` for
 the same document a person is shown. An activated clone also carries `git gate`,
 a shortcut this activation wrote into that clone's own `.git/config` and
 nowhere else.
@@ -135,6 +163,19 @@ A configured clone is a prerequisite: activation never configures one on the way
 past. `--actor <name>` is carried into the receipt as **self-declared** and
 never as proven — this command cannot see who ran it, and its receipt does not
 pretend otherwise.
+
+`gate bypass --reason <text> [--reference <ref>] [--actor <name>]` is the
+same two invocations, and the only way a bypass grant exists. The preview
+identifies the exact staged snapshot and refuses, by the policy's own
+rejection code, a bypass the policy would refuse at commit time — disabled,
+no marker, no reason, no policy-required reference; `gate bypass ... --confirm
+<token>` writes one one-shot grant bound to that snapshot. The next commit
+attempt spends it: staged exactly as previewed and otherwise denied, the commit
+proceeds as `bypassed`, never `passed`, with every failed check preserved and
+the configured marker printed for the maintainer to put in the message; staged
+differently, the grant is refused as `snapshot-mismatch` and spent. Only run it
+when the maintainer explicitly asks to bypass a denied commit, show them the
+preview, and never confirm on their behalf.
 
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When

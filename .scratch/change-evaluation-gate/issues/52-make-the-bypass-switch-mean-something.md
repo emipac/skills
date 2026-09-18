@@ -1,14 +1,14 @@
 # TB-052 — Make the bypass switch mean something
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 52-make-the-bypass-switch-mean-something
 Draft key: TB-052
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -172,22 +172,25 @@ any circumstance.
 
 ## Acceptance Criteria
 
-- [ ] `FR-POL-008`, `AC-CFG-001`: a clone whose policy enables bypass is
+- [x] `FR-POL-008`, `AC-CFG-001`: a clone whose policy enables bypass is
   observably different from one whose policy disables it — either a bypass is
   available, or the configuration is refused with a diagnostic naming why.
-- [ ] `SG-BYP-001`, `AC-POL-002`: if a bypass is available, it is one-shot, bound
+- [x] `SG-BYP-001`, `AC-POL-002`: if a bypass is available, it is one-shot, bound
   to the exact snapshot, requires a reason and any policy-required marker,
   retains every failed and unverified check, and returns `bypassed` rather than
   `passed`.
-- [ ] Nothing in the evaluation path can construct a grant for itself, proved by
+- [x] Nothing in the evaluation path can construct a grant for itself, proved by
   a fixture that supplies none and gets no bypass.
-- [ ] If the configuration is refused, the refusal denies — proved by a fixture
-  where a commit that would have been blocked is still blocked.
-- [ ] `NFR-AUD-001`: whatever happens is recorded through the existing Evidence
+- [x] If the configuration is refused, the refusal denies — proved by a fixture
+  where a commit that would have been blocked is still blocked. (Wired, not
+  refused: the fixtures that stand in for this are a denied commit with the
+  switch on and no grant, and a grant the policy refuses — disabled, consumed,
+  wrong snapshot, missing reference — each still denied.)
+- [x] `NFR-AUD-001`: whatever happens is recorded through the existing Evidence
   and Lifecycle paths, with no new event type, store, or log.
-- [ ] `FR-POL-008`: a policy with bypass disabled behaves byte-for-byte as it
+- [x] `FR-POL-008`: a policy with bypass disabled behaves byte-for-byte as it
   does today, proved against the existing commit capabilities.
-- [ ] The silent case is gone: no configuration enabling bypass produces a run
+- [x] The silent case is gone: no configuration enabling bypass produces a run
   indistinguishable from one that disabled it.
 
 ## Verification Matrix

@@ -51,6 +51,18 @@
  *    snapshot exactly as every such project did before `TB-059`, recorded as
  *    unresolved with the sources searched (`FR-CFG-006`, `AC-EVAL-001`,
  *    `AC-CFG-004`, `SG-EVAL-001`, `SG-SECRET-001`).
+ * 7. `packaged-bypass` — the bypass switch means something (`TB-052`). On a
+ *    clone whose policy enables bypass, the shipped hook's denial names the
+ *    escape hatch, the shipped `gate bypass` previews the staged snapshot and
+ *    confirms a one-shot grant, a grant for another snapshot is refused as
+ *    `snapshot-mismatch` and spent, a fresh grant lets exactly one real
+ *    `git commit` proceed as `bypassed` — never `passed` — with the failure
+ *    preserved, the ledger consumed, the marker printed, and every record
+ *    through the existing Evidence and Lifecycle paths; the next commit is
+ *    denied as before. On the twin clone with bypass disabled the denial is
+ *    byte-for-byte what it always was, no bypass record, ledger, or grant
+ *    exists, and `gate bypass` refuses as `bypass-disabled` (`FR-POL-006`,
+ *    `FR-POL-007`, `FR-POL-008`, `SG-BYP-001`, `NFR-AUD-001`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -1294,6 +1306,216 @@ const declaredEnvironmentFile = async () => {
   return { name: 'declared-environment-file', ok: findings.length === 0, findings };
 };
 
+const BYPASS_MARKER = 'Gate-Bypass';
+
+/** The same one-check clone, with the bypass switch on the way a maintainer writes it. */
+const bypassConfiguration = () => runnerConfiguration()
+  .replace('  bypass:\n    enabled: false\n', `  bypass:\n    enabled: true\n    marker: ${BYPASS_MARKER}\n`);
+
+/** Activate one throwaway clone through the packaged command, as a maintainer does. */
+const activateClone = async (repositoryRoot, findings) => {
+  const previewed = await runPackagedCommand(repositoryRoot, ['activate', '--json']);
+  const token = JSON.parse(previewed.stdout || '{}').observation?.confirmationToken ?? '';
+  const confirmed = await runPackagedCommand(repositoryRoot, ['activate', '--confirm', token, '--json']);
+  const document = JSON.parse(confirmed.stdout || '{}');
+
+  check(
+    findings,
+    document.mutation?.performed === true,
+    `The command did not activate the clone: ${confirmed.stdout}${confirmed.stderr}`,
+  );
+
+  return document.mutation?.performed === true;
+};
+
+const cloneWithPolicy = async (prefix, configuration) => {
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-${prefix}-repo-`);
+
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), RUNNER_CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), configuration, 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', 'baseline',
+  ]);
+
+  return repositoryRoot;
+};
+
+const stageBroken = async (repositoryRoot, suffix = '') => {
+  await writeFile(path.join(repositoryRoot, 'source.txt'), `baseline\nBROKEN\n${suffix}`, 'utf8');
+  await git(repositoryRoot, ['add', '--all']);
+};
+
+const grantBypass = async (repositoryRoot, reason) => {
+  const previewed = await runPackagedCommand(repositoryRoot, ['bypass', '--reason', reason, '--json']);
+  const preview = JSON.parse(previewed.stdout || '{}');
+  const token = preview.observation?.confirmationToken ?? '';
+  const confirmed = await runPackagedCommand(repositoryRoot, ['bypass', '--reason', reason, '--confirm', token, '--json']);
+
+  return { preview, confirmed: JSON.parse(confirmed.stdout || '{}'), exitCode: confirmed.exitCode };
+};
+
+/**
+ * The bypass switch means something (`TB-052`): the SHIPPED command grants a
+ * one-shot bypass and the SHIPPED hook honours it, against a real activated
+ * clone and a real `git commit`.
+ *
+ * Enabled: a denied commit names the escape hatch; `gate bypass` previews the
+ * staged snapshot and confirms a grant; staging anything more refuses that
+ * grant as `snapshot-mismatch` and spends it; a fresh grant lets the next
+ * commit proceed as `bypassed` — never `passed` — with the failure preserved
+ * in the decision, the ledger consumed, the marker printed for the message,
+ * and every record through the existing Evidence and Lifecycle paths; and the
+ * commit after that, with no grant, is denied exactly as before (`FR-POL-006`,
+ * `FR-POL-007`, `SG-BYP-001`, `NFR-AUD-001`).
+ *
+ * Disabled: the same clone with the switch off denies the same commit with
+ * the same lines it always printed, its decision carries no bypass record, no
+ * ledger and no grant directory exist, and `gate bypass` refuses by the
+ * policy's own `bypass-disabled` (`FR-POL-008`).
+ */
+const packagedBypass = async () => {
+  const findings = [];
+  const enabled = await cloneWithPolicy('bypass-on', bypassConfiguration());
+
+  if (!(await activateClone(enabled, findings))) {
+    return { name: 'packaged-bypass', ok: false, findings };
+  }
+
+  await stageBroken(enabled);
+
+  // 1. Denied, and told where the escape hatch is.
+  const denied = await commitAttempt(enabled, 'broken, no grant');
+
+  check(findings, denied.failed === true, 'A broken commit with no grant was allowed.');
+  check(findings, denied.output.includes('bypass available'), `The denial did not name the enabled bypass: ${denied.output}`);
+  check(findings, denied.output.includes('gate bypass --reason'), `The denial did not name the command: ${denied.output}`);
+
+  // 2. Preview and grant, bound to the staged snapshot.
+  const first = await grantBypass(enabled, 'hotfix under incident 12');
+
+  check(findings, first.preview.observation?.grantable === true, `The preview refused a grantable bypass: ${JSON.stringify(first.preview)}`);
+  check(findings, first.confirmed.mutation?.performed === true, `The grant was not written: ${JSON.stringify(first.confirmed)}`);
+
+  // 3. One more staged byte: the grant names a snapshot this commit is not.
+  await stageBroken(enabled, 'and more\n');
+
+  const mismatched = await commitAttempt(enabled, 'broken, stale grant');
+
+  check(findings, mismatched.failed === true, 'A grant for another snapshot authorized a commit.');
+  check(findings, mismatched.output.includes('bypass refused (snapshot-mismatch)'), `The stale grant was not refused by name: ${mismatched.output}`);
+
+  const common = path.resolve(enabled, (await git(enabled, ['rev-parse', '--git-common-dir'])).stdout.trim());
+  const store = await openEvidenceStore({ repositoryRoot: enabled, identity: storeIdentity() });
+
+  check(findings, await store.bypassGrant().read() === null, 'The refused grant was left in front of the next commit.');
+  check(findings, (await store.readBypassLedger()).length === 0, 'A refused grant was consumed.');
+
+  // 4. A fresh grant for the snapshot as it is now, and the commit proceeds.
+  const second = await grantBypass(enabled, 'hotfix under incident 12, re-granted');
+
+  check(findings, second.confirmed.mutation?.performed === true, `The second grant was not written: ${JSON.stringify(second.confirmed)}`);
+
+  const bypassed = await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--message', `broken, bypassed\n\n${BYPASS_MARKER}: incident 12`,
+  ], { cwd: enabled, env: gitEnvironment() }).then(
+    (result) => ({ failed: false, output: `${result.stdout}${result.stderr}` }),
+    (error) => ({ failed: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+  );
+
+  check(findings, bypassed.failed === false, `The granted commit was denied: ${bypassed.output}`);
+  check(findings, bypassed.output.includes('bypassed / allow'), `The hook did not report bypassed: ${bypassed.output}`);
+  check(findings, bypassed.output.includes(`bypass marker: ${BYPASS_MARKER}`), `The marker was not printed for the message: ${bypassed.output}`);
+  check(findings, bypassed.output.includes('configuration.broad-tests.test: failed'), 'The preserved failure was hidden from the maintainer.');
+
+  const head = (await git(enabled, ['log', '-1', '--format=%s'])).stdout.trim();
+
+  check(findings, head === 'broken, bypassed', `The bypassed commit was not created: HEAD is ${JSON.stringify(head)}.`);
+
+  const ledger = await store.readBypassLedger();
+  const log = await store.readLog();
+  const envelope = log.length > 0 ? await store.readEnvelope(log.at(-1).evidenceId) : null;
+  const bypassEvents = (await store.readEvents()).filter((event) => event.type === 'bypass');
+
+  check(findings, ledger.length === 1, `Expected one consumed grant in the ledger, found ${ledger.length}.`);
+  check(findings, ledger[0]?.bypassId === second.confirmed.mutation?.grantId, 'The ledger consumed a grant other than the one written.');
+  check(findings, envelope?.decision?.outcome === 'bypassed', `The persisted decision is ${envelope?.decision?.outcome}, not bypassed.`);
+  check(findings, envelope?.decision?.bypass?.applied === true, 'The persisted decision carries no applied bypass.');
+  check(
+    findings,
+    envelope?.decision?.checks?.find((entry) => entry.id === RUNNER_CHECK_ID)?.outcome === 'failed',
+    'SG-BYP-001: the bypassed decision rewrote the failed check.',
+  );
+  check(findings, envelope?.decision?.bypass?.marker === BYPASS_MARKER, 'The decision does not carry the configured marker.');
+  // Two grants written, one refused-by-mismatch commit (no event: the refusal
+  // is the decision's own record), one consumption: three `bypass` events,
+  // all of the existing type, all `succeeded`.
+  check(
+    findings,
+    bypassEvents.length === 3 && bypassEvents.every((event) => event.outcome === 'succeeded'),
+    `Expected three succeeded bypass Lifecycle events, found ${JSON.stringify(bypassEvents.map((event) => event.outcome))}.`,
+  );
+  check(findings, await store.bypassGrant().read() === null, 'The consumed grant was not spent.');
+
+  // 5. The next broken commit, with no grant, is denied as before.
+  await stageBroken(enabled, 'still broken\n');
+
+  const after = await commitAttempt(enabled, 'broken again');
+
+  check(findings, after.failed === true, 'A bypass carried forward to a later commit.');
+  check(findings, after.output.includes('failed / deny'), `The later denial is not a denial: ${after.output}`);
+  check(findings, !after.output.includes('bypass applied'), 'A later commit reported a bypass nobody granted.');
+
+  // 6. The disabled twin: byte-for-byte what it always was.
+  const disabled = await cloneWithPolicy('bypass-off', runnerConfiguration());
+
+  if (!(await activateClone(disabled, findings))) {
+    return { name: 'packaged-bypass', ok: false, findings };
+  }
+
+  await stageBroken(disabled);
+
+  const deniedOff = await commitAttempt(disabled, 'broken, bypass disabled');
+  const offLines = deniedOff.output.split('\n').filter((line) => line.startsWith('change-evaluation-gate:'));
+
+  check(findings, deniedOff.failed === true, 'A disabled-bypass clone allowed a broken commit.');
+  check(
+    findings,
+    JSON.stringify(offLines) === JSON.stringify([
+      'change-evaluation-gate: failed / deny',
+      `change-evaluation-gate:   ${RUNNER_CHECK_ID}: failed (grader-negative)`,
+      'change-evaluation-gate: this commit was not authorized. Fix the reported evidence and commit again.',
+      'change-evaluation-gate: local enforcement only; it can be removed or bypassed by whoever owns this machine.',
+    ]),
+    `FR-POL-008: the disabled clone did not print exactly what it always printed: ${JSON.stringify(offLines)}`,
+  );
+
+  const offStore = await openEvidenceStore({ repositoryRoot: disabled, identity: storeIdentity() });
+  const offLog = await offStore.readLog();
+  const offEnvelope = offLog.length > 0 ? await offStore.readEnvelope(offLog.at(-1).evidenceId) : null;
+
+  check(findings, offEnvelope?.decision?.bypass === null, 'A disabled clone recorded a bypass field it never resolved.');
+  check(findings, (await offStore.readBypassLedger()).length === 0, 'A disabled clone has a ledger.');
+  check(findings, !existsSync(path.join(offStore.root, 'bypass')), 'A disabled clone has a grant directory.');
+  check(findings, !existsSync(path.join(common, 'change-evaluation-gate', 'evidence', 'bypass', 'grant.json')), 'A spent grant survived on the enabled clone.');
+
+  const offGrant = await runPackagedCommand(disabled, ['bypass', '--reason', 'please', '--json']);
+  const offDocument = JSON.parse(offGrant.stdout || '{}');
+
+  check(findings, offGrant.exitCode === 1, `gate bypass on a disabled policy exited ${offGrant.exitCode}, not 1.`);
+  check(findings, offDocument.observation?.rejectionCode === 'bypass-disabled', `gate bypass did not refuse by the policy's own code: ${JSON.stringify(offDocument.observation)}`);
+  check(findings, offDocument.observation?.confirmationToken === null, 'gate bypass offered a token against a disabled policy.');
+
+  return { name: 'packaged-bypass', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1306,6 +1528,7 @@ const main = async () => {
       packagedPolicyTransition(),
       await configuredDeclaration(),
       await declaredEnvironmentFile(),
+      await packagedBypass(),
     ];
   } finally {
     for (const root of temporaryRoots) {

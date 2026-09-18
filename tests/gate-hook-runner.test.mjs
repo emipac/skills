@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  access, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -21,6 +23,8 @@ import {
   SELF_TEST_ENV,
   runHook,
 } from '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs';
+import { BYPASS_GRANT_VERSION } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
+import { captureSnapshot } from '../skills/change-evaluation-gate/scripts/lib/snapshot.mjs';
 
 const runFile = promisify(execFile);
 
@@ -293,7 +297,15 @@ const configureClone = async (root, overrides = {}) => {
       '  budget:',
       '    total_seconds: 600',
       '  bypass:',
-      '    enabled: false',
+      ...(overrides.bypass === undefined
+        ? ['    enabled: false']
+        : [
+          `    enabled: ${overrides.bypass.enabled}`,
+          `    marker: ${JSON.stringify(overrides.bypass.marker ?? null)}`,
+          ...(overrides.bypass.require_reference === undefined
+            ? []
+            : [`    require_reference: ${overrides.bypass.require_reference}`]),
+        ]),
       '  execution: {}',
       ...(overrides.inlineBytes === undefined
         ? ['  evidence: {}']
@@ -1728,4 +1740,299 @@ test('TB-044 SG-OWNER-001: Gate core proves prerequisites without naming a tool,
       `${relative} must learn no tool, flag, or stack (SG-OWNER-001).`,
     );
   }
+});
+
+/*
+ * TB-052 — the bypass switch means something.
+ *
+ * Until this slice `resolveBypass` refused without a grant and no production
+ * runner ever supplied one, so `bypass: { enabled: true }` changed nothing and
+ * said nothing. A grant now enters from outside — a confirmed `gate bypass`
+ * writes it under the clone-local store — and the authoritative runner reads
+ * it once, hands it and the durable ledger to `evaluate`, and spends it. These
+ * fixtures drive the runner with a grant written the way that command writes
+ * one; the command itself is proved in the operator-surface suite.
+ */
+
+const ENABLED_BYPASS = Object.freeze({ enabled: true, marker: 'Gate-Bypass' });
+
+/** The identity a commit of the current index would carry, read the way the hook reads it. */
+const stagedSnapshotId = async (root) => {
+  const executionRoot = await realpath(await temporaryRoot('gate-hook-runner-snapshot-'));
+
+  try {
+    const captured = await captureSnapshot({ repositoryRoot: root, kind: 'git-index', executionRoot });
+
+    assert.equal(captured.captured, true, captured.detail);
+
+    return captured.snapshot.id;
+  } finally {
+    await rm(executionRoot, { recursive: true, force: true });
+  }
+};
+
+/** A grant in the shape a confirmed `gate bypass` writes. */
+const writeGrant = async (root, { snapshotId, reason = 'hotfix under incident', reference = null, requestedAt = '2026-09-17T00:00:00.000Z' }) => {
+  const store = await readStore(root);
+
+  await store.bypassGrant().write({
+    grantVersion: BYPASS_GRANT_VERSION,
+    grantId: null,
+    snapshotId,
+    actor: null,
+    reason,
+    reference,
+    requestedAt,
+    marker: ENABLED_BYPASS.marker,
+  });
+
+  return store;
+};
+
+const latestEnvelope = async (store) => {
+  const log = await store.readLog();
+
+  return store.readEnvelope(log.at(-1).evidenceId);
+};
+
+/**
+ * THE FIRST RED TEST for TB-052: a clone whose policy enables bypass is
+ * observably different from one whose policy disables it. Before this slice
+ * the two denials were byte-identical and neither mentioned the switch.
+ */
+test('TB-052 FR-POL-008 / AC-CFG-001: an enabled bypass policy is told to a denied maintainer; a disabled one prints what it always printed', async (t) => {
+  const enabled = await throwawayRepository(t);
+  const disabled = await throwawayRepository(t);
+
+  await configureClone(enabled, { bypass: ENABLED_BYPASS });
+  await configureClone(disabled);
+  await publishReceipt(enabled);
+  await publishReceipt(disabled);
+  await stage(enabled, 'baseline\nBROKEN\n');
+  await stage(disabled, 'baseline\nBROKEN\n');
+
+  const enabledResult = await runHook({ cwd: enabled, environment: process.env });
+  const disabledResult = await runHook({ cwd: disabled, environment: process.env });
+
+  // Both deny: an enabled switch with no grant in front of it authorizes nothing.
+  assert.equal(enabledResult.reasonCode, 'denied');
+  assert.equal(disabledResult.reasonCode, 'denied');
+  assert.match(enabledResult.lines.join('\n'), /bypass available: .*gate bypass --reason/);
+  assert.doesNotMatch(disabledResult.lines.join('\n'), /bypass available|gate bypass/, 'a disabled policy says nothing new (FR-POL-008).');
+  // Byte for byte what a denied commit printed before this slice.
+  assert.deepEqual(disabledResult.lines, [
+    'change-evaluation-gate: failed / deny',
+    'change-evaluation-gate:   configuration.broad-tests.test: failed (grader-negative)',
+    'change-evaluation-gate: this commit was not authorized. Fix the reported evidence and commit again.',
+    'change-evaluation-gate: local enforcement only; it can be removed or bypassed by whoever owns this machine.',
+  ]);
+
+  // Neither evaluation saw a grant, so neither decision carries a bypass
+  // record, and no ledger, no grant, and no bypass event exists in either
+  // store. The disabled clone's evidence is what it was before this slice.
+  for (const root of [enabled, disabled]) {
+    const store = await readStore(root);
+    const envelope = await latestEnvelope(store);
+
+    assert.equal(envelope.decision.bypass, null, 'no grant was supplied, so no bypass was resolved.');
+    assert.equal(envelope.decision.outcome, 'failed');
+    assert.deepEqual(await store.readBypassLedger(), []);
+    assert.equal(await store.bypassGrant().read(), null);
+    assert.equal((await store.readEvents()).some((event) => event.type === 'bypass'), false);
+    await assert.rejects(access(path.join(store.root, 'bypass')), 'nothing on the evaluation path creates the grant directory.');
+  }
+});
+
+test('TB-052 FR-POL-006 / FR-POL-007 / SG-BYP-001: a grant bound to the staged snapshot bypasses one denied commit as bypassed, never passed, with every failure preserved', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: ENABLED_BYPASS });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const snapshotId = await stagedSnapshotId(root);
+  const store = await writeGrant(root, { snapshotId });
+
+  const result = await runHook({ cwd: root, environment: process.env });
+  const output = result.lines.join('\n');
+
+  assert.equal(result.exitCode, 0, `expected the bypassed commit to proceed, got: ${output}`);
+  assert.match(output, /bypassed \/ allow/);
+  assert.match(output, /configuration\.broad-tests\.test: failed/, 'the failure is still reported, not hidden.');
+  assert.match(output, /bypass applied: one-shot grant sha256:[0-9a-f]{64} consumed for snapshot /);
+  assert.match(output, /bypass marker: Gate-Bypass/, 'FR-POL-007: the configured marker is emitted where the maintainer reads it.');
+
+  const envelope = await latestEnvelope(store);
+  const { decision } = envelope;
+
+  assert.equal(decision.outcome, 'bypassed');
+  assert.equal(decision.authorization, 'allow');
+  assert.equal(decision.bypass.applied, true);
+  assert.equal(decision.bypass.snapshotId, snapshotId);
+  assert.equal(decision.bypass.marker, 'Gate-Bypass');
+  assert.equal(decision.bypass.oneShot, true);
+  assert.equal(decision.bypass.tamperEvident, false);
+  assert.deepEqual(decision.bypass.preservedFailures, ['configuration.broad-tests.test']);
+  assert.equal(
+    decision.checks.find((check) => check.id === 'configuration.broad-tests.test').outcome,
+    'failed',
+    'SG-BYP-001: a bypass never rewrites a check as passed.',
+  );
+
+  // Consumed into the durable ledger, recorded as a Lifecycle event, and the
+  // grant file spent — all through the paths that already existed.
+  const ledger = await store.readBypassLedger();
+
+  assert.equal(ledger.length, 1);
+  assert.equal(ledger[0].bypassId, decision.bypass.id);
+  assert.equal(ledger[0].snapshotId, snapshotId);
+  assert.deepEqual(ledger[0].preservedFailures, ['configuration.broad-tests.test']);
+
+  const events = (await store.readEvents()).filter((event) => event.type === 'bypass');
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].outcome, 'succeeded');
+  assert.equal(events[0].after, decision.bypass.id);
+  assert.equal(await store.bypassGrant().read(), null, 'the grant is spent by the commit attempt that read it.');
+});
+
+test('TB-052 FR-POL-006: a grant is one-shot; the same grant presented again is refused as consumed and the commit stays denied', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: ENABLED_BYPASS });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const snapshotId = await stagedSnapshotId(root);
+  const grant = { snapshotId, requestedAt: '2026-09-17T01:02:03.000Z' };
+
+  await writeGrant(root, grant);
+
+  const first = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(first.exitCode, 0, first.lines.join('\n'));
+
+  // The same snapshot is still staged (the hook commits nothing), and the
+  // identical grant is put back by hand — which is exactly what the ledger
+  // exists to refuse.
+  const store = await writeGrant(root, grant);
+  const second = await runHook({ cwd: root, environment: process.env });
+  const output = second.lines.join('\n');
+
+  assert.equal(second.reasonCode, 'denied', `a consumed grant must not authorize: ${output}`);
+  assert.match(output, /failed \/ deny/);
+  assert.match(output, /bypass refused \(bypass-already-consumed\)/);
+
+  const envelope = await latestEnvelope(store);
+
+  assert.equal(envelope.decision.outcome, 'failed');
+  assert.equal(envelope.decision.bypass.applied, false);
+  assert.equal(envelope.decision.bypass.rejectionCode, 'bypass-already-consumed');
+  assert.equal((await store.readBypassLedger()).length, 1, 'a refused grant is not consumed again.');
+  assert.equal(await store.bypassGrant().read(), null, 'a refused grant is still spent.');
+});
+
+test('TB-052 FR-POL-006: a grant names the exact snapshot; staging anything after the grant refuses it as snapshot-mismatch', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: ENABLED_BYPASS });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const grantedSnapshot = await stagedSnapshotId(root);
+
+  await writeGrant(root, { snapshotId: grantedSnapshot });
+  // One more staged byte: a different snapshot from the one the grant names.
+  await stage(root, 'baseline\nBROKEN\nand more\n');
+
+  const store = await readStore(root);
+  const result = await runHook({ cwd: root, environment: process.env });
+  const output = result.lines.join('\n');
+
+  assert.equal(result.reasonCode, 'denied', `a grant for another snapshot must not authorize: ${output}`);
+  assert.match(output, /bypass refused \(snapshot-mismatch\)/);
+
+  const envelope = await latestEnvelope(store);
+
+  assert.equal(envelope.decision.bypass.rejectionCode, 'snapshot-mismatch');
+  assert.equal(envelope.decision.bypass.snapshotId, grantedSnapshot);
+  assert.notEqual(envelope.decision.snapshot.id, grantedSnapshot);
+  assert.deepEqual(await store.readBypassLedger(), [], 'nothing was consumed.');
+  assert.equal(await store.bypassGrant().read(), null, 'the mismatched grant is spent, not left to refuse every later commit.');
+});
+
+test('TB-052 FR-POL-008 / SG-BYP-001: a grant against a disabled policy is refused, recorded, and the commit stays denied', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const store = await writeGrant(root, { snapshotId: await stagedSnapshotId(root) });
+  const result = await runHook({ cwd: root, environment: process.env });
+  const output = result.lines.join('\n');
+
+  assert.equal(result.reasonCode, 'denied');
+  assert.match(output, /bypass refused \(bypass-disabled\)/);
+  assert.doesNotMatch(output, /bypass available/);
+  assert.equal((await latestEnvelope(store)).decision.bypass.rejectionCode, 'bypass-disabled');
+  assert.deepEqual(await store.readBypassLedger(), []);
+});
+
+test('TB-052 SG-BYP-001: a grant does not touch a commit that passes on its own; nothing is consumed and the outcome is passed', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: ENABLED_BYPASS });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nrepaired\n');
+
+  const store = await writeGrant(root, { snapshotId: await stagedSnapshotId(root) });
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.lines.join('\n'), /passed \/ allow/);
+  assert.match(result.lines.join('\n'), /bypass refused \(nothing-to-bypass\)/);
+
+  const envelope = await latestEnvelope(store);
+
+  assert.equal(envelope.decision.outcome, 'passed', 'an honest pass is never misrepresented as an escape hatch.');
+  assert.equal(envelope.decision.bypass.rejectionCode, 'nothing-to-bypass');
+  assert.deepEqual(await store.readBypassLedger(), []);
+  assert.equal(await store.bypassGrant().read(), null);
+});
+
+test('TB-052 SG-BYP-001 / SG-CFG-001: only a grant of the published shape is a grant; a hand-written file of another shape supplies none', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: ENABLED_BYPASS });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const store = await readStore(root);
+  const snapshotId = await stagedSnapshotId(root);
+
+  // Every field `resolveBypass` reads, and no version: not a grant.
+  await store.bypassGrant().write({ snapshotId, actor: null, reason: 'unversioned', reference: null, requestedAt: '2026-09-17T00:00:00.000Z' });
+
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(result.reasonCode, 'denied');
+  assert.equal((await latestEnvelope(store)).decision.bypass, null, 'a file that is not a grant resolves no bypass at all.');
+  assert.deepEqual(await store.readBypassLedger(), []);
+  assert.equal(await store.bypassGrant().read(), null, 'the file is spent regardless, so it cannot sit in front of a later commit.');
+});
+
+test('TB-052 FR-POL-006: a policy-required reference is refused when the grant carries none', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root, { bypass: { ...ENABLED_BYPASS, require_reference: true } });
+  await publishReceipt(root);
+  await stage(root, 'baseline\nBROKEN\n');
+
+  const store = await writeGrant(root, { snapshotId: await stagedSnapshotId(root), reference: null });
+  const result = await runHook({ cwd: root, environment: process.env });
+
+  assert.equal(result.reasonCode, 'denied');
+  assert.match(result.lines.join('\n'), /bypass refused \(reference-missing\)/);
+  assert.equal((await latestEnvelope(store)).decision.bypass.rejectionCode, 'reference-missing');
 });
