@@ -31,6 +31,8 @@
  *   node .../gate.mjs deactivate [--confirm <token>] [--json]
  *   node .../gate.mjs uninstall  --asset <path> [--confirm <token>] [--json]
  *   node .../gate.mjs cleanup    [--confirm <token>] [--json]
+ *   node .../gate.mjs bypass     --reason <text> [--reference <ref>] [--actor <name>]
+ *                                [--confirm <token>] [--json]
  *
  * Exit status is `0` when the command ran and found nothing wrong or performed
  * what was confirmed, `1` when it ran and the clone needs attention — including

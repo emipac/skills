@@ -49,6 +49,11 @@ and evaluation consumes them through the
 [evaluation process contract](references/evaluation-process-contract.md).
 The five subcontracts, their limits, and the supported bypass are defined by the
 [Gate policy contract](references/gate-policy-contract.md).
+The bypass switch is wired: a policy with `bypass.enabled: true` and a
+`marker` makes `gate bypass` grantable, a denied commit on such a clone names
+that command, and a policy with bypass disabled behaves exactly as it always
+has. A grant comes from that command and from nowhere else; never write one by
+hand and never import the policy library to construct one.
 What a decision may claim, which Grader surfaces a change touched, and when
 served HTTP or browser evidence is bound to the evaluated snapshot are defined
 by the
@@ -131,7 +136,7 @@ this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
 beside the `SKILL.md` you are reading rather than assuming a path: an installed
 skill sits wherever the client placed it, so the same literal path does not hold
 across projects. The command is `activate`, `status`, `locks`, `prune`,
-`repair`, `update`, `deactivate`, `uninstall`, or `cleanup`. Add `--json` for
+`repair`, `update`, `deactivate`, `uninstall`, `cleanup`, or `bypass`. Add `--json` for
 the same document a person is shown. An activated clone also carries `git gate`,
 a shortcut this activation wrote into that clone's own `.git/config` and
 nowhere else.
@@ -158,6 +163,19 @@ A configured clone is a prerequisite: activation never configures one on the way
 past. `--actor <name>` is carried into the receipt as **self-declared** and
 never as proven — this command cannot see who ran it, and its receipt does not
 pretend otherwise.
+
+`gate bypass --reason <text> [--reference <ref>] [--actor <name>]` is the
+same two invocations, and the only way a bypass grant exists. The preview
+identifies the exact staged snapshot and refuses, by the policy's own
+rejection code, a bypass the policy would refuse at commit time — disabled,
+no marker, no reason, no policy-required reference; `gate bypass ... --confirm
+<token>` writes one one-shot grant bound to that snapshot. The next commit
+attempt spends it: staged exactly as previewed and otherwise denied, the commit
+proceeds as `bypassed`, never `passed`, with every failed check preserved and
+the configured marker printed for the maintainer to put in the message; staged
+differently, the grant is refused as `snapshot-mismatch` and spent. Only run it
+when the maintainer explicitly asks to bypass a denied commit, show them the
+preview, and never confirm on their behalf.
 
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When
