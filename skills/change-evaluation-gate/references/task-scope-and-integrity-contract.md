@@ -11,6 +11,15 @@ contract is readable inside the materialized Evaluation snapshot and declares
 stable acceptance identities under its acceptance-criteria section. The contract
 is read from the snapshot, never from the mutable live worktree.
 
+**Built and not switched on.** Both production runners pass
+`contractRef: null`, so every decision the Gate produces today is
+`not-declared` and `regression-only`: `acceptanceCriteria`,
+`provedAcceptanceCriteria`, and `acceptanceGaps` are always empty, the only
+limitation is the fixed regression-only one, and the acceptance-coverage
+machinery below computes nothing on any run. Switching it on means a runner
+passes the repository's delivery-contract reference. The resolver and its tests
+stay as built rather than being removed (`TB-051`).
+
 | `task.contractStatus` | Meaning |
 | --- | --- |
 | `valid` | The reference resolved and declares at least one stable acceptance ID |
@@ -95,6 +104,13 @@ nothing.
 Failure to prove the binding is `unverified` and the check never executes:
 a result produced against an unknown source is not evidence. Absence of evidence
 is never success (`SG-EVAL-002`, `NFR-SEC-001`).
+
+**Built and not switched on.** No production runner binds a runtime resolver,
+so the proof above is never attempted: a check declaring `smoke` or `browser`
+evidence is `unverified` on every run with `prerequisite-missing`, a reason no
+reader can act on because no runtime was ever asked. Switching it on means a
+runner binds that resolver. The binding module and the smoke below stay as
+built rather than being removed (`TB-051`).
 
 ## Capability
 

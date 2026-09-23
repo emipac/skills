@@ -1488,6 +1488,17 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         <span class="pill p-warn">bypassed</span>, never
         <span class="pill p-pass">passed</span>, and the failures it stepped over stay recorded.
       </p>
+      <p>
+        It is granted by a command, never by a flag on <code>git commit</code>. When a commit is
+        denied on a clone whose policy enables bypass, the hook says so and names the command:
+        <code>gate bypass --reason "why this one commit may proceed"</code> previews the exact
+        staged snapshot the grant would bind to and prints a token; run it again with
+        <code>--confirm &lt;token&gt;</code> to write the grant, then commit. The grant is spent by
+        that next commit whether it applied or not; stage anything else first and it is refused as
+        <code>snapshot-mismatch</code>. The hook prints the configured marker for you to put in the
+        commit message — it runs before a message exists and cannot write it for you. With bypass
+        disabled, <code>gate bypass</code> refuses and nothing else changes.
+      </p>
 
       <div class="note">
         <span class="note-tag">Evidence limits</span>
@@ -1527,7 +1538,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
             <tr><td><strong>uninstall</strong></td><td>Removes project-installed assets. Requires deactivation first.</td></tr>
             <tr><td><strong>cleanup</strong></td><td>Removes only Gate keys from <code>.agent-framework.yaml</code>. Never deletes the file.</td></tr>
             <tr><td><strong>prune</strong></td><td>Removes evidence output blobs you selected by evaluation, age, or reclaimed size. Envelopes, decisions, events, and a tombstone for every removed blob are always kept.</td></tr>
-            <tr><td><strong>locks</strong></td><td>Inspects the coordination lock. Reports a free lock, a live holder, or a stale one; recovers a stale holder only against its own token, and never takes a live one.</td></tr>
+            <tr><td><strong>locks</strong></td><td>Inspects the coordination lock. Reports a free lock, a live holder, or a stale one; recovers a stale holder only against its own token, and never takes a live one. Coordination is built and not switched on: no evaluation acquires this lock today, so it reports free unless something else wrote it.</td></tr>
           </tbody>
         </table>
       </div>

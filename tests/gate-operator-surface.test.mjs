@@ -762,7 +762,7 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
   assert.equal(CONFIRMED_COMMANDS.activate, undefined);
   assert.deepEqual(
     [...COMMANDS],
-    ['activate', 'status', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup'],
+    ['activate', 'status', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup', 'bypass'],
   );
 
   // Exactly one command has no confirmed form, and it is the one that must go
@@ -1988,4 +1988,190 @@ test('TB-053: a confirmation that omits a selector the preview carried is refuse
 
   assert.equal(pasted.document.mutation.performed, true);
   assert.equal(await readFile(hookPath, 'utf8'), registered);
+});
+
+/*
+ * TB-052 — `gate bypass`, where a bypass grant comes from.
+ *
+ * The runner side — a grant read once, applied or refused, spent — is proved
+ * in the hook-runner suite. This is the command that writes one: two
+ * invocations, a token bound to the staged snapshot, refused by the policy's
+ * own rule, and recorded either way through the existing Lifecycle path.
+ */
+
+const BYPASS_MARKER = 'Gate-Bypass';
+
+/** `SHARED_CONFIGURATION` with the bypass switch on, as a maintainer would write it. */
+const bypassEnabledConfiguration = ({ requireReference = false } = {}) => SHARED_CONFIGURATION
+  .replace(
+    '  bypass:\n    enabled: false\n    marker: null\n',
+    `  bypass:\n    enabled: true\n    marker: ${BYPASS_MARKER}\n${requireReference ? '    require_reference: true\n' : ''}`,
+  );
+
+const bypassPolicy = ({ requireReference = false } = {}) => ({
+  ...gatePolicy(),
+  bypass: {
+    enabled: true,
+    marker: BYPASS_MARKER,
+    ...(requireReference ? { require_reference: true } : {}),
+  },
+});
+
+/** An activated clone whose policy enables bypass, with one staged path a commit would grade. */
+const bypassClone = async (t, options = {}) => {
+  const fixture = await activatedClone(t, {
+    configuration: { schemaVersion: 4, policy: bypassPolicy(options) },
+  });
+
+  await writeFile(path.join(fixture.root, '.agent-framework.yaml'), bypassEnabledConfiguration(options), 'utf8');
+  await writeFile(path.join(fixture.root, 'source.txt'), 'BROKEN\n', 'utf8');
+  await runGit(fixture.root, ['add', '--all']);
+
+  return fixture;
+};
+
+test('TB-052: a bypass preview identifies the staged snapshot, offers a token, and writes nothing', async (t) => {
+  const { root, store } = await bypassClone(t);
+  const before = await wholeCloneSnapshot(root);
+  const eventsBefore = (await store.readEvents()).length;
+
+  const preview = await observe(root, ['bypass', '--reason', 'hotfix under incident 12']);
+
+  assert.equal(preview.exitCode, EXIT_OBSERVED, preview.stderr);
+  assert.equal(preview.document.command, 'bypass');
+  assert.equal(preview.document.observation.grantable, true);
+  assert.equal(preview.document.observation.rejectionCode, null);
+  assert.deepEqual(preview.document.observation.policy, { enabled: true, requireReference: false, marker: BYPASS_MARKER });
+  assert.match(preview.document.observation.snapshotId, /^sha256:[0-9a-f]{64}$/);
+  assert.ok(preview.document.observation.changedPaths.includes('source.txt'));
+  assert.equal(preview.document.observation.pending, null);
+  assert.equal(preview.document.mutation, null);
+  assert.equal(
+    nextLineOf(preview),
+    `gate bypass --reason 'hotfix under incident 12' --confirm ${tokenOf(preview)}`,
+  );
+
+  // Nothing written, nothing recorded — a preview is observation.
+  assert.equal(await wholeCloneSnapshot(root), before);
+  assert.equal((await store.readEvents()).length, eventsBefore);
+});
+
+test('TB-052 FR-POL-006: a confirmed bypass writes one grant bound to the previewed snapshot and records it', async (t) => {
+  const { root, store } = await bypassClone(t);
+  const preview = await observe(root, ['bypass', '--reason', 'hotfix under incident 12', '--actor', 'maintainer']);
+  const pasted = await pasteIntoShell(t, root, nextLineOf(preview));
+
+  assert.equal(pasted.code, EXIT_OBSERVED);
+  assert.equal(pasted.document.mutation.performed, true);
+  assert.match(pasted.document.mutation.grantId, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(pasted.document.mutation.snapshotId, preview.document.observation.snapshotId);
+  assert.equal(pasted.document.mutation.marker, BYPASS_MARKER);
+
+  const grant = await store.bypassGrant().read();
+
+  assert.equal(grant.grantVersion, 'change-evaluation-gate/bypass-grant/v1');
+  assert.equal(grant.grantId, pasted.document.mutation.grantId);
+  assert.equal(grant.snapshotId, preview.document.observation.snapshotId);
+  assert.equal(grant.reason, 'hotfix under incident 12');
+  assert.equal(grant.reference, null);
+  assert.equal(grant.actor, 'maintainer');
+  assert.equal(grant.marker, BYPASS_MARKER);
+  assert.match(grant.requestedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const events = (await store.readEvents()).filter((event) => event.type === 'bypass');
+
+  assert.equal(events.length, 1, 'NFR-AUD-001: the grant is one Lifecycle event of the existing bypass type.');
+  assert.equal(events[0].outcome, 'succeeded');
+  assert.equal(events[0].before, grant.snapshotId);
+  assert.equal(events[0].after, grant.grantId);
+  assert.deepEqual(validateLifecycleEvent(events[0]), []);
+
+  // A later preview reports the pending grant; the ledger is untouched until
+  // a commit consumes it.
+  const again = await observe(root, ['bypass', '--reason', 'another']);
+
+  assert.equal(again.document.observation.pending.snapshotId, grant.snapshotId);
+  assert.deepEqual(await store.readBypassLedger(), []);
+});
+
+test('TB-052 FR-POL-006: staging anything between the preview and the confirmation refuses the confirmation, and the refusal is recorded', async (t) => {
+  const { root, store } = await bypassClone(t);
+  const preview = await observe(root, ['bypass', '--reason', 'hotfix']);
+  const eventsBefore = (await store.readEvents()).length;
+
+  await writeFile(path.join(root, 'source.txt'), 'BROKEN\nand more\n', 'utf8');
+  await runGit(root, ['add', '--all']);
+
+  const refused = await observe(root, ['bypass', '--reason', 'hotfix', '--confirm', tokenOf(preview)]);
+
+  assert.equal(refused.exitCode, EXIT_UNHEALTHY);
+  assert.equal(refused.document.mutation.performed, false);
+  assert.equal(refused.document.mutation.reasonCode, 'preview-mismatch');
+  assert.notEqual(refused.document.observation.snapshotId, preview.document.observation.snapshotId);
+  assert.equal(nextLineOf(refused), 'gate bypass --reason hotfix', 'no token beside a refusal.');
+  assert.equal(await store.bypassGrant().read(), null, 'nothing was granted.');
+
+  const events = (await store.readEvents()).slice(eventsBefore);
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'bypass');
+  assert.equal(events[0].outcome, 'refused');
+});
+
+test('TB-052 FR-POL-008 / SG-BYP-001: the policy\'s own rule refuses a grant it would refuse at commit time, and a confirmation cannot change that', async (t) => {
+  // Disabled: the switch is off, and nothing can be granted.
+  const disabled = await activatedClone(t);
+
+  await writeFile(path.join(disabled.root, 'source.txt'), 'BROKEN\n', 'utf8');
+  await runGit(disabled.root, ['add', '--all']);
+
+  const off = await observe(disabled.root, ['bypass', '--reason', 'please']);
+
+  assert.equal(off.exitCode, EXIT_UNHEALTHY);
+  assert.equal(off.document.observation.grantable, false);
+  assert.equal(off.document.observation.rejectionCode, 'bypass-disabled');
+  assert.equal(off.document.observation.confirmationToken, null);
+  assert.match(off.stdout, /next: this clone's Gate policy disables bypass/);
+
+  const forced = await observe(disabled.root, ['bypass', '--reason', 'please', '--confirm', `sha256:${'e'.repeat(64)}`]);
+
+  assert.equal(forced.exitCode, EXIT_UNHEALTHY);
+  assert.equal(forced.document.mutation.performed, false);
+  assert.equal(forced.document.mutation.reasonCode, 'bypass-disabled');
+  assert.equal(await disabled.store.bypassGrant().read(), null);
+  assert.equal((await disabled.store.readEvents()).filter((event) => event.type === 'bypass').length, 1, 'the refused confirmation is recorded.');
+
+  // Enabled, but the grant is incomplete: no reason, then no required reference.
+  const strict = await bypassClone(t, { requireReference: true });
+  const noReason = await observe(strict.root, ['bypass']);
+
+  assert.equal(noReason.document.observation.rejectionCode, 'reason-missing');
+  assert.match(noReason.stdout, /next: name the reason with --reason/);
+
+  const noReference = await observe(strict.root, ['bypass', '--reason', 'hotfix']);
+
+  assert.equal(noReference.document.observation.rejectionCode, 'reference-missing');
+  assert.match(noReference.stdout, /next: this clone's Gate policy requires a reference/);
+
+  const complete = await observe(strict.root, ['bypass', '--reason', 'hotfix', '--reference', 'INC-12']);
+
+  assert.equal(complete.document.observation.grantable, true);
+  assert.equal(
+    nextLineOf(complete),
+    `gate bypass --reason hotfix --reference INC-12 --confirm ${tokenOf(complete)}`,
+  );
+});
+
+test('TB-052: a bypass is granted only against an activated clone with a Gate policy', async (t) => {
+  const configured = await configuredClone(t);
+  const unactivated = await observe(configured, ['bypass', '--reason', 'hotfix']);
+
+  assert.equal(unactivated.exitCode, EXIT_UNRUNNABLE);
+  assert.equal(unactivated.document.failure.reasonCode, 'activation-receipt-missing');
+
+  const installed = await installedClone(t);
+  const unconfigured = await observe(installed, ['bypass', '--reason', 'hotfix']);
+
+  assert.equal(unconfigured.exitCode, EXIT_UNRUNNABLE);
+  assert.equal(unconfigured.document.failure.reasonCode, 'gate-policy-missing');
 });

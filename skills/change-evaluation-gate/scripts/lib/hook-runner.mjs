@@ -55,7 +55,7 @@ import {
   resolveGitCommonDirectory,
   STORE_DIRECTORY,
 } from './evidence-store.mjs';
-import { declaredEnvironmentFiles, validateGatePolicy } from './policy.mjs';
+import { bypassGrantFrom, declaredEnvironmentFiles, validateGatePolicy } from './policy.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { createRedactor } from './redaction.mjs';
 import { resolveRuntimeInputs } from './runtime-inputs.mjs';
@@ -92,6 +92,9 @@ const ACTIVATION_RECEIPT_PATH = path.join(STORE_DIRECTORY, 'activation', 'receip
 export const EXECUTION_ROOT_PREFIXES = Object.freeze([
   'gate-hook-runner-exec-',
   'gate-preflight-exec-',
+  // `gate bypass` materializes the staged snapshot to learn the identity a
+  // grant binds to, through the same capture and the same lifecycle (`TB-052`).
+  'gate-bypass-exec-',
 ]);
 
 /**
@@ -1004,6 +1007,37 @@ export const contractFindings = (decision) => {
 };
 
 /**
+ * What became of the bypass grant this commit attempt read, if it read one.
+ *
+ * Nothing is said when no grant was supplied: a clone with bypass disabled, or
+ * one that never ran `gate bypass`, prints exactly what it always printed. An
+ * applied bypass names the commit-visible marker the policy configured
+ * (`FR-POL-007`). This runner answers `git commit` by exit status alone and
+ * has no channel into the commit message — `pre-commit` runs before a message
+ * exists — so the marker is recorded in the decision, the ledger, and the
+ * Lifecycle event, and printed here for the maintainer to carry into the
+ * message; the contract states that limit rather than pretending the hook
+ * wrote it. A refused grant is named by its rejection code so the maintainer
+ * learns why the bypass they granted did not apply (`SG-BYP-001`).
+ */
+const bypassLines = (bypass) => {
+  if (bypass === null) {
+    return [];
+  }
+
+  if (bypass.applied === true) {
+    const preserved = `${(bypass.preservedFailures ?? []).length} failed and ${(bypass.preservedUnverified ?? []).length} unverified check(s) preserved as graded`;
+
+    return [
+      say(`bypass applied: one-shot grant ${bypass.id} consumed for snapshot ${bypass.snapshotId}; ${preserved}.`),
+      say(`bypass marker: ${bypass.marker} — include it in this commit's message; this hook cannot write the message itself.`),
+    ];
+  }
+
+  return [say(`bypass refused (${bypass.rejectionCode}): the pending grant was not applied and has been spent; run \`gate bypass\` again to grant another.`)];
+};
+
+/**
  * Say what the decision was, in a form a maintainer reading `git commit` output
  * can act on, and translate it into an exit status.
  *
@@ -1011,7 +1045,7 @@ export const contractFindings = (decision) => {
  * is not an allow: absence of a denial has never been evidence of one
  * (`NFR-REL-003`).
  */
-const report = (decision) => {
+const report = (decision, { bypassEnabled = false } = {}) => {
   const findings = contractFindings(decision);
 
   if (findings.length > 0) {
@@ -1049,6 +1083,8 @@ const report = (decision) => {
     lines.push(say(`  ${diagnostic?.reasonCode}: ${diagnostic?.detail}`));
   }
 
+  lines.push(...bypassLines(decision.bypass ?? null));
+
   if (authorization === 'allow') {
     // Evidence is bound on every authoritative evaluation now, so a decision
     // that reached `allow` with nothing recorded means the store itself failed
@@ -1081,6 +1117,16 @@ const report = (decision) => {
   }
 
   lines.push(say('this commit was not authorized. Fix the reported evidence and commit again.'));
+
+  // A policy that enables bypass is told so at the one moment it matters: a
+  // denial with no grant in front of it. Before `TB-052` this denial read the
+  // same whether the switch was on or off, which is the silence that ticket
+  // closes. A disabled policy prints exactly what it always printed
+  // (`FR-POL-008`).
+  if (bypassEnabled && (decision.bypass ?? null) === null) {
+    lines.push(say('bypass available: this clone\'s Gate policy enables a one-shot bypass; grant one with `gate bypass --reason <text>` and commit again, or fix the evidence.'));
+  }
+
   // Local enforcement is a cooperative process on this machine and claims
   // nothing more; it is not tamper-proof (SG-TRUST-001).
   lines.push(say('local enforcement only; it can be removed or bypassed by whoever owns this machine.'));
@@ -1156,6 +1202,16 @@ export const runHook = async ({
   // the evidence log entry this run appends, and nowhere else (`TB-058`).
   const housekeeping = await sweepOrphanedExecutionRoots();
 
+  // The pending one-shot bypass grant, if a confirmed `gate bypass` wrote one.
+  // Read HERE, before any check process starts, so nothing a check does during
+  // this evaluation can put a grant in front of it; and read from outside the
+  // evaluation path, so nothing inside it can construct one. A clone that
+  // holds no grant hands `null` through, and `resolveBypass` returns `null` for
+  // it before consulting policy or ledger — the decision is what it always was
+  // (`FR-POL-006`, `FR-POL-008`, `SG-BYP-001`, `SG-CFG-001`, `TB-052`).
+  const pendingGrant = await store.store.bypassGrant().read().catch(() => null);
+  const grant = bypassGrantFrom(pendingGrant);
+
   const executionRoot = await createExecutionRoot('gate-hook-runner-exec-');
   // What the pinned programs need in order to start at all (TB-028), computed
   // once: the executor runs the checks with it, and the prerequisite resolver
@@ -1221,6 +1277,14 @@ export const runHook = async ({
       // no re-consent and no signal (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
       controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
       housekeeping,
+      // The grant the operator wrote, and the clone's durable one-shot ledger
+      // it is resolved against. `resolveBypass` refuses it on its own terms —
+      // disabled policy, missing marker, missing reason or reference, a
+      // snapshot other than the one being committed, an identity the ledger
+      // already holds, a decision with nothing to bypass — and consumes it
+      // into the ledger only when it applies (`FR-POL-006`, `FR-POL-007`).
+      bypass: grant,
+      bypassLedger: grant === null ? null : store.store.bypassLedger(),
     });
   } catch (error) {
     // A runner that crashed produced no decision. It denies, and it says so,
@@ -1229,7 +1293,19 @@ export const runHook = async ({
     return denied('runner-failed', `the evaluation failed internally (${error.message}); nothing is authorized.`);
   } finally {
     await releaseExecutionRoot(executionRoot);
+
+    // A grant is spent by the commit attempt that reads it, applied or not.
+    // Applied, its identity is in the ledger and a second reading would only
+    // be refused as consumed; refused, it named a snapshot, reason, or policy
+    // this commit did not satisfy, and leaving it would have every later
+    // commit re-report the same refusal. Either way the maintainer is told,
+    // and a fresh `gate bypass` is the only way to grant another (one-shot,
+    // `FR-POL-006`). Removed even when the evaluation crashed: a grant that
+    // outlived a crash would be spent by a commit nobody was watching.
+    if (pendingGrant !== null) {
+      await store.store.bypassGrant().remove().catch(() => {});
+    }
   }
 
-  return report(decision);
+  return report(decision, { bypassEnabled: configuration.policy?.bypass?.enabled === true });
 };

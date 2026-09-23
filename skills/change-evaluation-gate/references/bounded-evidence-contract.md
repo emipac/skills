@@ -26,6 +26,7 @@ claim: a machine owner can always edit these files (`SG-TRUST-001`).
 | `log.ndjson` | Append-only index of every appended envelope |
 | `events.ndjson` | Append-only immutable Lifecycle events |
 | `bypass-ledger.ndjson` | Durable one-shot bypass consumption |
+| `bypass/grant.json` | The pending one-shot bypass grant a confirmed `gate bypass` wrote; at most one, spent by the next commit attempt |
 | `prunings.ndjson` | Every pruning attempt, confirmed or refused |
 | `tombstones.ndjson` | One tombstone per removed referenced blob |
 | `staging/` | Write-then-rename staging for atomic writes |
@@ -202,6 +203,17 @@ A bypass is one-shot only if its consumption outlives the process that applied
 it, so the ledger is durable here rather than in per-session memory. Consumption
 appends to `bypass-ledger.ndjson` and records a `bypass` Lifecycle event. Policy
 resolves a grant synchronously, so ledger reads and appends are synchronous.
+
+The grant the ledger consumes is `bypass/grant.json`, current state rather than
+history like the Activation receipt: written by one atomic rename from a
+confirmed `gate bypass`, read once by the authoritative runner before any check
+starts, and removed by that runner whether the grant was applied or refused
+(`TB-052`). The store moves the bytes; the `bypass` Lifecycle event for the
+grant is appended by the command that wrote it, and the one for its
+consumption by the ledger, so each governed action is exactly one event. The
+ledger is reached by the authoritative runner only: preflight grades the
+working tree, names a different snapshot, authorizes nothing, and is never
+handed a grant.
 
 ## Decision binding
 

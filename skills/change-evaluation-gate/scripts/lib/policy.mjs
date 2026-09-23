@@ -449,6 +449,40 @@ const digest = contentIdentity;
 
 const isFilled = (value) => typeof value === 'string' && value.trim().length > 0;
 
+/** The shape of a grant a confirmed `gate bypass` writes and the hook runner reads. */
+export const BYPASS_GRANT_VERSION = 'change-evaluation-gate/bypass-grant/v1';
+
+/**
+ * The one grant shape `resolveBypass` reads, taken from a stored record.
+ *
+ * A grant enters evaluation from outside — an operator wrote it, in a separate
+ * process, before the commit — and this is the whole of what evaluation reads
+ * from it: the five fields the grant identity is computed over, in the fixed
+ * key order that identity depends on (`TB-050`). A record of another version,
+ * or one that is not an object, yields no grant at all rather than a partial
+ * one, so a malformed file can never be spent as an authorization
+ * (`FR-POL-006`, `SG-BYP-001`).
+ *
+ * @param {unknown} record the stored grant, or `null`
+ * @returns {{ snapshotId: string|null, actor: string|null, reason: string|null,
+ *   reference: string|null, requestedAt: string|null }|null}
+ */
+export const bypassGrantFrom = (record) => {
+  if (!isPlainObject(record) || record.grantVersion !== BYPASS_GRANT_VERSION) {
+    return null;
+  }
+
+  const field = (value) => (typeof value === 'string' ? value : null);
+
+  return {
+    snapshotId: field(record.snapshotId),
+    actor: field(record.actor),
+    reason: field(record.reason),
+    reference: field(record.reference),
+    requestedAt: field(record.requestedAt),
+  };
+};
+
 /**
  * Resolve one explicitly requested bypass against repository policy and the
  * completed decision.

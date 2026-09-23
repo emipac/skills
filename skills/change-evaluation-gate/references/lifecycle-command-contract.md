@@ -42,6 +42,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | `gate cleanup` | `previewConfigurationCleanup(...)`, `confirmConfigurationCleanup(...)` | previewed Gate keys only |
 | `gate prune` | `previewEvidencePrune(...)`, `confirmEvidencePrune(...)` | blobs only, confirmed |
 | `gate locks` | `inspectCoordination(...)` | nothing |
+| `gate bypass` | `captureSnapshot(...)`, `resolveBypass(...)`, `store.bypassGrant().write(...)` | one grant file, confirmed |
 
 `gate prune` and `gate locks` are the operator surfaces TB-008 and TB-009
 deliberately deferred to this slice. They add no removal or recovery logic of
@@ -73,6 +74,7 @@ gate update     [--confirm <token>] [--json]
 gate deactivate [--confirm <token>] [--json]
 gate uninstall  --asset <path> ... [--confirm <token>] [--json]
 gate cleanup    [--confirm <token>] [--json]
+gate bypass     --reason <text> [--reference <ref>] [--actor <name>] [--confirm <token>] [--json]
 ```
 
 **Two invocations, never one.** Every command previews by default and writes
@@ -325,6 +327,23 @@ and anchors that have nothing to do with the Gate, which is a silent change to
 shared state. The confirmation token binds both the located line ranges and the
 identity of the file that was read, so a file edited since the preview removes
 nothing (`configuration-changed`).
+
+**`gate bypass`** (`TB-052`) grants one one-shot bypass of the staged
+snapshot, the only way a grant reaches the authoritative runner. The preview
+materializes the index through the runners' own `captureSnapshot`, reports the
+snapshot identity and staged paths, and applies the policy's own
+`resolveBypass` rule to the grant it would write, so a disabled policy, an
+unconfigured marker, a missing reason, or a missing policy-required reference
+is refused here by the same code and the same rejection code the hook would
+use, and no token is offered. The token binds the snapshot identity, the
+reason, the reference, the actor, the marker, and the receipt's configuration
+identity: staging anything after the preview refuses the confirmation. The
+confirmation writes `bypass/grant.json` under the Evidence store and appends
+one `bypass` Lifecycle event; a refused confirmation appends a `bypass` event
+with outcome `refused`. What the grant then does belongs to the
+[Gate policy contract](gate-policy-contract.md#where-a-grant-comes-from): the
+next commit attempt spends it, applied or refused, and a bypassed commit is
+recorded as `bypassed`, never `passed`, with every failed check preserved.
 
 ## Recovery
 

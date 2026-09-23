@@ -247,6 +247,7 @@ export const openEvidenceStore = async ({
     prunings: path.join(root, 'prunings.ndjson'),
     activation: path.join(root, 'activation'),
     activationReceipt: path.join(root, 'activation', 'receipt.json'),
+    bypassGrant: path.join(root, 'bypass', 'grant.json'),
   };
 
   for (const directory of [paths.root, paths.envelopes, paths.blobs, paths.staging]) {
@@ -364,6 +365,46 @@ export const openEvidenceStore = async ({
   });
 
   const readBypassLedger = () => readLines(paths.bypassLedger);
+
+  /**
+   * The pending one-shot bypass grant, if an operator has written one.
+   *
+   * Like the receipt, this is current state rather than history: there is at
+   * most one pending grant per clone, it is published by one atomic rename,
+   * and it is withdrawn by one removal. The grant is the ONLY way a bypass
+   * enters evaluation. It is written by a confirmed `gate bypass` — an
+   * explicit operator act, in a separate process, before the commit — and it
+   * is read once by the authoritative runner, which removes it whether the
+   * grant was applied or refused. Nothing on the evaluation path writes here:
+   * a bypass the Gate could construct for itself would not be a bypass
+   * (`FR-POL-006`, `SG-BYP-001`, `SG-CFG-001`).
+   *
+   * Bytes only, as with the receipt: the Lifecycle event that makes the write
+   * or the consumption auditable is appended by the caller that knows which
+   * governed action it was (`FR-EVID-005`, `NFR-AUD-001`).
+   */
+  const bypassGrant = () => ({
+    path: paths.bypassGrant,
+    read: async () => {
+      const contents = await readFile(paths.bypassGrant, 'utf8').catch((error) => {
+        if (error.code === 'ENOENT') {
+          return null;
+        }
+
+        throw error;
+      });
+
+      return contents === null ? null : JSON.parse(contents);
+    },
+    write: async (grant) => {
+      await writeAtomic(paths.bypassGrant, `${JSON.stringify(grant, null, 2)}\n`);
+
+      return grant;
+    },
+    remove: async () => {
+      await rm(paths.bypassGrant, { force: true });
+    },
+  });
 
   /**
    * The durable home of the one-shot bypass ledger.
@@ -951,6 +992,7 @@ export const openEvidenceStore = async ({
     activationReceipt,
     appendEvidence,
     appendLifecycleEvent,
+    bypassGrant,
     bypassLedger,
     readBypassLedger,
     listBlobs,
