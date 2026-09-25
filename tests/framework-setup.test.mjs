@@ -155,7 +155,7 @@ test('discovers Laravel, frontend, and existing project guidance', async (contex
     ],
     commands: {
       format: {
-        backend: ['vendor/bin/pint --dirty --format agent'],
+        backend: ['vendor/bin/pint --test --format agent'],
         frontend: [],
         both: [],
       },

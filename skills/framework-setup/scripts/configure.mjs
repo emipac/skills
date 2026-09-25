@@ -1275,11 +1275,18 @@ export const discoverVerification = async (
   const commands = emptyScopedCommands();
   const capabilities = new Set();
   const excludedScriptNames = new Set(excludedScripts);
+  // Every discovered command is a GRADER: it reports, it never rewrites, and it
+  // must reach the same verdict outside a Git worktree as inside one. Pint's
+  // `--dirty` breaks both rules — it fixes files in place, and it selects them
+  // from uncommitted Git state, so it aborts outright in the materialized
+  // snapshot a Change Evaluation Gate check runs against. `--test` reports the
+  // same style errors and changes nothing. Rewriting belongs to the explicit
+  // fix operation, which invokes Pint without `--test`.
   const detectedFiles = [
     [
       'vendor/bin/pint',
       'format',
-      'vendor/bin/pint --dirty --format agent',
+      'vendor/bin/pint --test --format agent',
       'laravel-format',
     ],
     [

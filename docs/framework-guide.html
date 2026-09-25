@@ -748,7 +748,7 @@ verification:
   commands:
     format:
       backend:
-        - {"runner":"composer-bin","args":["pint","--dirty","--format","agent"],
+        - {"runner":"composer-bin","args":["pint","--test","--format","agent"],
            "working_directory":".","timeout_seconds":60,"allowed_environment":[],
            "evidence_category":"format","source_scope":"backend"}
       frontend: []
