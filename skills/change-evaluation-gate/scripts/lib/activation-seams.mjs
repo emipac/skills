@@ -610,6 +610,9 @@ export const COMMAND_ALIAS_NAME = 'gate';
 /** Nothing may be written into a Git alias that a shell could not be handed back. */
 const QUOTABLE = /^[^"\\\n\r]+$/;
 
+/** The exact value activation writes for the shortcut, stated once for every reader. */
+const commandAliasValue = ({ interpreter, command }) => `!"${interpreter}" "${command}"`;
+
 /**
  * Register the convenience shortcut in THIS clone's own Git configuration.
  *
@@ -648,7 +651,7 @@ export const registerCommandAlias = async ({
     };
   }
 
-  const value = `!"${interpreter}" "${command}"`;
+  const value = commandAliasValue({ interpreter, command });
 
   // Any scope. A local alias silently shadowing a global one is not "leaving it
   // alone", whatever `.git/config` says afterwards.
@@ -685,6 +688,32 @@ export const registerCommandAlias = async ({
     value,
     detail: `\`git ${aliasName}\` now runs this clone's activated Gate command; it lives in this clone's own .git/config and travels nowhere.`,
   };
+};
+
+/**
+ * Whether this clone carries the shortcut activation records, exactly as it
+ * would write it for this command.
+ *
+ * Read from the clone's own `.git/config` and nowhere else, and only a value
+ * byte-identical to the one `registerCommandAlias` writes counts: a `gate`
+ * alias somebody else defined runs something else, and nothing that names the
+ * shortcut may send a maintainer to it (`TB-060`). Reading writes nothing.
+ */
+export const recordedCommandAlias = async ({
+  repositoryRoot,
+  command,
+  interpreter = process.execPath,
+  aliasName = COMMAND_ALIAS_NAME,
+  runGit = null,
+} = {}) => {
+  const git = runGit ?? (
+    async (args) => (await runFile('git', args, { cwd: repositoryRoot })).stdout
+  );
+  const current = await git(['config', '--local', '--get', `alias.${aliasName}`])
+    .then((stdout) => stdout.trim())
+    .catch(() => '');
+
+  return current !== '' && current === commandAliasValue({ interpreter, command });
 };
 
 /**

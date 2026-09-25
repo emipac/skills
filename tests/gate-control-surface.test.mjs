@@ -525,10 +525,14 @@ test('TB-031 AC-SEC-001 / NFR-SEC-004: each pinned control surface, drifted on i
   }
 });
 
-test('TB-031 SG-OWNER-001: exactly one function assembles the observed control surface, and both runners reach it', async () => {
+test('TB-031 SG-OWNER-001: exactly one function assembles the observed control surface, and both runners and status reach it', async () => {
   const sources = (await readdir(LIBRARY)).filter((entry) => entry.endsWith('.mjs'));
   const definitions = [];
   const callers = [];
+  // `gate status` is the third reader since `TB-060`: it reconciles the same
+  // observation through `statusGate`, so it and the next commit can never
+  // disagree about whether the clone drifted. It observes; it does not build.
+  const readers = ['hook-runner.mjs', 'operator-surface.mjs', 'preflight-runner.mjs'];
 
   for (const source of sources) {
     const contents = await readFile(path.join(LIBRARY, source), 'utf8');
@@ -537,16 +541,17 @@ test('TB-031 SG-OWNER-001: exactly one function assembles the observed control s
       definitions.push(source);
     }
 
-    // The call is required in the shape that reaches `evaluate`: a runner that
-    // merely mentions the observer is not one that reconciles anything.
-    if (/controlSurface: await observeControlSurface\(\{/.test(contents)) {
+    // The call is required in the shape that reaches reconciliation: a reader
+    // that merely mentions the observer is not one that reconciles anything.
+    if (/controlSurface: await observeControlSurface\(\{/.test(contents)
+      || /await observeControlSurface\(\{[\s\S]*controlSurface: surface\?\.observed/.test(contents)) {
       callers.push(source);
     }
 
-    // A second assembly of the observed surface is how the two runners would
-    // come to disagree about what this machine is, so there is none: nothing
-    // outside the observer builds the dependency `evaluate` reconciles.
-    if (source !== 'hook-runner.mjs' && source !== 'preflight-runner.mjs') {
+    // A second assembly of the observed surface is how the readers would come
+    // to disagree about what this machine is, so there is none: nothing
+    // outside the observer builds the dependency reconciliation compares.
+    if (!readers.includes(source)) {
       assert.doesNotMatch(
         contents,
         /controlSurface:/,
@@ -558,7 +563,7 @@ test('TB-031 SG-OWNER-001: exactly one function assembles the observed control s
   assert.deepEqual(definitions, ['hook-runner.mjs'], 'the observed control surface has exactly one owner.');
   assert.deepEqual(
     callers.sort(),
-    ['hook-runner.mjs', 'preflight-runner.mjs'],
-    'both runners that reach a maintainer observe through that owner.',
+    readers,
+    'both runners that reach a maintainer, and the status command, observe through that owner.',
   );
 });

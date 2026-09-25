@@ -75,12 +75,14 @@ import {
   COMMAND_ALIAS_NAME,
   SELF_DECLARED,
   createTrustEstablishment,
+  recordedCommandAlias,
   registerCommandAlias,
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
 } from './activation-seams.mjs';
 import { describeAdapter } from './adapters.mjs';
-import { gateChecksFromConfiguration } from './configuration.mjs';
+import { composeArguments } from './command-descriptor.mjs';
+import { CONFIGURATION_FILE, gateChecksFromConfiguration } from './configuration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { PROTOCOL_VERSION } from './evaluation-contract.mjs';
 import {
@@ -96,7 +98,9 @@ import {
 } from './evidence-store.mjs';
 import {
   createExecutionRoot,
+  observeControlSurface,
   openStore,
+  pinnedRunners,
   releaseExecutionRoot,
   resolveConfiguration,
   resolveReceipt,
@@ -1224,12 +1228,186 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
 };
 
 /**
+ * What recovers each finding `gate status` can report — or the explicit marker
+ * that nothing needs recovering.
+ *
+ * One entry per finding code, and one per control surface for
+ * `control-surface-drift`, whose code is shared by every surface. The lines
+ * follow `FR-LIFE-019`: a gate-owned Git registration is restored by
+ * `gate repair`, which repairs exactly those three findings and nothing else;
+ * everything else the receipt pinned is re-established by a new Activation
+ * transaction. A finding with no entry here is a test failure, never a finding
+ * nobody is told how to act on (`NFR-OPER-001`, `TB-060`).
+ */
+export const STATUS_REMEDIES = Object.freeze({
+  // An installed clone holds no Gate policy: nothing is enforced, and adopting
+  // the Gate is a choice, not a fault.
+  'configuration-missing': 'informational',
+  'gate-policy-missing': 'informational',
+  'repository-unresolved': 'informational',
+  'configuration-unreadable': 'correct-configuration',
+  'gate-policy-invalid': 'correct-configuration',
+  'activation-absent': 'activate',
+  'hook-absent': 'repair',
+  'hook-block-tampered': 'repair',
+  'hook-receipt-mismatch': 'repair',
+  // Adapter loss is a reinstall, not a repair (`RISK-004`): a new Activation
+  // transaction pins the adapter set this installed gate declares.
+  'authoritative-adapter-lost': 'activation-transaction',
+  'adapter-lost': 'activation-transaction',
+  'adapter-registration-absent': 'activation-transaction',
+  'adapter-registration-unverified': 'activation-transaction',
+  // Deactivation refuses a client entry that changed underneath it, and the
+  // Gate never overwrites a client's own file.
+  'adapter-registration-drifted': 'reconcile-client-registration',
+  'adapter-registration-ambiguous': 'reconcile-client-registration',
+  'control-surface-drift': Object.freeze({
+    runtime: 'activation-transaction',
+    adapters: 'activation-transaction',
+    'managed-hooks': 'repair',
+    receipt: 'activation-transaction',
+    'trusted-configuration': 'activation-transaction',
+    'command-descriptors': 'activation-transaction',
+    providers: 'activation-transaction',
+  }),
+});
+
+/** The order remedies are performed in when a clone needs more than one. */
+const REMEDY_ORDER = Object.freeze([
+  'correct-configuration',
+  'reconcile-client-registration',
+  'repair',
+  'activation-transaction',
+  'activate',
+]);
+
+/**
+ * One remedy, as the `next:` line says it.
+ *
+ * A new Activation transaction is the deactivate/activate pair until
+ * `gate sync` exists (`TB-062`); each half previews and prints its own token.
+ */
+const remedyInstruction = (remedy, command) => ({
+  'correct-configuration': `correct ${CONFIGURATION_FILE} so its evaluation_gate policy reads and validates`,
+  'reconcile-client-registration': `reconcile the changed client registration by hand — the Gate never overwrites a client's own file — and run ${command} status again`,
+  repair: `${command} repair`,
+  'activation-transaction': `${command} deactivate, then ${command} activate — a new Activation transaction that pins what this clone declares now; each previews first and prints the token that confirms it`,
+  activate: `${command} activate`,
+})[remedy] ?? null;
+
+const remedyFor = (finding) => {
+  const entry = STATUS_REMEDIES[finding.code] ?? null;
+
+  return typeof entry === 'string' ? entry : (entry?.[finding.surface] ?? null);
+};
+
+/**
+ * What a maintainer does next about everything status found, in the order it
+ * has to be done, through the clone's own shortcut where activation recorded
+ * one. A clone with nothing to act on says `nothing`.
+ */
+const statusNext = (findings, shortcut) => {
+  const command = shortcut ?? 'gate';
+  const informational = [];
+  const byRemedy = new Map();
+
+  for (const finding of findings) {
+    const remedy = remedyFor(finding);
+
+    if (remedy === 'informational') {
+      informational.push(finding.code);
+
+      continue;
+    }
+
+    // Unreachable while the fixture enumerating every code holds; stated
+    // rather than silently dropped if it ever does not.
+    const key = remedy ?? `unrecorded:${finding.code}`;
+
+    byRemedy.set(key, [...(byRemedy.get(key) ?? []), finding.surface === undefined ? finding.code : `${finding.code}:${finding.surface}`]);
+  }
+
+  const rank = (remedy) => (REMEDY_ORDER.includes(remedy) ? REMEDY_ORDER.indexOf(remedy) : REMEDY_ORDER.length);
+  const remedies = [...byRemedy.entries()]
+    .sort(([left], [right]) => rank(left) - rank(right))
+    .map(([remedy, codes]) => ({
+      remedy,
+      instruction: remedyInstruction(remedy, command) ?? `no remedy is recorded for ${codes.join(', ')}; read its finding above`,
+      findings: codes,
+    }));
+
+  return {
+    instruction: remedies.length === 0 ? 'nothing' : remedies.map((remedy) => remedy.instruction).join('; then '),
+    shortcut,
+    remedies,
+    informational,
+  };
+};
+
+/**
+ * The Gate control surface of an activated clone, observed exactly as the
+ * runners observe it before every evaluation.
+ *
+ * The same `observeControlSurface`, over the same configuration read and the
+ * same runner pinning, so status and the next commit can never disagree about
+ * whether this clone drifted: one observation, two readers (`TB-060`). Pinning
+ * re-observes each executable with a single `access(2)` and composes each
+ * argument vector in-process; no pinned program is started and nothing is
+ * written. A pin the runners would refuse resolves nothing here, and the
+ * descriptor surface then reports the drift the commit would be denied for.
+ */
+const observeStatusControlSurface = async ({ repositoryRoot, receipt }) => {
+  const configuration = await resolveConfiguration(repositoryRoot);
+  const { checks } = configuration.ok
+    ? gateChecksFromConfiguration(configuration.configuration)
+    : { checks: [] };
+  const runners = await pinnedRunners(checks, { receipt, compose: composeArguments });
+  const surface = await observeControlSurface({
+    activation: { receipt },
+    configuration,
+    resolved: runners.ok ? runners.resolved : new Map(),
+  });
+
+  return { ...surface, configuration };
+};
+
+/**
+ * Say which file moved when the trusted configuration drifted.
+ *
+ * The receipt pins an identity, not a document, so no diff is available; what
+ * is known is that the file on disk no longer produces the identity activation
+ * pinned, and that every evaluation is graded against the pinned policy until
+ * a new Activation transaction pins this one. The finding's code and severity
+ * are unchanged.
+ */
+const namedConfigurationDrift = (finding, { repositoryRoot, configuration }) => {
+  if (finding.code !== 'control-surface-drift' || finding.surface !== 'trusted-configuration') {
+    return finding;
+  }
+
+  return {
+    ...finding,
+    path: path.join(repositoryRoot, CONFIGURATION_FILE),
+    detail: [
+      finding.detail,
+      `${CONFIGURATION_FILE} changed since this clone was activated, and every evaluation is graded against the policy the receipt pinned, not the file, until a new Activation transaction pins it.`,
+      ...(configuration.ok ? [] : [`It no longer resolves to a Gate policy at all: ${configuration.detail}`]),
+    ].join(' '),
+  };
+};
+
+/**
  * `gate status` — reconcile desired against actual state and report it.
  *
  * A clone with no receipt has nothing to open and nothing to reconcile, so no
  * store is opened for it. `statusGate` already answers that case from a null
  * store, and it is the one that answers it here. This is the only command with
  * no confirmed form, and it must go on recording nothing at all.
+ *
+ * An activated clone is reconciled against the whole control surface the
+ * receipt pinned — the configuration included — and not only its adapter
+ * registrations, which is what let a status report `healthy` over a policy the
+ * next commit was denied for (`NFR-SEC-004`, `AC-SEC-001`, `TB-060`).
  */
 const operateStatus = async ({ repositoryRoot, environment }) => {
   const clone = await resolveClone({
@@ -1246,11 +1424,26 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
     return clone.failed;
   }
 
+  const surface = clone.receipt === null
+    ? null
+    : await observeStatusControlSurface({ repositoryRoot, receipt: clone.receipt });
   const status = await statusGate({
     evidenceStore: clone.store,
     repositoryRoot,
     adapters: clone.receipt === null ? null : observedAdapters(clone.receipt),
+    controlSurface: surface?.observed ?? null,
   });
+  const findings = surface === null
+    ? status.findings
+    : status.findings.map((finding) => namedConfigurationDrift(finding, {
+      repositoryRoot,
+      configuration: surface.configuration,
+    }));
+  const shortcut = await recordedCommandAlias({
+    repositoryRoot,
+    command: PACKAGED_COMMAND,
+    runGit: (args) => runGit(repositoryRoot, args),
+  }) ? `git ${COMMAND_ALIAS_NAME}` : null;
 
   return {
     command: 'status',
@@ -1262,7 +1455,15 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
       receiptId: status.receipt?.receiptId ?? null,
       repaired: status.repaired,
       mutations: status.mutations,
-      findings: status.findings,
+      findings,
+      // What was observed, and which pinned surfaces it no longer matches.
+      controlSurface: surface === null ? null : {
+        observed: surface.observed,
+        drifted: findings
+          .filter((finding) => finding.code === 'control-surface-drift')
+          .map((finding) => finding.surface),
+      },
+      next: statusNext(findings, shortcut),
     },
     mutation: null,
   };
@@ -2141,6 +2342,7 @@ const renderStatus = (observation) => [
   ...renderFindings(observation.findings),
   line('repaired', observation.repaired),
   line('mutations', observation.mutations.length),
+  line('next', observation.next.instruction),
 ];
 
 const renderLocks = (observation, document) => [

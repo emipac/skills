@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { activate, previewActivation } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
+import { describeAdapter } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
 import { openCoordinationLock } from '../skills/change-evaluation-gate/scripts/lib/coordination.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import { validateLifecycleEvent } from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
@@ -21,9 +22,11 @@ import {
   EXIT_OBSERVED,
   EXIT_UNHEALTHY,
   EXIT_UNRUNNABLE,
+  STATUS_REMEDIES,
   quoteForShell,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
+import { CONTROL_SURFACES } from '../skills/change-evaluation-gate/scripts/lib/security-control.mjs';
 
 const runFile = promisify(execFile);
 
@@ -90,14 +93,42 @@ const throwawayRepository = async (t) => {
 
 const ACTIVE_RELEASE = { id: 'change-evaluation-gate', version: '0.9.0', protocolVersion: '1.0' };
 
+/**
+ * The one check every fixture activates, under the identity the runners derive
+ * for it from the configuration below. A receipt that pinned a check the
+ * configuration does not declare describes a clone the runners deny, and
+ * status observes exactly what the runners observe (`TB-060`).
+ */
+const CHECK_ID = 'configuration.broad-tests.test';
+
+/** The verification command that check is derived from; not a Gate key, so cleanup keeps it. */
+const VERIFICATION_CONFIGURATION = [
+  'verification:',
+  '  commands:',
+  '    test:',
+  '      backend:',
+  '        - runner: package-script',
+  '          args:',
+  '            - test',
+  '          working_directory: .',
+  '          timeout_seconds: 300',
+  '          allowed_environment:',
+  '            - PATH',
+  '          evidence_category: test',
+  '          source_scope: backend',
+  '      frontend: []',
+  '      both: []',
+];
+
 const SHARED_CONFIGURATION = [
   'schema_version: 4',
   'backend: laravel',
   'frontend: none',
+  ...VERIFICATION_CONFIGURATION,
   'evaluation_gate:',
   '  checks:',
   '    required:',
-  '      - broad_test',
+  `      - ${CHECK_ID}`,
   '    advisory: []',
   '  budget:',
   '    total_seconds: 600',
@@ -119,7 +150,7 @@ const UNCONFIGURED_CONFIGURATION = [
 ].join('\n');
 
 const gatePolicy = () => ({
-  checks: { required: ['broad_test'], advisory: [] },
+  checks: { required: [CHECK_ID], advisory: [] },
   budget: { total_seconds: 600 },
   bypass: { enabled: false, marker: null },
   execution: { budget_skippable: [] },
@@ -165,7 +196,7 @@ const activationRequest = (root, overrides = {}) => ({
     runnerVersion: 'change-evaluation-gate/0.9.0',
     hookProgram: { interpreter: process.execPath, script: 'tools/gate-runner.mjs', args: [] },
   },
-  checks: [{ id: 'broad_test', evaluate: testCommand() }],
+  checks: [{ id: CHECK_ID, evaluate: testCommand() }],
   adapters: DECLARED_ADAPTERS,
   runtimeInputs: [{ name: 'APP_TOKEN', source: 'approved-environment-file' }],
   ...overrides,
@@ -184,7 +215,9 @@ const storeFor = async (root) => openEvidenceStore({
 
 const activationDependencies = (overrides = {}) => ({
   runGit,
-  resolveExecutable: (runner) => ({ executable: `/usr/bin/${runner}`, version: '1.0.0' }),
+  // An executable that exists on this machine, so the pin the receipt records
+  // is one the runners — and therefore status — can re-observe.
+  resolveExecutable: () => ({ executable: process.execPath, version: '1.0.0' }),
   establishTrust: async () => ({ established: true, grantedBy: 'maintainer', at: '2026-08-11T00:00:00.000Z' }),
   selfTestEvaluation: async () => ({ ok: true, detail: 'evaluation process reached a decision' }),
   selfTestAdapter: async (adapter) => ({ ok: true, detail: `${adapter.id} responded` }),
@@ -232,8 +265,11 @@ const installedClone = async (t) => {
 };
 
 /** A guarded activation: no fixture may activate anything outside a throwaway clone. */
-const activatedClone = async (t, overrides = {}) => {
+const activatedClone = async (t, overrides = {}, { prepare = async () => {} } = {}) => {
   const root = await configuredClone(t);
+
+  await prepare(root);
+
   const store = await storeFor(root);
   const request = activationRequest(root, overrides);
   const preview = await previewActivation(request, activationDependencies());
@@ -405,20 +441,50 @@ test('the observation command reports an activated clone\'s health and writes no
 });
 
 test('the health command grades degraded and broken, and every grade leaves the clone unchanged', async (t) => {
-  const { root, store } = await activatedClone(t, { adapters: RETIRED_ADAPTERS });
-  const before = await wholeCloneSnapshot(root);
+  const cursor = describeAdapter('cursor');
+  const cursorFile = (root) => path.join(root, cursor.registration.file);
+  const emptyCursorFile = `${JSON.stringify({
+    [cursor.registration.schemaVersion.key]: cursor.registration.schemaVersion.value,
+    hooks: {},
+  }, null, 2)}\n`;
+  const { root, store } = await activatedClone(t, {
+    adapters: [...DECLARED_ADAPTERS, { id: cursor.id, version: cursor.version, authoritative: false }],
+  }, {
+    prepare: async (clone) => {
+      await mkdir(path.dirname(cursorFile(clone)), { recursive: true });
+      await writeFile(cursorFile(clone), emptyCursorFile, 'utf8');
+    },
+  });
 
-  // A supporting surface this gate no longer declares costs the clone a
-  // surface, not its authority.
+  assert.equal((await observe(root, ['status'])).document.observation.health, 'healthy');
+
+  // A supporting surface whose registration is gone costs the clone a
+  // surface, not its authority: nothing the runners pinned has moved.
+  await writeFile(cursorFile(root), emptyCursorFile, 'utf8');
+
+  const before = await wholeCloneSnapshot(root);
   const degraded = await observe(root, ['status']);
 
   assert.equal(degraded.document.observation.health, 'degraded');
   assert.equal(degraded.exitCode, EXIT_UNHEALTHY);
   assert.deepEqual(
     degraded.document.observation.findings.map((finding) => finding.code),
-    ['adapter-lost'],
+    ['adapter-registration-absent'],
   );
   assert.equal(await wholeCloneSnapshot(root), before);
+
+  // An adapter the installed gate no longer declares is also a pinned
+  // adapter set that moved, which the runners deny every commit for; status
+  // now says so rather than calling that clone merely degraded
+  // (`NFR-SEC-004`, `TB-060`). The loss itself is still graded `supporting`.
+  const retired = await activatedClone(t, { adapters: RETIRED_ADAPTERS });
+  const retiredStatus = await observe(retired.root, ['status']);
+
+  assert.equal(retiredStatus.document.observation.health, 'broken');
+  assert.deepEqual(
+    retiredStatus.document.observation.findings.map((finding) => [finding.code, finding.severity, finding.surface ?? null]),
+    [['adapter-lost', 'supporting', null], ['control-surface-drift', 'authoritative', 'adapters']],
+  );
 
   // Losing the authoritative registration means the gate enforces nothing it
   // claims to enforce.
@@ -1443,6 +1509,7 @@ test('AC-LIFE-005: deactivation withdraws only gate-owned state, and uninstall o
     'schema_version: 4',
     'backend: laravel',
     'frontend: none',
+    ...VERIFICATION_CONFIGURATION,
     'history:',
     '  path: docs/history',
     '  required: true',
@@ -1927,7 +1994,9 @@ test('TB-053: the commands with no preview-shaping selector print exactly the in
 
   const status = await observe(root, ['status']);
 
-  assert.equal(status.stdout.split('\n').some((entry) => entry.startsWith('next: ')), false);
+  // Status confirms nothing, so its one `next:` line names what to do about
+  // what it found and never carries a token (`TB-060`).
+  assert.doesNotMatch(nextLineOf(status), /--confirm|--recover|sha256:/);
   assert.deepEqual(status.document.invocation.selectors, []);
 
   for (const command of ['locks', 'update', 'deactivate', 'cleanup']) {
@@ -2174,4 +2243,370 @@ test('TB-052: a bypass is granted only against an activated clone with a Gate po
 
   assert.equal(unconfigured.exitCode, EXIT_UNRUNNABLE);
   assert.equal(unconfigured.document.failure.reasonCode, 'gate-policy-missing');
+});
+
+/* ------------------------------------------------------------------------- *
+ * TB-060 — status sees the configuration it pinned, and says what next.
+ *
+ * Every fixture above activates through the library with executables that do
+ * not exist on this machine, which is exactly why none of them could ever ask
+ * status about a clone the runners would call healthy. These activate through
+ * the real command, on a real configuration, with a check that really runs —
+ * and then edit the configuration by hand, which nothing above ever did.
+ * ------------------------------------------------------------------------- */
+
+const LIBRARY = path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib');
+
+/** A check that grades one file and, when asked, leaves a mark every time it runs. */
+const markingCheckScript = (marker) => [
+  "import { appendFileSync } from 'node:fs';",
+  "import { readFile } from 'node:fs/promises';",
+  '',
+  ...(marker === null ? [] : [`appendFileSync(${JSON.stringify(marker)}, 'ran\\n');`]),
+  "const graded = await readFile(process.argv[2], 'utf8').catch(() => '');",
+  '',
+  'process.stdout.write(`graded ${graded.length} bytes\\n`);',
+  "process.exitCode = graded.includes('BROKEN') ? 1 : 0;",
+  '',
+].join('\n');
+
+const activatableConfiguration = ({ totalSeconds = 600 } = {}) => [
+  'schema_version: 4',
+  'backend: laravel',
+  'frontend: none',
+  'verification:',
+  '  commands:',
+  '    test:',
+  '      backend: []',
+  '      frontend: []',
+  '      both:',
+  '        - runner: repository-script',
+  '          args:',
+  '            - tools/check.mjs',
+  '            - app/Order.php',
+  '          working_directory: .',
+  '          timeout_seconds: 60',
+  '          allowed_environment:',
+  '            - PATH',
+  '          evidence_category: test',
+  '          source_scope: both',
+  'evaluation_gate:',
+  '  checks:',
+  '    required:',
+  '      - configuration.broad-tests.test',
+  '    advisory: []',
+  '  budget:',
+  `    total_seconds: ${totalSeconds}`,
+  '  bypass:',
+  '    enabled: false',
+  '    marker: null',
+  '  execution:',
+  '    budget_skippable: []',
+  '  evidence: {}',
+  '',
+].join('\n');
+
+const commitAttempt = async (root, message) => runFile('git', [
+  '-c', 'user.email=gate@example.test',
+  '-c', 'user.name=Gate',
+  'commit', '--quiet', '--message', message,
+], { cwd: root, env: isolatedGitEnvironment() }).then(
+  () => ({ committed: true, output: '' }),
+  (error) => ({ committed: false, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }),
+);
+
+/** Stage one ordinary edit, the way a maintainer's next commit would. */
+const stageEdit = async (root, contents) => {
+  await writeFile(path.join(root, 'app/Order.php'), contents, 'utf8');
+  await runGit(root, ['add', '--all']);
+};
+
+/**
+ * A clone activated through the real `gate activate`, from a real
+ * configuration, with a check the hook really runs: the clone the runners call
+ * healthy, and the only kind worth asking status about.
+ */
+const commandActivatedClone = async (t, { marker = null } = {}) => {
+  const root = await throwawayRepository(t);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), markingCheckScript(marker), 'utf8');
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration(), 'utf8');
+  await runGit(root, ['add', '--all']);
+  await commitAttempt(root, 'baseline');
+
+  const preview = await observe(root, ['activate']);
+  const confirmed = await observe(root, ['activate', '--confirm', tokenOf(preview)]);
+
+  assert.equal(confirmed.document.mutation.performed, true, `The fixture failed to activate: ${confirmed.document.mutation.reasonCode}.`);
+  assert.equal(confirmed.document.mutation.shortcut.registered, true);
+
+  return root;
+};
+
+/** Every byte of the clone — `.git` included — as one comparable value. */
+const cloneFingerprint = (root) => wholeCloneSnapshot(root);
+
+/**
+ * THE FIRST RED TEST OF TB-060.
+ *
+ * `NFR-SEC-004`, `AC-SEC-001`. A clone whose `.agent-framework.yaml` changed
+ * since activation reports `broken` with a `trusted-configuration` finding and
+ * names a new Activation transaction — where before this slice status never
+ * observed the configuration, reported `healthy` with nothing, and the next
+ * commit was denied for a reason status had just said did not exist.
+ */
+test('TB-060 NFR-SEC-004 / AC-SEC-001: a clone whose configuration changed since activation is broken, and status names the remedy', async (t) => {
+  const root = await commandActivatedClone(t);
+
+  assert.equal((await observe(root, ['status'])).document.observation.health, 'healthy');
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration({ totalSeconds: 900 }), 'utf8');
+
+  const before = await cloneFingerprint(root);
+  const status = await observe(root, ['status']);
+  const machine = await observe(root, ['status', '--json']);
+
+  // FR-LIFE-009, AC-LIFE-010, SG-LIFE-001: observation writes nothing and
+  // repairs nothing — not one byte of the worktree or of `.git`.
+  assert.equal(await cloneFingerprint(root), before);
+  assert.equal(status.document.observation.repaired, false);
+  assert.deepEqual(status.document.observation.mutations, []);
+
+  assert.equal(status.exitCode, EXIT_UNHEALTHY);
+  assert.equal(status.document.observation.health, 'broken');
+
+  const drift = status.document.observation.findings.filter((finding) => finding.code === 'control-surface-drift');
+
+  assert.deepEqual(drift.map((finding) => finding.surface), ['trusted-configuration']);
+  assert.equal(drift[0].severity, 'authoritative');
+  assert.equal(drift[0].path, path.join(root, '.agent-framework.yaml'));
+  assert.match(drift[0].detail, /\.agent-framework\.yaml changed since this clone was activated/);
+
+  // The remedy is a new Activation transaction, through the clone's own
+  // shortcut — never `gate repair`, which cannot re-pin a policy.
+  const next = nextLineOf(status);
+
+  assert.match(next, /^git gate deactivate, then git gate activate/);
+  assert.doesNotMatch(next, /repair|sync/);
+  assert.deepEqual(
+    status.document.observation.next.remedies.map((remedy) => remedy.remedy),
+    ['activation-transaction'],
+  );
+  assert.deepEqual(machine.document.observation.next, status.document.observation.next);
+  assert.deepEqual(machine.document.observation.controlSurface.drifted, ['trusted-configuration']);
+
+  // Status and the next evaluation agree: the commit is denied for the same
+  // reason status named.
+  await stageEdit(root, 'baseline\nrepaired\n');
+
+  const denied = await commitAttempt(root, 'after the configuration changed');
+
+  assert.equal(denied.committed, false, 'a commit against a drifted configuration was accepted.');
+  assert.match(denied.output, /integrity-drift/);
+  assert.match(denied.output, /trusted-configuration/);
+
+  // And the remedy status named is the one that performs: deactivate, then
+  // activate, each previewed and confirmed, and the clone is healthy again.
+  const deactivation = await observe(root, ['deactivate']);
+
+  assert.equal((await observe(root, ['deactivate', '--confirm', tokenOf(deactivation)])).document.mutation.performed, true);
+
+  const activation = await observe(root, ['activate']);
+
+  assert.equal((await observe(root, ['activate', '--confirm', tokenOf(activation)])).document.mutation.performed, true);
+
+  const recovered = await observe(root, ['status']);
+
+  assert.equal(recovered.document.observation.health, 'healthy');
+  assert.equal(nextLineOf(recovered), 'nothing');
+  assert.equal((await commitAttempt(root, 'after the re-pin')).committed, true);
+});
+
+test('TB-060: a healthy clone prints next: nothing and otherwise exactly what it printed before, and its commit is not denied', async (t) => {
+  const root = await commandActivatedClone(t);
+  const status = await observe(root, ['status']);
+  const { observation } = status.document;
+
+  assert.equal(status.exitCode, EXIT_OBSERVED);
+  assert.equal(observation.health, 'healthy');
+  assert.deepEqual(observation.findings, []);
+  assert.equal(nextLineOf(status), 'nothing');
+
+  // Byte for byte, the rendering before this slice plus one line.
+  assert.equal(status.stdout, [
+    'gate status',
+    `repository: ${root}`,
+    'state: activated',
+    'health: healthy',
+    `release: ${observation.release.id} ${observation.release.version} (protocol ${observation.release.protocolVersion})`,
+    `receipt: ${observation.receiptId}`,
+    'findings: 0',
+    'repaired: false',
+    'mutations: 0',
+    'next: nothing',
+    'preview: nothing was written, nothing was repaired, and nothing was removed.',
+    status.document.trustBoundary.statement,
+    '',
+  ].join('\n'));
+
+  // `--json` keeps every field it had, in order, and gains two.
+  const machine = await observe(root, ['status', '--json']);
+
+  assert.deepEqual(Object.keys(machine.document.observation), [
+    'state', 'health', 'release', 'receiptId', 'repaired', 'mutations', 'findings', 'controlSurface', 'next',
+  ]);
+  assert.deepEqual(machine.document.observation.next, {
+    instruction: 'nothing',
+    shortcut: 'git gate',
+    remedies: [],
+    informational: [],
+  });
+  assert.deepEqual(machine.document.observation.controlSurface.drifted, []);
+  assert.equal(
+    machine.document.observation.controlSurface.observed.configurationId,
+    JSON.parse(await readFile(path.join(root, '.git/change-evaluation-gate/evidence/activation/receipt.json'), 'utf8')).configuration.identity,
+  );
+
+  // The clone status calls healthy is not denied for drift: it commits.
+  await stageEdit(root, 'baseline\nrepaired\n');
+
+  const committed = await commitAttempt(root, 'on a healthy clone');
+
+  assert.equal(committed.committed, true, committed.output);
+});
+
+test('TB-060: observing runner pins during status spawns no pinned program, and costs a stat per pin', async (t) => {
+  const markers = await realpath(await mkdtemp(path.join(tmpdir(), 'gate-operator-marker-')));
+
+  t.after(() => rm(markers, { recursive: true, force: true }));
+
+  const marker = path.join(markers, 'check-ran');
+  const root = await commandActivatedClone(t, { marker });
+
+  // Activation self-tests the hook program, never the check; nothing has run.
+  await rm(marker, { force: true });
+
+  const rounds = 5;
+  const started = process.hrtime.bigint();
+
+  for (let round = 0; round < rounds; round += 1) {
+    assert.equal((await observe(root, ['status'])).document.observation.health, 'healthy');
+  }
+
+  const perStatus = Number(process.hrtime.bigint() - started) / 1e6 / rounds;
+
+  t.diagnostic(`gate status with runner-pin observation: ${perStatus.toFixed(1)} ms per invocation over ${rounds} runs`);
+
+  assert.equal(await readFile(marker, 'utf8').catch(() => null), null, 'status ran a pinned check program.');
+
+  // The marker is real: the commit that does run the check leaves it.
+  await stageEdit(root, 'baseline\nrepaired\n');
+  assert.equal((await commitAttempt(root, 'the check runs here')).committed, true);
+  assert.match(await readFile(marker, 'utf8'), /ran/);
+});
+
+test('TB-060: next: uses git gate only where the shortcut activation records is present, and names each state\'s remedy', async (t) => {
+  // A configured clone has no shortcut yet, and its remedy is activation.
+  const configured = await configuredClone(t);
+  const unactivated = await observe(configured, ['status']);
+
+  assert.equal(nextLineOf(unactivated), 'gate activate');
+  assert.equal(unactivated.document.observation.next.shortcut, null);
+
+  // An installed clone has nothing to enforce, and nothing to do.
+  const installed = await observe(await installedClone(t), ['status']);
+
+  assert.equal(nextLineOf(installed), 'nothing');
+  assert.deepEqual(installed.document.observation.next.informational, ['gate-policy-missing']);
+
+  // A lost hook is repaired; the clone activated without a shortcut says
+  // `gate`, not `git gate`.
+  const { root, store } = await activatedClone(t);
+
+  await rm((await store.activationReceipt().read()).hooks[0].path, { force: true });
+
+  const broken = await observe(root, ['status']);
+
+  assert.equal(broken.document.observation.health, 'broken');
+  assert.equal(nextLineOf(broken), 'gate repair');
+
+  // A `gate` alias somebody else owns is not the shortcut activation records,
+  // and status never sends a maintainer to it.
+  const shadowed = await commandActivatedClone(t);
+
+  await runGit(shadowed, ['config', '--local', 'alias.gate', '!echo mine']);
+  await writeFile(path.join(shadowed, '.agent-framework.yaml'), activatableConfiguration({ totalSeconds: 900 }), 'utf8');
+
+  assert.match(nextLineOf(await observe(shadowed, ['status'])), /^gate deactivate, then gate activate/);
+});
+
+/**
+ * `NFR-OPER-001`. Every finding code `gate status` can emit has a remedy or an
+ * explicit informational marker. The codes are read from the sources that
+ * emit them, so a code added later with no entry fails here rather than
+ * printing a finding nobody is told how to act on.
+ */
+test('TB-060 NFR-OPER-001: every finding status can emit maps to a remedy or an explicit informational marker', async () => {
+  const lifecycle = await readFile(path.join(LIBRARY, 'lifecycle.mjs'), 'utf8');
+  const hookRunner = await readFile(path.join(LIBRARY, 'hook-runner.mjs'), 'utf8');
+  const configurationSource = await readFile(path.join(LIBRARY, 'configuration.mjs'), 'utf8');
+  const literals = (source) => [...source.matchAll(/'([a-z][a-z0-9-]+)'/g)].map((match) => match[1]);
+  const body = (source, start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start) + start.length));
+
+  const statusBody = body(lifecycle, 'export const statusGate', '\nexport const ');
+  const registrationCodes = literals(body(lifecycle, 'const REGISTRATION_FINDING_CODES', '});'))
+    .filter((literal) => literal.startsWith('adapter-registration-'));
+  // What `resolveConfiguration` can answer, which an unactivated clone reports
+  // as its finding's code.
+  const configurationCodes = [
+    ...literals(body(hookRunner, 'export const resolveConfiguration', '\nexport const ')),
+    ...literals(body(configurationSource, 'export const readRepositoryConfiguration', '\n};')),
+    ...literals(body(configurationSource, 'reasonCode: \'configuration-unreadable\'', '\n')),
+  ].filter((literal) => /^(configuration|gate-policy)-/.test(literal));
+  const codes = new Set();
+
+  for (const [, expression] of statusBody.matchAll(/\bcode: ([^\n]+)/g)) {
+    if (expression.startsWith('REGISTRATION_FINDING_CODES')) {
+      registrationCodes.forEach((code) => codes.add(code));
+    } else if (expression.startsWith('configuration.reasonCode')) {
+      [...configurationCodes, 'repository-unresolved'].forEach((code) => codes.add(code));
+    } else {
+      const named = literals(expression);
+
+      assert.ok(named.length > 0, `statusGate emits a finding code this fixture cannot enumerate: ${expression}`);
+      named.forEach((code) => codes.add(code));
+    }
+  }
+
+  assert.match(statusBody, /reconcileControlSurface\(/);
+
+  for (const code of codes) {
+    const entry = STATUS_REMEDIES[code];
+
+    assert.equal(typeof entry, 'string', `status can emit ${code}, and no remedy or informational marker is recorded for it.`);
+  }
+
+  // Control-surface drift has one remedy per surface, and every surface has one.
+  for (const surface of CONTROL_SURFACES) {
+    assert.equal(
+      typeof STATUS_REMEDIES['control-surface-drift'][surface],
+      'string',
+      `control-surface drift of ${surface} has no remedy.`,
+    );
+  }
+
+  // The settled lines: a gate-owned Git registration is repaired, a changed
+  // configuration is re-established, an unactivated clone is activated.
+  for (const code of ['hook-absent', 'hook-block-tampered', 'hook-receipt-mismatch']) {
+    assert.equal(STATUS_REMEDIES[code], 'repair');
+  }
+
+  assert.equal(STATUS_REMEDIES['control-surface-drift']['managed-hooks'], 'repair');
+  assert.equal(STATUS_REMEDIES['control-surface-drift']['trusted-configuration'], 'activation-transaction');
+  assert.equal(STATUS_REMEDIES['activation-absent'], 'activate');
+  assert.equal(STATUS_REMEDIES['gate-policy-missing'], 'informational');
+  assert.ok(codes.has('configuration-missing') && codes.has('gate-policy-invalid') && codes.has('adapter-registration-drifted'));
 });

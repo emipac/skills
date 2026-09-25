@@ -122,8 +122,10 @@ of any of them is `authoritative` severity:
 `observeControlSurface` (`hook-runner.mjs`) is the one function that assembles
 the observed side, and both runners that reach a maintainer reach it: the
 authoritative runner and the packaged preflight runner pass its result to
-`evaluate` as the `controlSurface` dependency on every evaluation. A second
-assembly of it is prohibited (`SG-OWNER-001`).
+`evaluate` as the `controlSurface` dependency on every evaluation, and
+`gate status` passes the same observation to `statusGate` (`TB-060`), so status
+and the next commit cannot disagree about drift. A second assembly of it is
+prohibited (`SG-OWNER-001`).
 
 What it observes, and what it cannot:
 
@@ -137,7 +139,10 @@ What it observes, and what it cannot:
 | `command-descriptors` | The pinned executables re-observed on disk, and the invocation each declared check would run now, composed through the one shared composition rule |
 | `providers` | Nothing. Activation pins no provider identities, so a receipt that names some cannot be matched by this machine — and an unobservable surface is drift, never an assumed match |
 
-- `gate status` reports `broken` (`lifecycle.mjs`, `controlSurface` input).
+- `gate status` reports `broken` (`lifecycle.mjs`, `controlSurface` input,
+  supplied by the operator surface from `observeControlSurface`), and its
+  `next:` line names the recovery — `gate repair` for the managed hook block, a
+  new Activation transaction for every other surface.
 - An authoritative evaluation carries the `integrity-drift` diagnostic, which
   normalizes the decision to `unverified` and the authorization to `deny`
   (`evaluate.mjs`, `controlSurface` dependency). The check results themselves

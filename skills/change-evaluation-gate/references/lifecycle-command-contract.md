@@ -35,7 +35,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | --- | --- | --- |
 | candidate release | `inspectRelease({ receipt, distribution })` | nothing |
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
-| `gate status` | `statusGate(...)` | nothing |
+| `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
 | `gate deactivate` | `deactivateGate(...)` | withdraws registrations and the receipt |
 | `gate uninstall` | `uninstallGate(...)` | unchanged project assets only |
@@ -170,9 +170,54 @@ rather than reporting an injected pass as a proof the clone cannot support.
 
 **Adapter observation.** An adapter the receipt pinned that the installed gate
 no longer declares (`describeAdapter`) is not observed as present, which is the
-loss `statusGate` already grades by the authority the receipt recorded. The
-surface passes no `controlSurface` observation, so independent control-surface
-drift is not yet part of what `gate status` reports.
+loss `statusGate` already grades by the authority the receipt recorded.
+
+**Control-surface observation** (`TB-060`). On an activated clone `gate status`
+reads the configuration with `resolveConfiguration`, pins its checks with
+`pinnedRunners`, and passes `observeControlSurface`'s observation to
+`statusGate` as `controlSurface` — the same observer, configuration reader, and
+runner pinning the authoritative and preflight runners use before every
+evaluation. One observation, two readers: a clone whose trusted configuration,
+descriptors, receipt, runtime, adapter set, managed hook block, or providers
+moved since activation is `broken` to status exactly when its next commit is
+`unverified` with `integrity-drift` (`NFR-SEC-004`, `AC-SEC-001`). Before this
+the surface passed no observation, and status reported `healthy` over a policy
+the next commit was denied for. Runner pinning re-observes each pinned
+executable with one `access(2)` and composes each argument vector in-process: no
+pinned program is started and nothing is written. A trusted-configuration
+finding names `.agent-framework.yaml` as its `path`; the receipt pins an
+identity, not a document, so which key moved is not reported.
+
+A supporting adapter the installed gate no longer declares is therefore both an
+`adapter-lost` finding (still `supporting`) and drift of the pinned `adapters`
+surface, which the runners deny every commit for — so that clone is `broken`,
+not `degraded`. `degraded` remains the grade for a supporting surface whose
+registration is lost while everything the runners pinned still matches.
+
+**Status says what next** (`NFR-OPER-001`, `TB-060`). The rendering ends with
+one `next:` line and the document carries the same answer as
+`observation.next`: `instruction` (exactly what the line prints), `shortcut`
+(`git gate` when this clone's `.git/config` holds the alias activation writes
+for this command, byte for byte, otherwise `null` and the line says `gate`),
+`remedies` (each with the finding codes it answers, in the order they must be
+performed), and `informational` (codes that need nothing). A clone with nothing
+to act on prints `next: nothing`, and its rendering is otherwise unchanged. The
+document also gains `observation.controlSurface` — the `observed` surface and
+the `drifted` surface names, or `null` on a clone with no receipt. No existing
+field changed. `STATUS_REMEDIES` (`operator-surface.mjs`) is the one table:
+
+| Finding | Remedy |
+| --- | --- |
+| `hook-absent`, `hook-block-tampered`, `hook-receipt-mismatch`, `control-surface-drift` on `managed-hooks` | `gate repair` |
+| `control-surface-drift` on `trusted-configuration`, `command-descriptors`, `receipt`, `runtime`, `adapters`, `providers`; `adapter-lost`, `authoritative-adapter-lost`, `adapter-registration-absent`, `adapter-registration-unverified` | a new Activation transaction: `gate deactivate`, then `gate activate`, each previewed and confirmed |
+| `adapter-registration-drifted`, `adapter-registration-ambiguous` | reconcile the client's changed entry by hand — deactivation refuses a drifted entry and the Gate never overwrites a client's own file — then run `gate status` again |
+| `activation-absent` | `gate activate` |
+| `gate-policy-invalid`, `configuration-unreadable` | correct `.agent-framework.yaml` |
+| `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
+
+A finding with no entry fails the unit suite, which enumerates every code
+`statusGate` can emit from its source. Deactivation leaves the `git gate` alias
+in place, so the pair runs through it end to end.
 
 **Observation creates nothing** (`TB-041`). `openCoordinationLock` used to ensure
 its own directory existed before it read anything, so the first `gate locks` on a
@@ -212,6 +257,7 @@ it was authorized against, and the migrations that ran.
 | Everything reconciles | `healthy` |
 | A non-authoritative adapter is gone or unresponsive | `degraded` |
 | An authoritative adapter is gone or unresponsive | `broken` |
+| A pinned Gate control surface drifted (`gate status` observes it; `TB-060`) | `broken` |
 | The authoritative registration is absent | `broken` |
 | The gate-owned block no longer matches its durable identity | `broken` |
 | The gate-owned block names a different Activation receipt | `broken` |
@@ -381,7 +427,12 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   changes nothing until confirmed and a failed update that preserves the prior
   release; a confirmed prune and its tombstones; stale-lock recovery against its
   own token and never against a live holder; and every operation and refusal
-  recorded while `status` records none.
+  recorded while `status` records none. `TB-060` adds clones activated through
+  the real command: a configuration edited after activation is `broken` with a
+  `trusted-configuration` finding, its commit is denied `integrity-drift`, and
+  the named deactivate/activate pair makes it healthy again; a healthy clone
+  prints `next: nothing` and otherwise exactly what it printed before; status
+  runs no pinned program; and every finding code maps to a remedy.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle
@@ -389,4 +440,7 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   `git commit` invocations, plus `packaged-observation` and `packaged-repair`,
   which drive `gate.mjs` as a real child process against a real activated clone
   that really blocks a commit, has its block clobbered, stops blocking, and is
-  repaired back to exactly what its receipt authorizes.
+  repaired back to exactly what its receipt authorizes — and
+  `packaged-configuration-drift`, which activates through the packaged command
+  so the real runner is registered, edits the configuration, and proves status,
+  the denied commit, and the named re-pin agree.

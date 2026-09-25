@@ -1,14 +1,14 @@
 # TB-060 — Let status see the configuration it pinned
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 60-let-status-see-the-configuration-it-pinned
 Draft key: TB-060
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -192,23 +192,30 @@ it exists, and name the deactivate/activate pair until then.
 
 ## Acceptance Criteria
 
-- [ ] `NFR-SEC-004`, `AC-SEC-001`: a clone whose configuration changed since
+- [x] `NFR-SEC-004`, `AC-SEC-001`: a clone whose configuration changed since
   activation reports `broken` with a `trusted-configuration` finding, proved
   against a real activated clone.
-- [ ] `FR-LIFE-009`, `AC-LIFE-010`, `SG-LIFE-001`: status still writes nothing and repairs no drift, proved by hashing the
+- [x] `FR-LIFE-009`, `AC-LIFE-010`, `SG-LIFE-001`: status still writes nothing and repairs no drift, proved by hashing the
   clone's `.git` and working tree before and after.
-- [ ] Status and the next evaluation agree: the same clone that status calls
+- [x] Status and the next evaluation agree: the same clone that status calls
   drifted is denied `integrity-drift` on commit, and one status calls healthy
   is not.
-- [ ] `NFR-OPER-001`: every finding status can emit maps to a `next:` remedy
+- [x] `NFR-OPER-001`: every finding status can emit maps to a `next:` remedy
   or an explicit informational marker, proved by a fixture enumerating the
   codes.
-- [ ] A healthy clone prints `next: nothing` and is otherwise byte-identical
+- [x] A healthy clone prints `next: nothing` and is otherwise byte-identical
   to today's output.
-- [ ] `gate status --json` gains `next` and `controlSurface` fields; existing
+- [x] `gate status --json` gains `next` and `controlSurface` fields; existing
   fields are unchanged.
-- [ ] Runner-pin observation during status spawns no process and is measured.
-- [ ] `SKILL.md` and `docs/framework-guide.html` lead with `git gate status` — the clone-local alias activation records — rather than the packaged script path, and every `next:` line status prints uses it where the receipt records one.
+- [x] Runner-pin observation during status spawns no process and is measured.
+  (Proved by a pinned check that marks a file whenever it runs: five status
+  runs leave no mark, the following commit does. Pinning costs one `access(2)`
+  per pinned runner plus an in-process argument composition. On the
+  implementing machine a healthy one-check clone's `gate status` went from
+  about 16 ms to about 22 ms per invocation; the difference is the
+  configuration read, the pinning, and one `git config` read for the
+  shortcut — a Git process, not a pinned program.)
+- [x] `SKILL.md` and `docs/framework-guide.html` lead with `git gate status` — the clone-local alias activation records — rather than the packaged script path, and every `next:` line status prints uses it where the receipt records one.
 
 ## Verification Matrix
 

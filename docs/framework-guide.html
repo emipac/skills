@@ -952,8 +952,9 @@ protected_files:
         <span class="note-tag">Every edit in this section needs a re-pin</span>
         <p>
           On an activated clone, changing any of this has no effect until you deactivate and
-          activate again — and until you do, commits are denied with <code>integrity-drift</code>
-          while <code>git gate status</code> still reports healthy. Section 12.
+          activate again — and until you do, commits are denied with <code>integrity-drift</code>,
+          and <code>git gate status</code> reports <code>broken</code> and names that re-pin.
+          Section 12.
         </p>
       </div>
     </section>
@@ -1925,11 +1926,19 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
         On an activated clone every one of these is <code>git gate …</code>. That shortcut is a
         clone-local Git alias activation wrote into this clone's own <code>.git/config</code> and
         nowhere else — it works from any subdirectory, it is never committed, and it never follows
-        the repository to anybody else. It disappears when you deactivate.
+        the repository to anybody else. Deactivating leaves it in place, so a re-pin runs through it
+        end to end.
       </p>
 
       <p class="cmd-label">The one you will run most</p>
       <pre><code>git gate status</code></pre>
+
+      <p>
+        It ends with one <code>next:</code> line naming the command that recovers what it found
+        — <code>git gate repair</code> for a moved Git hook, a deactivate/activate re-pin for a
+        changed policy, <code>nothing</code> on a healthy clone. It names the command; it never
+        runs it.
+      </p>
 
       <p>
         Every command follows one rule: <strong>it previews and writes nothing</strong> until you
@@ -1951,7 +1960,7 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         <table>
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
-            <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>. Repairs nothing and writes nothing — observation never mutates.</td></tr>
+            <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
             <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12.</td></tr>
             <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
             <tr><td><strong>bypass</strong></td><td>Grants one one-shot bypass of the exact staged snapshot, where policy enables it. Section 10 covers what it demands.</td></tr>
@@ -2004,11 +2013,11 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           cannot say what it is enforcing, and nothing that cannot be said is proved.
         </p>
         <p>
-          <code>git gate status</code> in release 0.8.0 does <strong>not</strong> notice this. It
-          reconciles the client registrations and reports <code>healthy</code>, because the status
-          command does not yet pass the configuration observation the commit runners make. So
-          "status says healthy, commits are denied" is a known gap, not a broken clone. Trust the
-          commit, not the status, on this one question.
+          <code>git gate status</code> sees it first. It makes the same observation the commit
+          makes, so it reports <span class="pill p-deny">broken</span> with a
+          <code>control-surface-drift</code> finding on <code>trusted-configuration</code> that names
+          <code>.agent-framework.yaml</code>, and its <code>next:</code> line names the re-pin below.
+          Status and the commit agree: when one says drifted, so does the other.
         </p>
       </div>
 
@@ -2019,11 +2028,9 @@ git gate activate
 git gate activate --confirm &lt;token&gt;</code></pre>
 
       <p>
-        Deactivation removes the hook, the receipt and the <code>git gate</code> alias, and keeps
-        your configuration and every historical evidence record. Activation then pins the file as
-        it now reads. Because the alias goes with the receipt, the two activate invocations use the
-        path form again:
-        <code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code>.
+        Deactivation removes the hook and the receipt, and keeps your configuration, every
+        historical evidence record, and the <code>git gate</code> alias. Activation then pins the
+        file as it now reads, and <code>git gate status</code> reports healthy again.
       </p>
 
       <div class="table-wrap">
@@ -2241,7 +2248,7 @@ git gate activate --confirm &lt;token&gt;</code></pre>
         <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned — including an identity of <code>.agent-framework.yaml</code>, which is why a later edit needs a re-pin.</dd></div>
         <div><dt>Re-pin</dt><dd>Deactivate, then activate, so the receipt pins the configuration as it now reads. The only way a policy change takes effect.</dd></div>
         <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
-        <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, gone when you deactivate.</dd></div>
+        <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, and left in place by deactivation.</dd></div>
         <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure may return as a follow-up; a clean turn stays quiet.</dd></div>
       </dl>
     </section>

@@ -130,16 +130,28 @@ state or historical Evidence — belongs to the
 update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
-All of that lifecycle is reachable as one command. Run
-`change-evaluation-gate <command>` where that executable is on the path, or run
-this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
-beside the `SKILL.md` you are reading rather than assuming a path: an installed
-skill sits wherever the client placed it, so the same literal path does not hold
-across projects. The command is `activate`, `status`, `locks`, `prune`,
-`repair`, `update`, `deactivate`, `uninstall`, `cleanup`, or `bypass`. Add `--json` for
-the same document a person is shown. An activated clone also carries `git gate`,
-a shortcut this activation wrote into that clone's own `.git/config` and
-nowhere else.
+All of that lifecycle is reachable as one command. On an activated clone run it
+as `git gate <command>` — start with `git gate status` — a shortcut activation
+wrote into that clone's own `.git/config` and nowhere else. Before activation,
+or where that shortcut is absent, run `change-evaluation-gate <command>` where
+that executable is on the path, or run this installed skill's own
+`scripts/gate.mjs` with Node. Resolve that script beside the `SKILL.md` you are
+reading rather than assuming a path: an installed skill sits wherever the client
+placed it, so the same literal path does not hold across projects. The command
+is `activate`, `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
+`uninstall`, `cleanup`, or `bypass`. Add `--json` for the same document a person
+is shown.
+
+`git gate status` reconciles every control surface the receipt pinned — the
+configuration included, through the same observation the commit runner makes —
+so a clone whose `.agent-framework.yaml` changed since activation is `broken`
+exactly when its next commit is denied `integrity-drift`. It ends with one
+`next:` line naming what recovers each finding: `git gate repair` for a
+gate-owned Git hook registration, `git gate deactivate` then `git gate activate`
+for a changed configuration or anything else the receipt pinned,
+`gate activate` for a configured clone, and `nothing` when nothing needs doing.
+Report that line; every command it names previews first, and none of them is
+performed implicitly.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
