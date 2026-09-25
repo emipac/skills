@@ -91,7 +91,7 @@ import {
   parseConfigurationDocument,
 } from './configuration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
-import { PROTOCOL_VERSION } from './evaluation-contract.mjs';
+import { OPERATION, PROTOCOL_VERSION } from './evaluation-contract.mjs';
 import {
   BYPASS_GRANT_VERSION,
   bypassGrantFrom,
@@ -113,6 +113,7 @@ import {
   resolveReceipt,
   resolveRepositoryRoot,
 } from './hook-runner.mjs';
+import { evaluateActivatedTree } from './preflight-runner.mjs';
 import { captureSnapshot } from './snapshot.mjs';
 import {
   SHARED_CONFIGURATION_FILE,
@@ -152,10 +153,14 @@ export const EXIT_UNHEALTHY = 1;
 
 export const EXIT_UNRUNNABLE = 2;
 
-/** Every command this surface performs. All of them preview by default. */
+/**
+ * Every command this surface performs. All of them but `status` and `check`
+ * preview by default; those two observe, and have nothing to confirm.
+ */
 export const COMMANDS = Object.freeze([
   'activate',
   'status',
+  'check',
   'locks',
   'prune',
   'repair',
@@ -177,7 +182,9 @@ export const COMMANDS = Object.freeze([
  * command a clone reports differ from the command it accepts.
  *
  * `status` is absent deliberately: reconciliation has nothing to confirm, and
- * it is the one command that must still record nothing at all.
+ * it is the one command that must still record nothing at all. `check` is
+ * absent for the same reason it has no preview/confirm pair: it evaluates and
+ * reports, and mutates nothing under the clone (`TB-061`).
  */
 export const CONFIRMABLE_COMMANDS = Object.freeze({
   activate: '--confirm',
@@ -242,6 +249,9 @@ const SELECTORS = Object.freeze({
     '--confirm': 'confirmation',
   }),
   status: Object.freeze({}),
+  // The index instead of the working tree. A flag, because the scope is one of
+  // exactly two, and neither is inferred from the other (`TB-061`).
+  check: Object.freeze({ '--staged': 'flag' }),
   locks: Object.freeze({ '--recover': 'confirmation' }),
   prune: Object.freeze({
     '--evaluation': 'repeatable',
@@ -286,6 +296,7 @@ const SELECTOR_FIELDS = Object.freeze({
   '--reason': 'reason',
   '--reference': 'reference',
   '--acknowledge-weakening': 'acknowledgeWeakening',
+  '--staged': 'staged',
 });
 
 /**
@@ -385,6 +396,7 @@ export const USAGE = [
   'Usage:',
   '  gate activate   [--client <id>]          Preview activating this configured clone.',
   '  gate status     [--json]                 Report this clone\'s health.',
+  '  gate check      [--staged] [--json]      Evaluate the working tree (or the index) as a hook would.',
   '  gate locks      [--json]                 Inspect the coordination lock.',
   '  gate prune      [selector] [--json]      Preview what a prune would remove.',
   '  gate repair     [--hook-script <path>]   Preview restoring drifted gate-owned registrations.',
@@ -395,8 +407,8 @@ export const USAGE = [
   '  gate bypass     --reason <text> ...      Preview granting one one-shot bypass of the staged snapshot.',
   '  gate sync       [--acknowledge-weakening] Preview re-pinning a changed configuration, keeping the adapters.',
   '',
-  'Every command above previews. To perform one, run it again with the token',
-  'the preview printed:',
+  'Every command above but status and check previews. To perform one, run it',
+  'again with the token the preview printed:',
   '',
   '  gate locks --recover <token>             Recover one stale lock.',
   '  gate prune --confirm <token>             Remove exactly the previewed blobs.',
@@ -438,6 +450,18 @@ export const USAGE = [
   'acknowledges the weakening; the token then binds the candidate and that',
   'acknowledgement together. Adding or removing an adapter is still deactivate',
   'and activate.',
+  '',
+  'Check selectors:',
+  '  --staged                          Evaluate the staged index, as the pre-commit hook',
+  '                                    would; without it, the working tree, as the desktop',
+  '                                    preflight would.',
+  '',
+  'A check runs the evaluation a hook runs, against a materialized snapshot, and',
+  'prints that decision in full. It is not a decision: it authorizes nothing,',
+  'consumes no bypass grant, and the next commit is still evaluated by the',
+  'pre-commit hook. A passing check records nothing; one that did not pass',
+  'appends its decision to the Evidence store and says where. Its exit status is',
+  '0 passed, 1 failed or unverified, 2 could not run.',
   '',
   'Exit status:',
   '  0  the command ran and found nothing wrong, or performed what was confirmed',
@@ -530,6 +554,7 @@ const parseArguments = (argv) => {
     reason: null,
     reference: null,
     acknowledgeWeakening: null,
+    staged: null,
   };
   let confirmation = null;
   let previewRequested = false;
@@ -1383,6 +1408,148 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
           .map((finding) => finding.surface),
       },
       next: nextRemedies(findings, shortcut),
+    },
+    mutation: null,
+  };
+};
+
+/**
+ * The two trees `gate check` can be asked about, and the request each one is.
+ *
+ * The working tree is asked exactly as the desktop preflight asks it; the index
+ * exactly as the pre-commit hook grades it — the same snapshot kind and the
+ * same purpose — so either answer is the answer that hook would give. Neither
+ * is inferred from the other (`TB-061`).
+ */
+const CHECK_SCOPES = Object.freeze({
+  worktree: Object.freeze({
+    change: { kind: 'worktree', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'regression-only', contractRef: null },
+    describes: 'the working tree against HEAD, as the desktop preflight evaluates it',
+  }),
+  staged: Object.freeze({
+    change: { kind: 'git-index', baseRevision: 'HEAD' },
+    evaluation: { purpose: 'change-acceptance-and-regression', contractRef: null },
+    describes: 'the staged index against HEAD, as the pre-commit hook evaluates it',
+  }),
+});
+
+/**
+ * Who asked, as the evaluation request and the Evidence store record it.
+ *
+ * The request contract requires an invoking identity, and this is the
+ * operator's own: it is no declared adapter, so nothing presents it through a
+ * client's feedback channel, and no client's loop guard — which counts its own
+ * evaluation identity — can ever count what it records (`FR-ADAPT-005`).
+ */
+const CHECK_CLIENT = Object.freeze({ id: 'gate-check', surface: 'operator-terminal' });
+
+/** What a check is, stated on every rendering of one (`FR-EVAL-001`, `SG-TRUST-001`). */
+const CHECK_LIMIT = 'this is what a hook would decide for this tree, not a decision: it authorizes nothing, consumes no bypass grant, and every commit is still evaluated by the pre-commit hook.';
+
+/**
+ * `gate check` — evaluate the working tree, or with `--staged` the index, and
+ * report the decision a hook would produce.
+ *
+ * It is an operator act, not a client event: no payload, no adapter, no
+ * session, no loop guard, and no feedback channel. It calls the evaluation the
+ * preflight calls — `evaluateActivatedTree`, which captures the snapshot,
+ * observes the control surface, runs the pinned programs, and calls `evaluate`
+ * — so its answer cannot drift from a hook's (`NFR-REL-001`, `SG-EVAL-001`).
+ * Its role is `preflight`, so the decision is `not-authoritative` by
+ * construction; it reads no bypass grant and writes nothing a hook reads
+ * (`FR-EVAL-001`).
+ *
+ * Evidence: a passing check appends nothing and one that did not pass persists
+ * its decision (`RISK-010`), for the working tree and the index alike — the
+ * commit runner records every decision because that record is what its
+ * authorization rests on, and a check authorizes nothing.
+ */
+const operateCheck = async ({ repositoryRoot, environment, selector }) => {
+  const scope = selector?.staged === true ? 'staged' : 'worktree';
+  const { change, evaluation, describes } = CHECK_SCOPES[scope];
+  const invocation = {
+    role: 'preflight',
+    trigger: 'work-complete',
+    adapter: { ...CHECK_CLIENT, version: PROTOCOL_VERSION, capabilities: { nativeBlocking: false } },
+    sessionId: `gate-check:${scope}`,
+  };
+  const started = performance.now();
+  let evaluated;
+
+  try {
+    evaluated = await evaluateActivatedTree({
+      protocolVersion: PROTOCOL_VERSION,
+      operation: OPERATION,
+      repository: { root: repositoryRoot },
+      change: { ...change },
+      evaluation: { ...evaluation },
+      invocation,
+    }, { environment, client: CHECK_CLIENT, recordPassing: false });
+  } catch (error) {
+    return failure({
+      command: 'check',
+      reasonCode: 'runner-failed',
+      detail: `the evaluation failed internally (${error.message}); nothing about this tree was verified.`,
+    });
+  }
+
+  if (!evaluated.ok) {
+    return failure({ command: 'check', reasonCode: evaluated.reasonCode, detail: evaluated.detail });
+  }
+
+  if (evaluated.findings.length > 0) {
+    return failure({
+      command: 'check',
+      reasonCode: 'decision-malformed',
+      detail: `the evaluation returned a decision that could not be read against the evaluation contract (${evaluated.findings.length} contract finding${evaluated.findings.length === 1 ? '' : 's'}), so nothing about this tree was verified.`,
+    });
+  }
+
+  const { decision } = evaluated;
+  const reference = decision.evidence.reference ?? null;
+
+  return {
+    command: 'check',
+    healthy: decision.outcome === 'passed',
+    observation: {
+      scope,
+      describes,
+      authoritative: false,
+      invocation: {
+        role: invocation.role,
+        trigger: invocation.trigger,
+        adapter: CHECK_CLIENT.id,
+        sessionId: invocation.sessionId,
+      },
+      evaluationId: decision.evaluationId,
+      snapshot: {
+        kind: decision.snapshot.kind,
+        id: decision.snapshot.id,
+        baseRevision: decision.snapshot.baseRevision,
+      },
+      outcome: decision.outcome,
+      authorization: decision.authorization,
+      checks: decision.checks.map((entry) => ({
+        id: entry.id,
+        policy: entry.policy,
+        outcome: entry.outcome,
+        reasonCode: entry.reasonCode,
+        summary: entry.summary,
+      })),
+      diagnostics: decision.diagnostics.map(({ reasonCode, detail }) => ({ reasonCode, detail })),
+      graderSurfaces: decision.integrity.changedGraderSurfaces,
+      dependencies: decision.environment.dependencies,
+      redaction: evaluated.redaction,
+      elapsedMs: Math.round(performance.now() - started),
+      evidence: {
+        appended: decision.evidence.persisted === true,
+        evidenceId: reference?.evidenceId ?? null,
+        storeRoot: reference?.storeRoot ?? evaluated.store.root ?? null,
+        notRecorded: reference?.notRecorded ?? null,
+        reasonCode: reference?.reasonCode ?? null,
+      },
+      limit: CHECK_LIMIT,
     },
     mutation: null,
   };
@@ -2424,6 +2591,7 @@ const operateSync = async ({ repositoryRoot, environment, selector, confirmation
 const OPERATIONS = Object.freeze({
   activate: operateActivate,
   status: operateStatus,
+  check: operateCheck,
   locks: operateLocks,
   prune: operatePrune,
   repair: operateRepair,
@@ -2584,6 +2752,74 @@ const renderStatus = (observation) => [
   line('repaired', observation.repaired),
   line('mutations', observation.mutations.length),
   line('next', observation.next.instruction),
+];
+
+/** What a check did with its decision, in the store's own words (`RISK-010`). */
+const renderEvidence = (evidence) => {
+  if (evidence.appended) {
+    return `appended ${evidence.evidenceId} to ${evidence.storeRoot}`;
+  }
+
+  if (evidence.notRecorded === 'passing-not-recorded') {
+    return 'not appended — a passing check records nothing';
+  }
+
+  if (evidence.notRecorded === 'no-change-to-record') {
+    return 'not appended — nothing changed, so there is nothing to record';
+  }
+
+  return `not appended (${evidence.reasonCode ?? 'unknown'}) — the store at ${evidence.storeRoot ?? 'an unresolved path'} did not record this decision`;
+};
+
+/** Which declared dependency roots the evaluated tree was given, and how (`TB-054`, `TB-057`). */
+const renderDependencyRecord = (record) => {
+  const strategy = (root) => (typeof record?.provisioning === 'string'
+    ? record.provisioning
+    : record?.provisioning?.[root] ?? 'unstated');
+  const roots = [
+    ...(record?.provided ?? []).map((root) => `${root} provided (${strategy(root)})`),
+    ...(record?.missing ?? []).map((root) => `${root} missing`),
+    ...(record?.refused ?? []).map((root) => `${root} refused`),
+  ];
+
+  return roots.length === 0 ? 'none declared' : roots.join(', ');
+};
+
+/** Which declared Sensitive inputs the redactor was armed for, by name only (`TB-045`). */
+const renderRedaction = (redaction) => {
+  const inputs = [
+    ...(redaction?.armed ?? []).map((input) => `${input.name} (${input.source}) armed`),
+    ...(redaction?.unresolved ?? []).map((input) => `${input.name} (${input.source}) unresolved`),
+  ];
+
+  return inputs.length === 0 ? 'none declared' : inputs.join(', ');
+};
+
+const renderCheck = (observation) => [
+  line('scope', `${observation.scope} (${observation.describes})`),
+  line('snapshot', observation.snapshot.id === null
+    ? `none (${observation.snapshot.kind}: nothing changed against ${observation.snapshot.baseRevision})`
+    : `${observation.snapshot.id} (${observation.snapshot.kind})`),
+  line('evaluation', observation.evaluationId),
+  line('outcome', observation.outcome),
+  line('authorization', observation.authorization),
+  line('checks', observation.checks.length),
+  ...observation.checks.map((entry) => `  - [${entry.policy}] ${entry.summary}`),
+  line('diagnostics', observation.diagnostics.length),
+  ...observation.diagnostics.map((diagnostic) => `  - ${diagnostic.reasonCode}: ${diagnostic.detail}`),
+  line('grader surfaces', observation.graderSurfaces.length),
+  ...observation.graderSurfaces.map(
+    (surface) => `  - ${surface.kind} ${surface.path}${surface.checkId === null ? '' : ` (${surface.checkId})`}`,
+  ),
+  line('dependency roots', renderDependencyRecord(observation.dependencies)),
+  line('sensitive inputs', renderRedaction(observation.redaction)),
+  ...(observation.redaction?.environmentFiles ?? []).length === 0
+    ? []
+    : [line('environment files', observation.redaction.environmentFiles
+      .map((file) => `${file.path} (${file.status})`).join(', '))],
+  line('elapsed', `${observation.elapsedMs} ms`),
+  line('evidence', renderEvidence(observation.evidence)),
+  line('limit', observation.limit),
 ];
 
 const renderLocks = (observation, document) => [
@@ -2769,6 +3005,7 @@ const renderSync = (observation, document) => {
 const RENDERERS = Object.freeze({
   activate: renderActivate,
   status: renderStatus,
+  check: renderCheck,
   locks: renderLocks,
   prune: renderPrune,
   repair: renderRepair,
@@ -2807,9 +3044,14 @@ export const renderDocument = (document) => [
   `gate ${document.command}${document.mutation === null ? '' : ` ${CONFIRMABLE_COMMANDS[document.command]}`}`,
   line('repository', document.repository.root ?? 'unresolved'),
   ...RENDERERS[document.command](document.observation, document),
-  ...(document.mutation === null
-    ? ['preview: nothing was written, nothing was repaired, and nothing was removed.']
-    : renderMutation(document.mutation)),
+  // A check is not a preview of a write: it may append a decision that did
+  // not pass, and its own `evidence:` and `limit:` lines say what it did and
+  // what it is, so the preview sentence would be false there (`TB-061`).
+  ...(document.command === 'check'
+    ? []
+    : (document.mutation === null
+      ? ['preview: nothing was written, nothing was repaired, and nothing was removed.']
+      : renderMutation(document.mutation))),
   document.trustBoundary.statement,
   '',
 ].join('\n');

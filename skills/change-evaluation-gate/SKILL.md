@@ -138,9 +138,9 @@ that executable is on the path, or run this installed skill's own
 `scripts/gate.mjs` with Node. Resolve that script beside the `SKILL.md` you are
 reading rather than assuming a path: an installed skill sits wherever the client
 placed it, so the same literal path does not hold across projects. The command
-is `activate`, `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
-`uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the same document
-a person is shown.
+is `activate`, `status`, `check`, `locks`, `prune`, `repair`, `update`,
+`deactivate`, `uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the
+same document a person is shown.
 
 `git gate status` reconciles every control surface the receipt pinned — the
 configuration included, through the same observation the commit runner makes —
@@ -162,7 +162,17 @@ Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
 
-**Every command previews and writes nothing.** To perform one, run it again
+To learn whether the work passes now, run `git gate check` for the working tree
+or `git gate check --staged` for what the next commit would grade — never forge
+a client payload into `gate-preflight.mjs`. It runs the evaluation the hooks
+run and prints every check's outcome and reason code, the outcome, and
+`authorization: not-authoritative`; exit status is `0` passed, `1` failed or
+unverified, `2` could not run. It is a preview of a hook's answer, not a
+decision: it authorizes nothing, spends no bypass grant or client loop budget,
+and the commit is still graded by its hook. A passing check records nothing; one
+that did not pass appends its decision and prints where.
+
+**Every other command previews and writes nothing.** To perform one, run it again
 naming the token the preview printed: `gate repair --confirm <token>`,
 `gate locks --recover <token>`, and so on. No flag previews and confirms in one
 invocation, no `--yes` or `--force` exists, and a confirmation naming a preview

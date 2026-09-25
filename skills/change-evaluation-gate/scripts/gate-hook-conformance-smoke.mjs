@@ -41,6 +41,13 @@
  *    `integrity-drift` and the drifted surface, the unprovided root, and the
  *    changed Grader surface, and lists no check as a result (AC-SEC-001,
  *    NFR-OPER-001, FR-EVAL-009, FR-ADAPT-005, TB-064).
+ * 8. `operator-check` — on a real activated clone, the packaged `gate check`
+ *    program and the real packaged preflight agree about one working tree:
+ *    the same check outcomes and the same snapshot identity, `not-authoritative`,
+ *    exit `1` for the failing tree; `gate check --staged` and the real
+ *    authoritative runner agree about the index the same way; and a passing
+ *    check appends no Evidence (AC-EVAL-001, AC-EVAL-006, NFR-REL-001,
+ *    SG-EVAL-001, RISK-010, TB-061).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime — in particular no hook manager and no desktop client
@@ -1208,6 +1215,111 @@ const driftedChannel = async () => {
   return { name: 'drifted-channel', ok: findings.length === 0, findings };
 };
 
+/** The packaged operator command a maintainer runs. */
+const PACKAGED_OPERATOR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gate.mjs');
+
+/** Run `gate check` as a maintainer does: a real child process, answering in `--json`. */
+const runPackagedCheck = async (root, args = []) => {
+  const run = await runFile(process.execPath, [PACKAGED_OPERATOR, 'check', ...args, '--json'], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).then(
+    ({ stdout }) => ({ exitCode: 0, stdout }),
+    (error) => ({ exitCode: error.code, stdout: error.stdout ?? '' }),
+  );
+
+  return { exitCode: run.exitCode, document: JSON.parse(run.stdout || 'null') };
+};
+
+/** The decision the last Evidence append recorded, as a runner left it. */
+const lastRecordedDecision = async (root) => {
+  const store = await storeFor(root);
+  const log = await store.readLog();
+
+  return log.length === 0 ? null : (await store.readEnvelope(log.at(-1).evidenceId))?.decision ?? null;
+};
+
+const outcomes = (checks) => JSON.stringify((checks ?? []).map((entry) => [entry.id, entry.outcome, entry.reasonCode]));
+
+/**
+ * TB-061 — the terminal answer is the hook's answer.
+ *
+ * A maintainer who wanted to know whether the tree passed used to forge a
+ * client payload into the preflight program. `gate check` asks through the one
+ * evaluation both call, so on one tree the two must agree — proved here by
+ * running both real programs against the same real clone, and the staged
+ * scope against the real authoritative runner.
+ */
+const operatorCheck = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-hook-conformance-check-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), settledConfiguration(), 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'activated');
+  await publishReceipt(root);
+
+  // The working tree, both ways.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await runPackagedPreflight({ root, temporaryRoot: await temporaryDirectory('gate-hook-conformance-check-tmp-') });
+
+  const preflight = await lastRecordedDecision(root);
+  const worktree = await runPackagedCheck(root);
+  const observed = worktree.document?.observation ?? null;
+
+  check(findings, preflight !== null, 'The real preflight recorded no decision for a failing tree.');
+  check(findings, worktree.exitCode === 1, `gate check did not exit 1 for a failing tree: ${worktree.exitCode}.`);
+  check(findings, observed?.authorization === 'not-authoritative', `gate check claimed ${observed?.authorization}.`);
+  check(
+    findings,
+    outcomes(observed?.checks) === outcomes(preflight?.checks),
+    `gate check and the preflight disagree about the worktree: ${outcomes(observed?.checks)} against ${outcomes(preflight?.checks)}.`,
+  );
+  check(
+    findings,
+    typeof observed?.snapshot?.id === 'string' && observed.snapshot.id === preflight?.snapshot?.id,
+    `gate check graded snapshot ${observed?.snapshot?.id}, the preflight ${preflight?.snapshot?.id}.`,
+  );
+
+  // The index, both ways: the check's answer is the commit runner's.
+  await git(root, ['add', '--all']);
+
+  const staged = await runPackagedCheck(root, ['--staged']);
+  const hook = await runHook({ cwd: root, environment: gitEnvironment() });
+  const committed = await lastRecordedDecision(root);
+
+  check(findings, hook.reasonCode === 'denied', `The authoritative runner did not deny the staged breakage: ${hook.reasonCode}.`);
+  check(findings, staged.exitCode === 1, `gate check --staged did not exit 1: ${staged.exitCode}.`);
+  check(findings, staged.document?.observation?.snapshot?.kind === 'git-index', 'gate check --staged did not grade the index.');
+  check(
+    findings,
+    staged.document?.observation?.snapshot?.id === committed?.snapshot?.id
+      && outcomes(staged.document?.observation?.checks) === outcomes(committed?.checks),
+    `gate check --staged and the commit runner disagree: ${staged.document?.observation?.snapshot?.id} against ${committed?.snapshot?.id}.`,
+  );
+
+  // A passing check appends nothing (RISK-010).
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+
+  const appended = (await (await storeFor(root)).readLog()).length;
+  const passing = await runPackagedCheck(root);
+
+  check(findings, passing.exitCode === 0, `gate check did not exit 0 for a passing tree: ${passing.exitCode}.`);
+  check(
+    findings,
+    (await (await storeFor(root)).readLog()).length === appended,
+    'A passing gate check appended Evidence.',
+  );
+
+  return { name: 'operator-check', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1221,6 +1333,7 @@ const main = async () => {
       await desktopRegistration(),
       await settledTurn(),
       await driftedChannel(),
+      await operatorCheck(),
     ];
   } finally {
     for (const root of temporaryRoots) {

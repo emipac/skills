@@ -14,16 +14,18 @@
  * `TB-040` shipped the operations that write nothing; `TB-041` added the ones
  * that do; `TB-042` added `activate`, which until then had no entrypoint at all
  * and was reachable only by writing a throwaway script against
- * `activation.mjs`. Every command here previews by default and performs only
- * when a separate later invocation names the token of a preview that still
- * describes this clone — there is no flag that does both, and no token that
- * anything bypasses. `gate fix` remains a separate contract and is refused here
- * by name.
+ * `activation.mjs`. Every command here but `status` and `check` previews by
+ * default and performs only when a separate later invocation names the token
+ * of a preview that still describes this clone — there is no flag that does
+ * both, and no token that anything bypasses. `TB-061` added `check`, which
+ * evaluates the tree as a hook would and authorizes nothing. `gate fix`
+ * remains a separate contract and is refused here by name.
  *
  * Usage:
  *   node .../gate.mjs activate   [--client <id>] [--actor <name>]
  *                                [--resume <transaction-id>] [--confirm <token>] [--json]
  *   node .../gate.mjs status     [--json]
+ *   node .../gate.mjs check      [--staged] [--json]
  *   node .../gate.mjs locks      [--recover <token>] [--json]
  *   node .../gate.mjs prune      [selector] [--confirm <token>] [--json]
  *   node .../gate.mjs repair     [--hook-script <path>] [--confirm <token>] [--json]

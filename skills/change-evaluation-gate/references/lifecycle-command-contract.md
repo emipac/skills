@@ -36,6 +36,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | candidate release | `inspectRelease({ receipt, distribution })` | nothing |
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
 | `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
+| `gate check` | `evaluateActivatedTree(...)` (`preflight-runner.mjs`), the one evaluation the preflight calls | nothing under the clone; one Evidence append when the decision did not pass |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
 | `gate deactivate` | `deactivateGate(...)` | withdraws registrations and the receipt |
 | `gate uninstall` | `uninstallGate(...)` | unchanged project assets only |
@@ -68,6 +69,7 @@ Every lifecycle operation is reached here:
 
 ```
 gate status     [--json]
+gate check      [--staged] [--json]
 gate locks      [--recover <token>] [--json]
 gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
 gate repair     [--hook-script <path>] [--confirm <token>] [--json]
@@ -85,7 +87,8 @@ preview printed. There is no flag that does both: `--confirm` with no token, and
 `--preview` given alongside a confirmation, are both refused as
 `preview-and-confirm-refused` and say why. That does not stop a caller running
 both commands back to back, and it is not meant to — it means no single command
-destroys anything. `status` has no confirmed form at all.
+destroys anything. `status` and `check` have no confirmed form at all: neither
+mutates anything under the clone, so neither has anything to confirm.
 
 **The preview is re-derived, never carried.** Every invocation rebuilds the
 preview from the filesystem as it is right now, and the operator's token is
@@ -512,6 +515,89 @@ here: that is the commit-time evaluation of a policy-changing commit under the
 old policy, a separate seam in the runners and its own contract. And like
 every surface here, it resists nobody (`SG-TRUST-001`).
 
+## `gate check` (`TB-061`)
+
+A maintainer asks the Gate what the working tree — or, with `--staged`, the
+staged index — would evaluate to, and reads the decision a hook would produce,
+without committing and without composing a client payload by hand. Until this,
+the only ways to ask were a real commit, the client's own hook on the client's
+schedule, or a forged client payload piped into `gate-preflight.mjs`, which
+claimed to be a client that was not running, spent that client's loop guard,
+and answered through its feedback channel (for Cursor, an empty string on a
+pass).
+
+**It is an operator act, not a client event.** No payload, no adapter, no
+session, no loop guard, and no feedback channel. It calls
+`evaluateActivatedTree` — the evaluation the preflight has always run, lifted
+out of `runPreflight` so both call it: it resolves the configuration, the
+receipt, the pinned runners, and the Evidence store through the authoritative
+runner's helpers, observes the control surface, answers an empty change set
+without materializing anything, and otherwise materializes the snapshot and
+calls `evaluate`. `runPreflight` is now payload → adapter → that function →
+feedback, byte-identical in what it answers; `gate check` is selectors → that
+function → this surface's rendering. The function takes the request (the
+caller owns its snapshot kind, purpose, and invoking identity), the identity
+the store records, the seams `runPreflight` always accepted, and
+`recordPassing`, and returns the decision, the store, the contract's findings
+about the decision, and the redaction summary — or the reason code and detail
+the authoritative runner would deny with.
+
+**Two scopes, explicit.** `gate check` asks the preflight's question — the
+working tree against `HEAD`, purpose `regression-only`. `gate check --staged`
+asks the commit's — the index against `HEAD`, purpose
+`change-acceptance-and-regression`. Neither is inferred from the other, the
+rendering names which was asked, and a tree whose index and worktree differ
+yields two snapshot identities.
+
+**Not authoritative, and never allows anything** (`FR-EVAL-001`). Its role is
+`preflight`, so its decision is `not-authoritative` by construction. It reads
+no bypass grant and consumes none, and nothing it writes is consulted by any
+hook. Its invoking identity is `gate-check` on surface `operator-terminal`,
+which no adapter declares; a client's loop guard counts its own evaluation
+identity, and a check's identity is never one, so a check can neither consume
+nor reset a client's budget (`FR-ADAPT-005`).
+
+**What it prints.** The scope, the snapshot identity and kind, the evaluation
+identity, the outcome, `authorization: not-authoritative`, every check with its
+policy, outcome, reason code, and the summary the hook prints for it, every
+diagnostic, every changed Grader surface, the dependency record (which declared
+roots were provided, by which strategy, and which were missing or refused), the
+declared Sensitive input names the redactor was armed for or could not arm
+(names and sources only), elapsed time, whether evidence was appended and
+where, and a `limit:` line stating that it authorizes nothing. `--json` is the
+same document. It prints no `preview:` sentence: it is not a preview of a
+write, and the `evidence:` line states what it did.
+
+**Evidence.** A passing check appends nothing (`evidence: not appended — a
+passing check records nothing`); a check that did not pass appends its
+decision through the store's own append, with the `evaluation` Lifecycle event
+every append records, and prints the evidence identity and store root
+(`RISK-010`). An empty change set records nothing when it passes, exactly as the
+preflight's does. `--staged` follows the same rule rather than the commit
+runner's record-everything rule: the commit runner records every decision
+because its authorization rests on that record, and a check authorizes
+nothing. This differs from the preflight in one respect, stated rather than
+hidden: the preflight records every decision about a changed tree, passing
+ones included, because that record is what bounds its client's loop; a check
+has no loop to bound, so it records only what did not pass.
+
+**Exit status.** `0` passed, `1` failed or unverified, `2` could not run — an
+unactivated clone, an unreadable policy, a runner pin that drifted (named with
+its remedy), a store that cannot be opened, an evaluation that crashed
+(`runner-failed`), or a decision the evaluation contract rejects
+(`decision-malformed`).
+
+**Footprint.** It writes nothing under the clone but that append. Like the
+preflight, it creates and removes an execution root under the operating
+system's temporary directory and may reclaim abandoned ones there. It takes no
+`--confirm`, and `--confirm` is refused as a selector it does not take.
+
+**Honest limits.** It evaluates under no client's invocation timeout — the
+policy's total budget bounds its checks, as it bounds the commit's. It answers
+for the tree as it is now; a tree that changes before the commit is graded
+again by the hook, and a passing check is never evidence that a commit will
+pass.
+
 ## Recovery
 
 Drift changes only through a confirmed `gate repair` or a new Activation
@@ -571,6 +657,27 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   a foreign `gate` alias is never named; every control surface and runner-pin
   reason code has a remedy entry; no module but the table names a recovery
   inline; and repair's scope is unchanged beside configuration drift.
+- `tests/gate-check-command.test.mjs` (`TB-061`) — `gate check` against real
+  clones: the check outcomes and snapshot identity the preflight recorded for
+  the same working tree, `not-authoritative`, and the exit status; `--staged`
+  distinguishable, sharing no snapshot identity with a differing worktree, and
+  matching the snapshot and check summaries the commit runner produced; a
+  missing prerequisite rendered `unverified` with the hook's own line; three
+  runs on an unchanged tree giving three full answers while the preflight's
+  loop budget stays untouched; a passing check appending nothing and a failing
+  one appending exactly its decision and naming it; an unactivated clone and a
+  `--confirm` refused; `--json` mirroring the rendering; and a commit after a
+  passing check still graded by the hook, with nothing the check wrote read by
+  it.
+- `npm run gate-hook-conformance-smoke`, scenario `operator-check` (`TB-061`) —
+  the real packaged `gate check` and the real packaged preflight agree on one
+  working tree's check outcomes and snapshot identity, `gate check --staged`
+  and the real authoritative runner agree on the index, and a passing check
+  appends nothing. `npm run gate-activation-smoke`, scenario
+  `check-then-commit` — on a clone the packaged command activated, a commit
+  after a passing `gate check --staged` is still evaluated by the registered
+  hook against the snapshot the check previewed, and a commit after a failing
+  one is really blocked.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle

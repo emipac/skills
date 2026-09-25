@@ -26,6 +26,12 @@
  *    receipt's trust record claims only what a command surface can prove, and
  *    the convenience shortcut lands in that clone's own `.git/config` and no
  *    tracked file (`AC-LIFE-002`, `FR-LIFE-003`, `FR-LIFE-006`, `SG-TRUST-001`).
+ *    `check-then-commit` — on a clone the packaged command activated, the
+ *    packaged `gate check --staged` answers what the hook then decides: a
+ *    passing check appends no Evidence and the commit after it is still
+ *    evaluated by the registered hook, which records its own decision; a
+ *    failing check is followed by a commit the hook really blocks
+ *    (FR-EVAL-001, AC-EVAL-001, SG-EVAL-001, RISK-010, TB-061).
  * 4. `command-driven-activation-failure` — the same command against a clone
  *    whose `pre-commit` the gate can neither own nor compose into refuses at
  *    `hook-chain-validation`, writes no receipt, registers no shortcut, changes
@@ -775,6 +781,90 @@ const commandDrivenActivation = async () => {
   );
 
   return { name: 'command-driven-activation', ok: findings.length === 0, findings };
+};
+
+/**
+ * TB-061 — asking is not committing.
+ *
+ * `gate check` must never be the thing that decides a commit: nothing it
+ * produces is consulted by the hook, and a commit after a passing check is
+ * graded again, by the registered program, against the index it grades
+ * (`FR-EVAL-001`). This proves that against real registered hooks and real
+ * `git commit`, on a clone the packaged command activated.
+ */
+const checkThenCommit = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const preview = JSON.parse((await runPackagedCommand(root, ['activate', '--json'])).stdout || '{}');
+  const confirmed = JSON.parse((await runPackagedCommand(root, [
+    'activate', '--confirm', preview.observation?.confirmationToken ?? '', '--json',
+  ])).stdout || '{}');
+
+  check(findings, confirmed.mutation?.performed === true, `The fixture did not activate: ${JSON.stringify(confirmed.mutation)}.`);
+
+  const store = await storeFor(root);
+  const logLength = async () => (await store.readLog()).length;
+  const checkStaged = async () => {
+    const run = await runPackagedCommand(root, ['check', '--staged', '--json']);
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || 'null') };
+  };
+
+  // A passing check, then the commit: the check appends nothing, and the
+  // commit is still evaluated by the hook, which appends its own decision.
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const beforeCheck = await logLength();
+  const passing = await checkStaged();
+
+  check(findings, passing.exitCode === 0, `A passing staged check exited ${passing.exitCode}.`);
+  check(
+    findings,
+    passing.document?.observation?.authorization === 'not-authoritative',
+    `gate check claimed ${passing.document?.observation?.authorization}.`,
+  );
+  check(findings, await logLength() === beforeCheck, 'A passing gate check appended Evidence.');
+
+  const allowed = await attemptCommit(root, 'a change gate check said would pass');
+
+  check(findings, allowed.failed === false, `The commit after a passing check was blocked: ${allowed.output}`);
+  check(
+    findings,
+    await logLength() === beforeCheck + 1,
+    'The commit after a passing check was not evaluated by the hook: it recorded no decision.',
+  );
+
+  const committed = await store.readEnvelope((await store.readLog()).at(-1).evidenceId);
+
+  check(
+    findings,
+    committed?.decision?.authorization === 'allow'
+      && committed?.decision?.snapshot?.id === passing.document?.observation?.snapshot?.id,
+    `The hook did not grade the snapshot gate check previewed: ${committed?.decision?.snapshot?.id} against ${passing.document?.observation?.snapshot?.id}.`,
+  );
+
+  // A failing check, then the commit: the hook blocks what the check said fails.
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const failing = await checkStaged();
+  const blocked = await attemptCommit(root, 'a change gate check said would fail');
+
+  check(findings, failing.exitCode === 1, `A failing staged check exited ${failing.exitCode}.`);
+  check(findings, blocked.failed === true, 'The hook allowed a commit gate check said would fail.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A blocked commit still moved HEAD.',
+  );
+
+  return { name: 'check-then-commit', ok: findings.length === 0, findings };
 };
 
 /**
@@ -3107,6 +3197,7 @@ const main = async () => {
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
       await commandDrivenActivation(),
+      await checkThenCommit(),
       await commandDrivenDesktopActivation(),
       await printedInstructionStillBindsTheClone(),
       await commandDrivenActivationFailure(),

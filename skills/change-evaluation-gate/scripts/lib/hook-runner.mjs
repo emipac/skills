@@ -938,19 +938,33 @@ export const openStore = async ({
     repositoryRoot: repository.root,
   });
 
+  const redactor = createRedactor({
+    secrets: runtimeInputs.inputs,
+    environmentFiles: runtimeInputs.files,
+  });
+
   try {
     const store = await openStoreSeam({
       repositoryRoot: repository.root,
       gitCommonDirectory: activation.gitCommonDirectory,
       evidencePolicy: configuration.policy?.evidence ?? null,
       identity,
-      redactor: createRedactor({
-        secrets: runtimeInputs.inputs,
-        environmentFiles: runtimeInputs.files,
-      }),
+      redactor,
     });
 
-    return { ok: true, store, runtimeInputs: runtimeInputs.inputs };
+    return {
+      ok: true,
+      store,
+      runtimeInputs: runtimeInputs.inputs,
+      // What the redactor was armed with, by name and source only — the same
+      // summary an envelope records (`TB-045`, `TB-059`) — for a caller that
+      // reports an evaluation without appending one (`TB-061`). No value.
+      redaction: {
+        armed: redactor.secrets.map(({ name, source }) => ({ name, source })),
+        unresolved: redactor.unresolved.map(({ name, source }) => ({ name, source })),
+        environmentFiles: redactor.environmentFiles,
+      },
+    };
   } catch (error) {
     return {
       ok: false,

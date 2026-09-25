@@ -128,6 +128,175 @@ const timesAlreadyRecorded = async (store, evaluationId) => {
 };
 
 /**
+ * Evaluate one request against this activated clone, exactly as the preflight
+ * always has — and, since `TB-061`, exactly as `gate check` does, because this
+ * is the one function both call.
+ *
+ * It resolves the configuration, the Activation receipt, the pinned runners,
+ * and the Evidence store through the authoritative runner's own helpers,
+ * observes the control surface, answers an empty change set without
+ * materializing anything, and otherwise materializes the requested snapshot —
+ * the working tree or the index, whichever `request.change.kind` names — and
+ * calls `evaluate` against it. Neither caller composes an evaluation of its
+ * own, so the two cannot come to disagree about what a tree evaluates to
+ * (`NFR-REL-001`, `SG-EVAL-001`).
+ *
+ * What it takes:
+ * - `request`: a complete evaluation request; the caller owns its invocation
+ *   identity, its snapshot kind, and its purpose.
+ * - `client`: the identity the Evidence store records beside what it appends.
+ * - `recordPassing`: `false` asks `evaluate` not to append a passing decision
+ *   (`RISK-010`); the preflight leaves it `true`, as it always recorded.
+ * - `environment`, `compose`, `evaluate`, `openEvidenceStore`: the seams
+ *   `runPreflight` has always accepted, passed through unchanged.
+ *
+ * It never throws for a clone it cannot evaluate: it returns the reason code
+ * and detail the authoritative runner would deny with, and the caller decides
+ * how to say so. An evaluation that itself throws propagates, as it always did.
+ *
+ * @param {object} request versioned evaluation request
+ * @param {object} options the caller's seams, store identity, and retention
+ * @returns {Promise<{ ok: true, decision: object, store: object, findings: object[], redaction: object }
+ *   | { ok: false, reasonCode: string, detail: string }>}
+ */
+export const evaluateActivatedTree = async (request, {
+  environment = process.env,
+  compose = composeArguments,
+  evaluate: evaluateSeam = evaluate,
+  openEvidenceStore: openStoreSeam = openEvidenceStore,
+  client,
+  recordPassing = true,
+} = {}) => {
+  const refused = ({ reasonCode, detail }) => ({ ok: false, reasonCode, detail });
+  const configuration = await resolveConfiguration(request.repository.root);
+
+  if (!configuration.ok) {
+    return refused(configuration);
+  }
+
+  const activation = await resolveReceipt(request.repository.root);
+
+  if (!activation.ok) {
+    return refused(activation);
+  }
+
+  const { checks, errors } = gateChecksFromConfiguration(configuration.configuration);
+
+  if (errors.length > 0) {
+    return refused({
+      reasonCode: 'configuration-invalid',
+      detail: `the configured verification commands cannot be evaluated: ${errors.map((issue) => `${issue.path}: ${issue.message}`).join(' ')}`,
+    });
+  }
+
+  const shortcut = shortcutOf(request.repository.root);
+  const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose, shortcut });
+
+  if (!runners.ok) {
+    return refused(runners);
+  }
+
+  const store = await openStore({
+    repository: { root: request.repository.root },
+    activation,
+    configuration,
+    environment,
+    openStoreSeam,
+    client,
+  });
+
+  if (!store.ok) {
+    return refused(store);
+  }
+
+  // The same contract the authoritative runner judges by, consulted at the
+  // earliest point this function owns the decision. A decision that runner
+  // would refuse is not a set of check results either caller may render as
+  // though someone had produced them (`AC-EVAL-002`, `NFR-REL-003`).
+  const judged = (decision) => ({
+    ok: true,
+    decision,
+    store: store.store,
+    findings: contractFindings(decision),
+    redaction: store.redaction,
+  });
+
+  const gateInputs = {
+    runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
+    providerVersions: { configuration: '1.0.0' },
+    checks,
+    policy: configuration.policy,
+    evidenceStore: store.store,
+    // The same observation the authoritative runner makes, from the same
+    // owner, so the two can never disagree about what this machine is
+    // (`SG-OWNER-001`). Under preflight the same drift presents as
+    // `unverified` and `not-authoritative`: it warns a maintainer, and it
+    // blocks nothing (`SG-SUPPORT-001`).
+    controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
+    // How the drift diagnostic names the Gate on this clone (`TB-065`).
+    remedyShortcut: shortcut,
+  };
+
+  // Is there a subject at all? This runner is registered on the end of every
+  // turn, so most of the turns it answers are turns where the maintainer
+  // asked a question and nothing in the worktree moved. Applicability is a
+  // function of the changed paths alone, so an empty list decides the whole
+  // evaluation before a snapshot could be read by anything — and the copy,
+  // its hashing, and its removal are simply not made (`TB-039`,
+  // `NFR-PERF-001`). Asked fresh every turn: nothing is remembered from the
+  // last one, and this narrows only when this runner does the work, never
+  // what it decides.
+  if ((await listChangedPaths(request.repository.root, request.change.kind)).length === 0) {
+    return judged(await evaluateWithoutSubject(request, gateInputs));
+  }
+
+  // The same reclamation the authoritative runner performs, from the same
+  // owner: either runner's turn collects what any interrupted run abandoned,
+  // and neither says a word about it (TB-038). A turn that materializes
+  // nothing has nothing to reclaim beside it and nothing to reclaim for.
+  // What was reclaimed is recorded on the evidence log entry this turn
+  // appends, when it appends one (`TB-058`).
+  const housekeeping = await sweepOrphanedExecutionRoots();
+
+  const executionRoot = await createExecutionRoot('gate-preflight-exec-');
+  // Computed once and shared by execution and proof, for the reason the
+  // authoritative runner shares it: the path a check would find a program on
+  // is the path it runs with (`TB-044`).
+  const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
+
+  try {
+    // The same provisioning the authoritative runner performs, from the same
+    // owner and the same resolution `openStore` made: the approved inputs
+    // the redactor was armed with are the ones the check receives (`TB-059`).
+    const provisioned = await provisionRuntimeInputs({
+      activation, runtimeInputs: store.runtimeInputs, executionRoot,
+    });
+    const executor = createBoundedExecutor({
+      totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
+      resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
+      environment,
+      captureOutput: true,
+      runtimePath,
+      runtimeInputs: provisioned.environment,
+    });
+
+    return judged(await evaluateSeam(request, {
+      ...gateInputs,
+      executionRoot,
+      // The same proof the authoritative runner binds, from the same owner:
+      // the surface a maintainer's agent reads must not describe an
+      // environment fault as a finding about their code (`TB-044`).
+      resolvePrerequisite: createPrerequisiteResolver({ searchPath: runtimePath, environment }),
+      execute: executor.execute,
+      housekeeping,
+      recordPassing,
+    }));
+  } finally {
+    await releaseExecutionRoot(executionRoot);
+  }
+};
+
+/**
  * Evaluate one native payload as a worktree preflight for the named adapter,
  * persisting evidence through the same store wiring the authoritative runner
  * uses (FR-EVID-001).
@@ -206,40 +375,15 @@ export const runPreflight = async ({
   // belongs (`FR-ADAPT-005`).
   let rejectedFindingCount = null;
 
+  // The one evaluation `gate check` also calls (`TB-061`). What surrounds it
+  // here — the payload, the adapter, the loop guard, and the feedback channel —
+  // is this runner's own; the evaluation is not.
   const evaluateActivated = async (request) => {
-    const configuration = await resolveConfiguration(request.repository.root);
-
-    if (!configuration.ok) {
-      throw new Error(configuration.detail);
-    }
-
-    const activation = await resolveReceipt(request.repository.root);
-
-    if (!activation.ok) {
-      throw new Error(activation.detail);
-    }
-
-    const { checks, errors } = gateChecksFromConfiguration(configuration.configuration);
-
-    if (errors.length > 0) {
-      throw new Error(
-        `the configured verification commands cannot be evaluated: ${errors.map((issue) => `${issue.path}: ${issue.message}`).join(' ')}`,
-      );
-    }
-
-    const shortcut = shortcutOf(request.repository.root);
-    const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose, shortcut });
-
-    if (!runners.ok) {
-      throw new Error(runners.detail);
-    }
-
-    const store = await openStore({
-      repository: { root: request.repository.root },
-      activation,
-      configuration,
+    const evaluated = await evaluateActivatedTree(request, {
       environment,
-      openStoreSeam,
+      compose,
+      evaluate: evaluateSeam,
+      openEvidenceStore: openStoreSeam,
       client: {
         id: adapter.id,
         surface: adapter.surface,
@@ -247,98 +391,17 @@ export const runPreflight = async ({
       },
     });
 
-    if (!store.ok) {
-      throw new Error(store.detail);
+    if (!evaluated.ok) {
+      throw new Error(evaluated.detail);
     }
 
-    openedStore = store.store;
+    openedStore = evaluated.store;
 
-    // The same contract the authoritative runner judges by, consulted at the
-    // earliest point this runner owns the decision. A decision that runner
-    // would refuse is not a set of check results this surface may render as
-    // though someone had produced them (`AC-EVAL-002`, `NFR-REL-003`).
-    const judged = (decision) => {
-      const findings = contractFindings(decision);
-
-      if (findings.length > 0) {
-        rejectedFindingCount = findings.length;
-      }
-
-      return decision;
-    };
-
-    const gateInputs = {
-      runnerVersion: activation.receipt?.runtime?.runnerVersion ?? 'change-evaluation-gate/unpinned',
-      providerVersions: { configuration: '1.0.0' },
-      checks,
-      policy: configuration.policy,
-      evidenceStore: store.store,
-      // The same observation the authoritative runner makes, from the same
-      // owner, so the two can never disagree about what this machine is
-      // (`SG-OWNER-001`). Under preflight the same drift presents as
-      // `unverified` and `not-authoritative`: it warns a maintainer, and it
-      // blocks nothing (`SG-SUPPORT-001`).
-      controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
-      // How the drift diagnostic names the Gate on this clone (`TB-065`).
-      remedyShortcut: shortcut,
-    };
-
-    // Is there a subject at all? This runner is registered on the end of every
-    // turn, so most of the turns it answers are turns where the maintainer
-    // asked a question and nothing in the worktree moved. Applicability is a
-    // function of the changed paths alone, so an empty list decides the whole
-    // evaluation before a snapshot could be read by anything — and the copy,
-    // its hashing, and its removal are simply not made (`TB-039`,
-    // `NFR-PERF-001`). Asked fresh every turn: nothing is remembered from the
-    // last one, and this narrows only when this runner does the work, never
-    // what it decides.
-    if ((await listChangedPaths(request.repository.root, request.change.kind)).length === 0) {
-      return judged(await evaluateWithoutSubject(request, gateInputs));
+    if (evaluated.findings.length > 0) {
+      rejectedFindingCount = evaluated.findings.length;
     }
 
-    // The same reclamation the authoritative runner performs, from the same
-    // owner: either runner's turn collects what any interrupted run abandoned,
-    // and neither says a word about it (TB-038). A turn that materializes
-    // nothing has nothing to reclaim beside it and nothing to reclaim for.
-    // What was reclaimed is recorded on the evidence log entry this turn
-    // appends, when it appends one (`TB-058`).
-    const housekeeping = await sweepOrphanedExecutionRoots();
-
-    const executionRoot = await createExecutionRoot('gate-preflight-exec-');
-    // Computed once and shared by execution and proof, for the reason the
-    // authoritative runner shares it: the path a check would find a program on
-    // is the path it runs with (`TB-044`).
-    const runtimePath = runtimeSearchPath([...runners.resolved.values()]);
-
-    try {
-      // The same provisioning the authoritative runner performs, from the same
-      // owner and the same resolution `openStore` made: the approved inputs
-      // the redactor was armed with are the ones the check receives (`TB-059`).
-      const provisioned = await provisionRuntimeInputs({
-        activation, runtimeInputs: store.runtimeInputs, executionRoot,
-      });
-      const executor = createBoundedExecutor({
-        totalSeconds: configuration.policy?.budget?.total_seconds ?? null,
-        resolveExecutable: (command) => runners.resolved.get(commandOwner(checks, command)) ?? null,
-        environment,
-        captureOutput: true,
-        runtimePath,
-        runtimeInputs: provisioned.environment,
-      });
-
-      return judged(await evaluateSeam(request, {
-        ...gateInputs,
-        executionRoot,
-        // The same proof the authoritative runner binds, from the same owner:
-        // the surface a maintainer's agent reads must not describe an
-        // environment fault as a finding about their code (`TB-044`).
-        resolvePrerequisite: createPrerequisiteResolver({ searchPath: runtimePath, environment }),
-        execute: executor.execute,
-        housekeeping,
-      }));
-    } finally {
-      await releaseExecutionRoot(executionRoot);
-    }
+    return evaluated.decision;
   };
 
   const view = await runAdapterEvaluation({

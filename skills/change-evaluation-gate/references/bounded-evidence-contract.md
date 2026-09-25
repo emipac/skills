@@ -145,6 +145,22 @@ persisted, the append returns `unsafe-capture`, and the decision becomes
 `unverified` with the `sensitive-capture-unsafe` reason code. Safe handling that
 cannot be proved never produces a pass (`SG-SECRET-001`, `RISK-006`).
 
+## When a decision is not appended
+
+Every runner appends every decision it grades against a materialized snapshot:
+the commit runner because its authorization rests on the record, the preflight
+because the record is what bounds its client's loop. Two decisions are
+deliberately not appended, and each says why in `evidence.reference.notRecorded`
+with `persisted: false` and no `reasonCode`, so a reader can tell a decision
+never recorded from one whose append failed:
+
+| `notRecorded` | When |
+| --- | --- |
+| `no-change-to-record` | an empty change set that passed; nothing was materialized and nothing would be repeated (`TB-039`) |
+| `passing-not-recorded` | a passing decision whose caller passed `recordPassing: false` to `evaluate` — only `gate check`, which authorizes nothing and answers no client loop (`TB-061`, `RISK-010`) |
+
+A decision that did not pass is always appended.
+
 ## Pruning
 
 V1 never deletes evidence automatically. There is no retention job, no age

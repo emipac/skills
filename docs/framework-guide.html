@@ -1941,8 +1941,20 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
         configuration and all historical evidence survive it.
       </p>
 
+      <p class="cmd-label">Does it pass right now?</p>
+      <pre><code>git gate check                           # the working tree, as your desktop client's preflight sees it
+git gate check --staged                  # what the next commit would grade</code></pre>
+
       <p>
-        Every command follows one rule: <strong>it previews and writes nothing</strong> until you
+        It runs the same evaluation the hooks run — the same snapshot, the same pinned programs —
+        and prints the decision: every check with its reason code, the outcome, and
+        <code>authorization: not-authoritative</code>. No commit, no client, no loop budget spent,
+        and no hand-written client payload. A passing check records nothing; one that did not
+        pass appends its decision to the evidence store and prints where.
+      </p>
+
+      <p>
+        Every other command follows one rule: <strong>it previews and writes nothing</strong> until you
         run it again naming the token the preview printed. No flag previews and performs in one
         invocation, and there is no <code>--yes</code> or <code>--force</code>.
       </p>
@@ -1962,6 +1974,7 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
+            <tr><td><strong>check</strong></td><td>Evaluates the working tree — or with <code>--staged</code>, what the next commit would grade — exactly as the hook would, and prints every check's outcome and reason, the outcome, and <code>not-authoritative</code>. Exit <code>0</code> passed, <code>1</code> failed or unverified. Authorizes nothing; a passing check records nothing, a failing one appends its decision and says where. No token, because it changes nothing.</td></tr>
             <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12. With nothing to restore, its <code>next:</code> line names what does recover the clone.</td></tr>
             <tr><td><strong>sync</strong></td><td>Re-pins a changed <code>.agent-framework.yaml</code> under the adapters this clone already has, keeping every registration byte for byte. Its preview says whether the new policy is weaker than the one it replaces. Section 12.</td></tr>
             <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
@@ -1986,9 +1999,9 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         <p>
           <code>gate fix</code> is a separate contract and is refused here by name — an evaluation
           never rewrites your code, so applying a formatter's rewrite is its own explicit
-          operation. And there is no subcommand that evaluates the tree on demand: to find out
-          what the Gate thinks of your work right now, commit, or read the preflight your desktop
-          client sends.
+          operation. And <code>gate check</code> is not a decision: it tells you what the hook
+          would say about the tree as it is now, but only the commit's own hook decides, and it
+          evaluates the commit again whatever the check said.
         </p>
       </div>
     </section>
@@ -2268,9 +2281,11 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
 
       <h3>Some things you have to find out by doing them</h3>
       <p>
-        There is no command that reports what this machine can do before you commit to anything, and
-        no command that evaluates the tree on demand. You learn that a runner does not resolve here
-        when an activation preview refuses, and that a check fails when a commit is denied.
+        There is no command that reports what this machine can do before you commit to anything. You
+        learn that a runner does not resolve here when an activation preview refuses. Whether a
+        check fails you can ask before committing, once the clone is activated:
+        <code>git gate check</code> evaluates the tree as the hook would, and the commit is still
+        evaluated by the hook afterwards.
       </p>
 
       <h3>Two risks stay open</h3>

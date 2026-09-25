@@ -752,10 +752,22 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     dependencies: capture.dependencies,
   };
 
+  const decision = buildDecision(graded);
+  const store = dependencies.evidenceStore ?? null;
+
+  // A caller with no repetition to bound may decline to record a pass. Every
+  // runner records every graded decision; only the operator's `gate check`,
+  // which authorizes nothing and answers no client loop, declines — so a
+  // maintainer asking often grows the store only by what failed (`RISK-010`,
+  // `TB-061`). A decision that did not pass is always persisted.
+  if (dependencies.recordPassing === false && decision.outcome === 'passed') {
+    return notRecorded(decision, store, NOT_RECORDED_PASSING);
+  }
+
   return persistEvidence(
-    buildDecision(graded),
+    decision,
     {
-      store: dependencies.evidenceStore ?? null,
+      store,
       outputs: capturedOutputs,
       graded,
       housekeeping: dependencies.housekeeping ?? null,
@@ -769,6 +781,34 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
  * and failed, which carries a `reasonCode` instead (`AC-EVID-002`).
  */
 const NOT_RECORDED_NO_CHANGE = 'no-change-to-record';
+
+/**
+ * What it says when the caller declined to record a passing decision
+ * (`TB-061`): the evaluation ran and passed, and nothing was appended by choice.
+ */
+const NOT_RECORDED_PASSING = 'passing-not-recorded';
+
+/**
+ * A decision that deliberately appended nothing, and says why in its evidence
+ * reference, so a reader can tell a decision that was never recorded from one
+ * whose record was lost: an append that failed names the reason it failed and
+ * this names why none was attempted.
+ */
+const notRecorded = (decision, store, why) => ({
+  ...decision,
+  evidence: {
+    ...decision.evidence,
+    persisted: false,
+    reference: {
+      evidenceId: null,
+      storeRoot: store?.root ?? null,
+      appendedAt: null,
+      blobIds: [],
+      reasonCode: null,
+      notRecorded: why,
+    },
+  },
+});
 
 /**
  * Decide one evaluation whose change set is empty, without materializing
@@ -932,24 +972,7 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     });
   }
 
-  return {
-    ...decision,
-    evidence: {
-      ...decision.evidence,
-      persisted: false,
-      // Said in the decision, so a reader can tell a turn that was never
-      // recorded from one whose record was lost: an append that failed names
-      // the reason it failed and this names why none was attempted.
-      reference: {
-        evidenceId: null,
-        storeRoot: store?.root ?? null,
-        appendedAt: null,
-        blobIds: [],
-        reasonCode: null,
-        notRecorded: NOT_RECORDED_NO_CHANGE,
-      },
-    },
-  };
+  return notRecorded(decision, store, NOT_RECORDED_NO_CHANGE);
 };
 
 /**
