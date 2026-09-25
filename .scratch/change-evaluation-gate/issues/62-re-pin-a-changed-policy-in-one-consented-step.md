@@ -1,14 +1,14 @@
 # TB-062 — Re-pin a changed policy in one consented step
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by:
 Tracker ID: 62-re-pin-a-changed-policy-in-one-consented-step
 Draft key: TB-062
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -211,27 +211,43 @@ commit-time handling of a policy-changing commit.
 
 ## Acceptance Criteria
 
-- [ ] `FR-LIFE-004`, `AC-LIFE-010`: on an activated clone whose policy changed,
+- [x] `FR-LIFE-004`, `AC-LIFE-010`: on an activated clone whose policy changed,
   `gate sync` previews trusted and candidate identities and the adapter set it
   keeps, and one confirmation pins the candidate — proved by a following
   commit being evaluated under it with no drift.
-- [ ] `SG-CFG-001`, `AC-CFG-003`: a candidate that weakens the trusted policy
+- [x] `SG-CFG-001`, `AC-CFG-003`: a candidate that weakens the trusted policy
   is refused with the weakening named and no token; with the acknowledgement
   selector the token binds candidate identity and acknowledgement together.
-- [ ] A candidate that is not weaker previews and confirms with no extra
+  (The selector is `--acknowledge-weakening`, a flag: the weakening it
+  acknowledges is named by the preview and bound by the token. The same token
+  without the flag, or after another edit, pins nothing.)
+- [x] A candidate that is not weaker previews and confirms with no extra
   selector.
-- [ ] The hook block and every adapter registration file are byte-identical
+- [x] The hook block and every adapter registration file are byte-identical
   before and after a `sync` that changed only the policy.
-- [ ] `AC-LIFE-009`: a `sync` that fails at any step leaves the prior receipt
+- [x] `AC-LIFE-009`: a `sync` that fails at any step leaves the prior receipt
   and registrations intact, proved by a fixture that fails a self-test.
-- [ ] `activate` and `deactivate` produce byte-identical output and tokens to
+- [x] `activate` and `deactivate` produce byte-identical output and tokens to
   today, proved by the existing fixtures unchanged.
-- [ ] If the file and the receipt disagree about adapters, `sync` refuses and
-  names `activate`/`deactivate`.
-- [ ] `gate status` (`TB-060`) names `gate sync` as the remedy for
-  configuration drift.
-- [ ] The report states whether the receipt carries enough to reconstruct the
-  trusted policy, or where it was read from instead.
+- [x] If the file and the receipt disagree about adapters, `sync` refuses and
+  names `activate`/`deactivate`. (The configuration file declares no adapters;
+  what can disagree with the receipt is the adapter set the installed gate
+  declares under the receipt's ids — `observedAdapters` — and that is what
+  refuses as `adapter-set-changed`.)
+- [x] `gate status` (`TB-060`) names `gate sync` as the remedy for
+  configuration drift. (`trusted-configuration` and `command-descriptors`
+  drift both map to `gate sync`: both are pinned from `.agent-framework.yaml`
+  and a sync re-pins both. Where a clone also needs a new Activation
+  transaction, `next:` names only the deactivate/activate pair.)
+- [x] The report states whether the receipt carries enough to reconstruct the
+  trusted policy, or where it was read from instead. (It does not: an
+  activation receipt pins `configuration.identity` and the schema version
+  only, and no Evidence envelope carries the policy either. `gate sync` reads
+  the trusted policy from a document that reproduces the pinned identity — the
+  receipt itself when a sync wrote it, since a sync now pins the policy beside
+  its identity; the configuration file when its identity never moved; or the
+  committed `.agent-framework.yaml` at `HEAD` — and refuses as
+  `trusted-configuration-unrecoverable` when none does.)
 
 ## Verification Matrix
 

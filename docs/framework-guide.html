@@ -951,10 +951,10 @@ protected_files:
       <div class="note note-caution">
         <span class="note-tag">Every edit in this section needs a re-pin</span>
         <p>
-          On an activated clone, changing any of this has no effect until you deactivate and
-          activate again — and until you do, commits are denied with <code>integrity-drift</code>,
-          and <code>git gate status</code> reports <code>broken</code> and names that re-pin.
-          Section 12.
+          On an activated clone, changing any of this has no effect until you re-pin it with
+          <code>git gate sync</code> — and until you do, commits are denied with
+          <code>integrity-drift</code>, and <code>git gate status</code> reports <code>broken</code>
+          and names that re-pin. Section 12.
         </p>
       </div>
     </section>
@@ -1926,8 +1926,8 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
         On an activated clone every one of these is <code>git gate …</code>. That shortcut is a
         clone-local Git alias activation wrote into this clone's own <code>.git/config</code> and
         nowhere else — it works from any subdirectory, it is never committed, and it never follows
-        the repository to anybody else. Deactivating leaves it in place, so a re-pin runs through it
-        end to end.
+        the repository to anybody else. Deactivating leaves it in place, so a deactivate/activate
+        pair runs through it end to end.
       </p>
 
       <p class="cmd-label">The one you will run most</p>
@@ -1935,7 +1935,7 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
 
       <p>
         It ends with one <code>next:</code> line naming the command that recovers what it found
-        — <code>git gate repair</code> for a moved Git hook, a deactivate/activate re-pin for a
+        — <code>git gate repair</code> for a moved Git hook, <code>git gate sync</code> for a
         changed policy, <code>nothing</code> on a healthy clone. It names the command; it never
         runs it.
       </p>
@@ -1962,6 +1962,7 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
             <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12.</td></tr>
+            <tr><td><strong>sync</strong></td><td>Re-pins a changed <code>.agent-framework.yaml</code> under the adapters this clone already has, keeping every registration byte for byte. Its preview says whether the new policy is weaker than the one it replaces. Section 12.</td></tr>
             <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
             <tr><td><strong>bypass</strong></td><td>Grants one one-shot bypass of the exact staged snapshot, where policy enables it. Section 10 covers what it demands.</td></tr>
             <tr><td><strong>deactivate</strong></td><td>Removes the hook and receipt. Keeps your configuration and all historical evidence.</td></tr>
@@ -2021,24 +2022,57 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         </p>
       </div>
 
-      <p class="cmd-label">Re-pin the changed policy — edit, then all four</p>
-      <pre><code>git gate deactivate
-git gate deactivate --confirm &lt;token&gt;
-git gate activate
-git gate activate --confirm &lt;token&gt;</code></pre>
+      <p class="cmd-label">Re-pin the changed policy — edit, then one preview and one confirmation</p>
+      <pre><code>git gate sync                            # what the policy was, what it is now, and whether it is weaker
+git gate sync --confirm &lt;token&gt;          # pins exactly that preview</code></pre>
 
       <p>
-        Deactivation removes the hook and the receipt, and keeps your configuration, every
-        historical evidence record, and the <code>git gate</code> alias. Activation then pins the
-        file as it now reads, and <code>git gate status</code> reports healthy again.
+        The preview names the identity the receipt pinned, the identity your edited file produces,
+        the adapters it keeps, and the commands it will pin. Confirming it rewrites the receipt and
+        nothing else: the hook and every desktop client's registration stay byte for byte as they
+        are, and <code>git gate status</code> reports healthy again. If anything fails on the way,
+        the old receipt is put back exactly and the clone is as it was.
+      </p>
+
+      <div class="note note-critical">
+        <span class="note-tag">A weaker policy is refused until you say you mean it</span>
+        <p>
+          If your edit demotes a required check to advisory, or stops binding it at all, the
+          preview heads its findings <code>WEAKER than the trusted policy</code>, names each one,
+          and prints no token. To pin it anyway, preview again with the acknowledgement and confirm
+          that preview:
+        </p>
+        <pre><code>git gate sync --acknowledge-weakening
+git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
+        <p>
+          The token binds the new policy and your acknowledgement together, so the same token
+          without the flag, or after another edit, pins nothing. Only a demoted or removed required
+          check counts as weaker today; a looser budget or an enabled bypass does not.
+        </p>
+      </div>
+
+      <p>
+        The weaker-or-not judgement needs the policy you are moving away from, not just its
+        identity. <code>git gate sync</code> reads it from the receipt when a previous sync wrote
+        it, and otherwise from the committed <code>.agent-framework.yaml</code> at
+        <code>HEAD</code>. If neither reproduces what the receipt pinned — you committed past the
+        Gate, say — sync refuses rather than guess, and names the older route.
+      </p>
+
+      <p>
+        Adding or removing a desktop client is still <code>git gate deactivate</code> then
+        <code>git gate activate</code>, each previewed and confirmed. Sync keeps the adapter set the
+        receipt pins, and says so and names that pair when the installed Gate declares a different
+        one. Deactivation keeps your configuration, every historical evidence record, and the
+        <code>git gate</code> alias.
       </p>
 
       <div class="table-wrap">
         <table>
           <thead><tr><th>You changed…</th><th>Then</th></tr></thead>
           <tbody>
-            <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: deactivate, activate.</td></tr>
-            <tr><td>A <code>verification.commands</code> entry the Gate binds</td><td>Re-pin: the identities and the pinned runners both come from it.</td></tr>
+            <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: <code>git gate sync</code>.</td></tr>
+            <tr><td>A <code>verification.commands</code> entry the Gate binds</td><td>Re-pin: the identities and the pinned runners both come from it, and sync re-pins both.</td></tr>
             <tr><td><code>evidence.sensitive_inputs</code> or <code>environment_files</code></td><td>Re-pin.</td></tr>
             <tr><td><code>execution.dependency_roots</code> or <code>dependency_provisioning</code></td><td>Re-pin.</td></tr>
             <tr><td>The installed Gate release</td><td><code>git gate update</code> — that one is not a re-pin.</td></tr>
@@ -2051,7 +2085,7 @@ git gate activate --confirm &lt;token&gt;</code></pre>
         <span class="note-tag">Save the file before you preview</span>
         <p>
           The preview identifies the bytes on disk, not the buffer in your editor. An unsaved change
-          produces an activation that pins the old policy and a preview whose identity looks
+          produces a sync with <code>nothing to sync</code> and a candidate identity that looks
           unchanged — which reads exactly like the tool ignoring you. If the identity does not move
           after an edit you believe you made, the edit is not on disk.
         </p>
@@ -2246,7 +2280,7 @@ git gate activate --confirm &lt;token&gt;</code></pre>
         <div><dt>Snapshot</dt><dd>An isolated copy of exactly the content being committed, so results cannot be confused with unstaged edits.</dd></div>
         <div><dt>unverified</dt><dd>The check could not be trusted to have run correctly. Treated as blocking, never as a pass.</dd></div>
         <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned — including an identity of <code>.agent-framework.yaml</code>, which is why a later edit needs a re-pin.</dd></div>
-        <div><dt>Re-pin</dt><dd>Deactivate, then activate, so the receipt pins the configuration as it now reads. The only way a policy change takes effect.</dd></div>
+        <div><dt>Re-pin</dt><dd><code>git gate sync</code>, so the receipt pins the configuration as it now reads, under the adapters it already has. The only way a policy change takes effect.</dd></div>
         <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
         <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, and left in place by deactivation.</dd></div>
         <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure may return as a follow-up; a clean turn stays quiet.</dd></div>

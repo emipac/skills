@@ -157,8 +157,8 @@ evaluation_gate:
   preview (`runtime inputs: APP_KEY, MAIL_PASSWORD`), so consent is granted
   against it. It is part of the configuration identity the receipt pins:
   **adding, removing, or renaming a declaration after activation is
-  trusted-configuration drift**, and the clone must be re-pinned before it
-  authorizes again.
+  trusted-configuration drift**, and the clone must be re-pinned — `gate sync`
+  — before it authorizes again.
 - **Approval at activation is the consent to hand the value over.** An
   approved name reaches every check through its environment, whether or not
   the check's descriptor lists it in `allowed_environment` — that list governs

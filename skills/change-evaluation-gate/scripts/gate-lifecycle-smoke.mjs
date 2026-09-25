@@ -44,11 +44,13 @@
  * 7. `packaged-configuration-drift` — a clone activated by the packaged command
  *    against the real runner has its `.agent-framework.yaml` edited: `gate
  *    status` reports `broken` with a `trusted-configuration` finding and a
- *    `next:` line naming a new Activation transaction through `git gate`,
- *    writing nothing; the following commit is denied `integrity-drift` for the
- *    same surface; and after exactly the named deactivate/activate pair the
- *    clone is healthy and commits (AC-SEC-001, NFR-SEC-004, AC-LIFE-010,
- *    FR-LIFE-019, TB-060).
+ *    `next:` line naming `git gate sync`, writing nothing; the following commit
+ *    is denied `integrity-drift` for the same surface; and after exactly the
+ *    named sync — one preview, one confirmation — the clone is healthy, the
+ *    receipt pins the edited policy, the registered hook is byte-identical
+ *    throughout, and the next real commit is evaluated under the new policy
+ *    with no drift (AC-SEC-001, NFR-SEC-004, AC-LIFE-010, FR-LIFE-019,
+ *    TB-060, TB-062).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -1153,6 +1155,9 @@ const packagedConfigurationDrift = async () => {
 
   check(findings, await confirmThrough(packaged, 'activate'), 'The packaged command did not activate the clone.');
 
+  const hookPath = path.join(root, '.git', 'hooks', 'pre-commit');
+  const hookBytes = await readFile(hookPath, 'utf8').catch(() => null);
+
   const healthy = documentOf(await shortcut(['status', '--json']));
 
   check(findings, healthy.observation?.health === 'healthy', `A freshly activated clone reported ${healthy.observation?.health}.`);
@@ -1178,8 +1183,8 @@ const packagedConfigurationDrift = async () => {
   check(findings, surfaces.join(',') === 'trusted-configuration', `The drift was reported on ${JSON.stringify(surfaces)}.`);
   check(
     findings,
-    /^next: git gate deactivate, then git gate activate/m.test(human.stdout ?? ''),
-    'Status did not name a new Activation transaction through the clone\'s shortcut.',
+    /^next: git gate sync$/m.test(human.stdout ?? ''),
+    'Status did not name `git gate sync` through the clone\'s shortcut.',
   );
 
   // The next commit is denied for the reason status just gave.
@@ -1195,9 +1200,33 @@ const packagedConfigurationDrift = async () => {
     'The commit was not denied for the drift status reported.',
   );
 
-  // Exactly the remedy status named, and nothing else.
-  check(findings, await confirmThrough(shortcut, 'deactivate'), 'git gate deactivate did not perform.');
-  check(findings, await confirmThrough(shortcut, 'activate'), 'git gate activate did not perform after deactivation.');
+  // Exactly the remedy status named, and nothing else: one sync, previewed
+  // and confirmed, that keeps the registration it found.
+  const previewed = documentOf(await shortcut(['sync', '--json']));
+
+  check(
+    findings,
+    previewed.observation?.transition?.weakened === false
+      && previewed.observation?.trusted?.identity !== previewed.observation?.candidate?.identity,
+    `The sync preview did not show a trusted and a different, not-weaker candidate identity: ${JSON.stringify(previewed.observation?.transition)}.`,
+  );
+  check(findings, await confirmThrough(shortcut, 'sync'), 'git gate sync did not perform.');
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes,
+    'The sync rewrote the registered pre-commit hook.',
+  );
+
+  const receipt = JSON.parse(await readFile(
+    path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
+    'utf8',
+  ).catch(() => '{}'));
+
+  check(
+    findings,
+    receipt.configuration?.identity === previewed.observation?.candidate?.identity,
+    'The receipt after the sync does not pin the candidate identity it previewed.',
+  );
 
   const recovered = documentOf(await shortcut(['status', '--json']));
 
@@ -1206,6 +1235,11 @@ const packagedConfigurationDrift = async () => {
     findings,
     await commit(root, 'after the re-pin').then(() => true, () => false),
     'The re-pinned clone still refused its commit.',
+  );
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes,
+    'The registered pre-commit hook changed across the edit, the sync, and the commit.',
   );
 
   return { name: 'packaged-configuration-drift', ok: findings.length === 0, findings };

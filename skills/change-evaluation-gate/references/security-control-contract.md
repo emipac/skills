@@ -63,6 +63,34 @@ the Trusted policy decides the outcome regardless of what the candidate says
 about itself. A candidate that removes the one required check the change fails
 therefore passes its own policy and still cannot authorize anything.
 
+### Reached by `gate sync` (`TB-062`)
+
+Until `TB-062` no runner called `evaluatePolicyTransition`; its only caller was
+this capability's smoke, so a policy re-pinned by `gate deactivate` and `gate
+activate` was never asked whether it was weaker. `gate sync` — the operator
+command that re-pins a changed configuration — now calls it on every preview and
+again at confirmation, with `trusted` the policy the receipt pins, `candidate`
+the file's, `checks` the configured checks, and `role: 'operator'`
+(non-authoritative: it allows and denies nothing). The preview renders every
+weakening under `WEAKER than the trusted policy`; a weaker candidate offers no
+token unless the invocation carries `--acknowledge-weakening`, and then the
+token binds the candidate identity and that acknowledgement together. At
+confirmation the candidate identity the token reproduced is the `approval`, and
+trust advances only when the function says `advanced` — the hash-bound approval
+this section describes, on a real path for the first time. The transaction is in
+the [lifecycle command contract](lifecycle-command-contract.md#gate-sync-tb-062).
+
+Three limits are stated rather than hidden. An Activation receipt pins the
+configuration's identity, not its policy, so the Trusted policy is recovered
+from a document that reproduces that identity — a receipt `gate sync` wrote
+(which pins the policy beside its identity), the unchanged file, or the
+committed file at `HEAD` — and a transition with no such document is refused,
+never guessed. `policyWeakenings` recognizes only a demoted or removed required
+check, so a looser budget or an enabled bypass previews as not weaker. And no
+check runs during a sync, so both policies' outcomes there are over checks with
+no results; evaluating a policy-changing *commit* under both policies is the
+runners' commit-time half of `FR-CFG-005`, which this does not touch.
+
 ## Sensitive runtime inputs (`FR-CFG-006`, `AC-CFG-004`, `SG-SECRET-001`)
 
 `materializeRuntimeInputs({ approved, inputs, executionRoot })`:
@@ -173,7 +201,10 @@ independent drift of the machine.
 
 ## Capability
 
-`gate-security-control-smoke` proves all four packaged behaviors against
+`gate-security-control-smoke` proves every packaged behavior above — including,
+as `packaged-policy-sync`, a weakening refused by the shipped `gate sync`, pinned
+only with its acknowledgement, and then honoured by the next real commit with the
+hook byte-identical — against
 throwaway Git repositories under the OS temporary directory, a real Evidence
 store, a real child-process check, and a real isolated materialization. Its
 canaries are synthetic literals invented for the fixture.

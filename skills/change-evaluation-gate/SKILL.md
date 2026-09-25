@@ -139,16 +139,17 @@ that executable is on the path, or run this installed skill's own
 reading rather than assuming a path: an installed skill sits wherever the client
 placed it, so the same literal path does not hold across projects. The command
 is `activate`, `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
-`uninstall`, `cleanup`, or `bypass`. Add `--json` for the same document a person
-is shown.
+`uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the same document
+a person is shown.
 
 `git gate status` reconciles every control surface the receipt pinned — the
 configuration included, through the same observation the commit runner makes —
 so a clone whose `.agent-framework.yaml` changed since activation is `broken`
 exactly when its next commit is denied `integrity-drift`. It ends with one
 `next:` line naming what recovers each finding: `git gate repair` for a
-gate-owned Git hook registration, `git gate deactivate` then `git gate activate`
-for a changed configuration or anything else the receipt pinned,
+gate-owned Git hook registration, `git gate sync` for a changed configuration
+or the commands it resolves to, `git gate deactivate` then `git gate activate`
+for anything else the receipt pinned (which re-pins the configuration too),
 `gate activate` for a configured clone, and `nothing` when nothing needs doing.
 Report that line; every command it names previews first, and none of them is
 performed implicitly.
@@ -188,6 +189,22 @@ the configured marker printed for the maintainer to put in the message; staged
 differently, the grant is refused as `snapshot-mismatch` and spent. Only run it
 when the maintainer explicitly asks to bypass a denied commit, show them the
 preview, and never confirm on their behalf.
+
+`gate sync [--acknowledge-weakening]` is the same two invocations, and the one
+step that re-pins a changed `.agent-framework.yaml` under the adapter set the
+receipt already pins. It is an Activation transaction that registers nothing:
+every registration it keeps must be exactly what it would write, or it refuses
+and names `gate repair`, `gate status`, or `gate deactivate` then `gate
+activate` — the last also whenever the installed gate's adapter set differs
+from the receipt's. The preview names the trusted identity, the candidate
+identity, and every way `evaluatePolicyTransition` finds the candidate weaker
+than the trusted policy, which it reads from a document that reproduces the
+pinned identity — a receipt `gate sync` wrote, or the committed file at `HEAD`
+— and refuses to guess when neither does. A weaker candidate offers no token;
+`gate sync --acknowledge-weakening` offers one that binds the candidate and the
+acknowledgement together. Show the maintainer that preview, name the weakening
+in your own words, and never add `--acknowledge-weakening` or confirm on their
+behalf.
 
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When

@@ -63,6 +63,16 @@
  *    byte-for-byte what it always was, no bypass record, ledger, or grant
  *    exists, and `gate bypass` refuses as `bypass-disabled` (`FR-POL-006`,
  *    `FR-POL-007`, `FR-POL-008`, `SG-BYP-001`, `NFR-AUD-001`).
+ * 8. `packaged-policy-sync` — the transition check on the real re-pin path
+ *    (`TB-062`). On a clone activated by the shipped command whose policy is
+ *    then weakened by demoting its required check, the shipped `gate sync`
+ *    refuses with the weakening named and no token, while a real commit is
+ *    still denied for the drift; with `--acknowledge-weakening` it offers a
+ *    token, confirming it pins the candidate, and the next real commit — a
+ *    failing change the trusted policy would have blocked — is graded under
+ *    the acknowledged policy with no drift. The registered hook is
+ *    byte-identical throughout (`SG-CFG-001`, `AC-CFG-003`, `FR-CFG-005`,
+ *    `NFR-SEC-004`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -1516,6 +1526,84 @@ const packagedBypass = async () => {
   return { name: 'packaged-bypass', ok: findings.length === 0, findings };
 };
 
+/**
+ * The dual-policy transition reached by the command a maintainer runs
+ * (`TB-062`): `evaluatePolicyTransition` judges a real re-pin, not a fixture
+ * pair, and a weakening is pinned only by a token that acknowledged it.
+ */
+const packagedPolicySync = async () => {
+  const findings = [];
+  const root = await cloneWithPolicy('sync', runnerConfiguration());
+
+  if (!(await activateClone(root, findings))) {
+    return { name: 'packaged-policy-sync', ok: false, findings };
+  }
+
+  const hookPath = path.join(root, '.git', 'hooks', 'pre-commit');
+  const hookBytes = await readFile(hookPath, 'utf8').catch(() => null);
+  const sync = async (args) => {
+    const run = await runPackagedCommand(root, ['sync', ...args, '--json']);
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || '{}') };
+  };
+
+  check(findings, hookBytes !== null, 'The shipped activation registered no pre-commit hook.');
+
+  // The maintainer demotes the one required check, as they would in an editor.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    runnerConfiguration({ required: [], advisory: [RUNNER_CHECK_ID] }),
+    'utf8',
+  );
+
+  const refused = await sync([]);
+  const weakenings = refused.document.observation?.transition?.weakenings ?? [];
+
+  check(findings, refused.exitCode === 1, `A weakening sync preview exited ${refused.exitCode} rather than 1.`);
+  check(
+    findings,
+    refused.document.observation?.refusal?.reasonCode === 'weakening-unacknowledged',
+    `A weakening sync was not refused as unacknowledged: ${JSON.stringify(refused.document.observation?.refusal)}.`,
+  );
+  check(findings, refused.document.observation?.confirmationToken === null, 'A refused weakening offered a token.');
+  check(
+    findings,
+    weakenings.length === 1 && weakenings[0].code === 'required-check-demoted' && weakenings[0].checkId === RUNNER_CHECK_ID,
+    `The weakening was not named: ${JSON.stringify(weakenings)}.`,
+  );
+
+  // Until it is pinned, the drift is what the commit is denied for.
+  await stageBroken(root);
+
+  const drifted = await commitAttempt(root, 'broken, before the re-pin');
+
+  check(findings, drifted.failed && drifted.output.includes('integrity-drift'), `The commit before the re-pin was not denied for drift: ${drifted.output}`);
+
+  const acknowledged = await sync(['--acknowledge-weakening']);
+  const token = acknowledged.document.observation?.confirmationToken ?? null;
+
+  check(findings, typeof token === 'string', 'An acknowledged weakening offered no token.');
+  check(findings, acknowledged.document.observation?.acknowledgedWeakening === true, 'The acknowledgement was not bound into the preview.');
+
+  const unacknowledged = await sync(['--confirm', token ?? `sha256:${'0'.repeat(64)}`]);
+
+  check(findings, unacknowledged.document.mutation?.performed === false, 'The acknowledged token pinned a weakening from an invocation that did not acknowledge it.');
+
+  const pinned = await sync(['--acknowledge-weakening', '--confirm', token ?? `sha256:${'0'.repeat(64)}`]);
+
+  check(findings, pinned.document.mutation?.performed === true, `The acknowledged sync did not perform: ${pinned.document.mutation?.summary}`);
+  check(findings, (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes, 'The sync rewrote the registered pre-commit hook.');
+
+  // The same failing change, now graded under the acknowledged policy.
+  const graded = await commitAttempt(root, 'broken, under the acknowledged policy');
+
+  check(findings, graded.failed === false, `The commit after the re-pin was not graded under the acknowledged policy: ${graded.output}`);
+  check(findings, !graded.output.includes('integrity-drift'), 'The commit after the re-pin still reported drift.');
+  check(findings, (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes, 'The registered pre-commit hook changed across the commit.');
+
+  return { name: 'packaged-policy-sync', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1529,6 +1617,7 @@ const main = async () => {
       await configuredDeclaration(),
       await declaredEnvironmentFile(),
       await packagedBypass(),
+      await packagedPolicySync(),
     ];
   } finally {
     for (const root of temporaryRoots) {

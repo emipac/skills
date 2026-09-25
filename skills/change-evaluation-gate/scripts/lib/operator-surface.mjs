@@ -69,7 +69,9 @@ import {
   activate,
   adapterIdentity,
   previewActivation,
+  previewSync,
   readHookRegistration,
+  syncActivation,
 } from './activation.mjs';
 import {
   COMMAND_ALIAS_NAME,
@@ -82,7 +84,11 @@ import {
 } from './activation-seams.mjs';
 import { describeAdapter } from './adapters.mjs';
 import { composeArguments } from './command-descriptor.mjs';
-import { CONFIGURATION_FILE, gateChecksFromConfiguration } from './configuration.mjs';
+import {
+  CONFIGURATION_FILE,
+  gateChecksFromConfiguration,
+  parseConfigurationDocument,
+} from './configuration.mjs';
 import { openCoordinationLock } from './coordination.mjs';
 import { PROTOCOL_VERSION } from './evaluation-contract.mjs';
 import {
@@ -156,6 +162,7 @@ export const COMMANDS = Object.freeze([
   'uninstall',
   'cleanup',
   'bypass',
+  'sync',
 ]);
 
 /**
@@ -180,6 +187,7 @@ export const CONFIRMABLE_COMMANDS = Object.freeze({
   uninstall: '--confirm',
   cleanup: '--confirm',
   bypass: '--confirm',
+  sync: '--confirm',
 });
 
 /**
@@ -250,6 +258,12 @@ const SELECTORS = Object.freeze({
     '--actor': 'value',
     '--confirm': 'confirmation',
   }),
+  // A flag, because what it says is only ever "yes": the weakening it
+  // acknowledges is named by the preview and bound by the token (`TB-062`).
+  sync: Object.freeze({
+    '--acknowledge-weakening': 'flag',
+    '--confirm': 'confirmation',
+  }),
 });
 
 /**
@@ -269,6 +283,7 @@ const SELECTOR_FIELDS = Object.freeze({
   '--asset': 'assets',
   '--reason': 'reason',
   '--reference': 'reference',
+  '--acknowledge-weakening': 'acknowledgeWeakening',
 });
 
 /**
@@ -307,6 +322,10 @@ export const instructionSelectors = (command, selector) => Object.entries(SELECT
 
     if (value === null) {
       return [];
+    }
+
+    if (reading === 'flag') {
+      return value === true ? [flag] : [];
     }
 
     return (reading === 'repeatable' ? value : [value])
@@ -373,6 +392,7 @@ export const USAGE = [
   '  gate uninstall  --asset <path> ...       Preview removing unchanged project-installed assets.',
   '  gate cleanup    [--json]                 Preview removing the Gate\'s own configuration keys.',
   '  gate bypass     --reason <text> ...      Preview granting one one-shot bypass of the staged snapshot.',
+  '  gate sync       [--acknowledge-weakening] Preview re-pinning a changed configuration, keeping the adapters.',
   '',
   'Every command above previews. To perform one, run it again with the token',
   'the preview printed:',
@@ -406,6 +426,17 @@ export const USAGE = [
   'refuses the confirmation; staging anything after the grant refuses the grant.',
   'The hook prints the configured marker for the commit message; it cannot write',
   'the message itself.',
+  '',
+  'Sync selectors:',
+  '  --acknowledge-weakening           Offer a token for a candidate weaker than the trusted policy.',
+  '',
+  'A sync pins the configuration this clone declares now under the adapter set',
+  'its receipt already pins, keeping every registration byte for byte. Its',
+  'preview names every way the candidate is weaker than the trusted policy, and',
+  'a weaker candidate is refused with no token unless the invocation',
+  'acknowledges the weakening; the token then binds the candidate and that',
+  'acknowledgement together. Adding or removing an adapter is still deactivate',
+  'and activate.',
   '',
   'Exit status:',
   '  0  the command ran and found nothing wrong, or performed what was confirmed',
@@ -497,6 +528,7 @@ const parseArguments = (argv) => {
     resume: null,
     reason: null,
     reference: null,
+    acknowledgeWeakening: null,
   };
   let confirmation = null;
   let previewRequested = false;
@@ -569,6 +601,12 @@ const parseArguments = (argv) => {
           detail: `\`gate ${command}\` does not take ${argument}.`,
         }),
       };
+    }
+
+    if (accepted[argument] === 'flag') {
+      selector[SELECTOR_FIELDS[argument]] = true;
+
+      continue;
     }
 
     const value = selectors[index + 1];
@@ -1235,9 +1273,12 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
  * `control-surface-drift`, whose code is shared by every surface. The lines
  * follow `FR-LIFE-019`: a gate-owned Git registration is restored by
  * `gate repair`, which repairs exactly those three findings and nothing else;
- * everything else the receipt pinned is re-established by a new Activation
- * transaction. A finding with no entry here is a test failure, never a finding
- * nobody is told how to act on (`NFR-OPER-001`, `TB-060`).
+ * what the receipt pinned from `.agent-framework.yaml` — the policy's identity
+ * and the commands it resolves to — is re-pinned by `gate sync`, the Activation
+ * transaction that keeps the adapter set (`TB-062`); everything else the
+ * receipt pinned is re-established by a new Activation transaction. A finding
+ * with no entry here is a test failure, never a finding nobody is told how to
+ * act on (`NFR-OPER-001`, `TB-060`).
  */
 export const STATUS_REMEDIES = Object.freeze({
   // An installed clone holds no Gate policy: nothing is enforced, and adopting
@@ -1266,8 +1307,9 @@ export const STATUS_REMEDIES = Object.freeze({
     adapters: 'activation-transaction',
     'managed-hooks': 'repair',
     receipt: 'activation-transaction',
-    'trusted-configuration': 'activation-transaction',
-    'command-descriptors': 'activation-transaction',
+    // Both are pinned from the configuration file, and a sync re-pins both.
+    'trusted-configuration': 'sync',
+    'command-descriptors': 'sync',
     providers: 'activation-transaction',
   }),
 });
@@ -1277,6 +1319,7 @@ const REMEDY_ORDER = Object.freeze([
   'correct-configuration',
   'reconcile-client-registration',
   'repair',
+  'sync',
   'activation-transaction',
   'activate',
 ]);
@@ -1284,13 +1327,15 @@ const REMEDY_ORDER = Object.freeze([
 /**
  * One remedy, as the `next:` line says it.
  *
- * A new Activation transaction is the deactivate/activate pair until
- * `gate sync` exists (`TB-062`); each half previews and prints its own token.
+ * A new Activation transaction is the deactivate/activate pair; each half
+ * previews and prints its own token. `gate sync` is the scoped one that keeps
+ * the adapter set (`TB-062`).
  */
 const remedyInstruction = (remedy, command) => ({
   'correct-configuration': `correct ${CONFIGURATION_FILE} so its evaluation_gate policy reads and validates`,
   'reconcile-client-registration': `reconcile the changed client registration by hand — the Gate never overwrites a client's own file — and run ${command} status again`,
   repair: `${command} repair`,
+  sync: `${command} sync`,
   'activation-transaction': `${command} deactivate, then ${command} activate — a new Activation transaction that pins what this clone declares now; each previews first and prints the token that confirms it`,
   activate: `${command} activate`,
 })[remedy] ?? null;
@@ -1325,6 +1370,14 @@ const statusNext = (findings, shortcut) => {
     const key = remedy ?? `unrecorded:${finding.code}`;
 
     byRemedy.set(key, [...(byRemedy.get(key) ?? []), finding.surface === undefined ? finding.code : `${finding.code}:${finding.surface}`]);
+  }
+
+  // A new Activation transaction pins the configuration too, and a sync
+  // refuses a clone whose adapter set changed, so where both are needed the
+  // pair alone is named and answers for both.
+  if (byRemedy.has('sync') && byRemedy.has('activation-transaction')) {
+    byRemedy.set('activation-transaction', [...byRemedy.get('activation-transaction'), ...byRemedy.get('sync')]);
+    byRemedy.delete('sync');
   }
 
   const rank = (remedy) => (REMEDY_ORDER.includes(remedy) ? REMEDY_ORDER.indexOf(remedy) : REMEDY_ORDER.length);
@@ -1377,8 +1430,7 @@ const observeStatusControlSurface = async ({ repositoryRoot, receipt }) => {
  * The receipt pins an identity, not a document, so no diff is available; what
  * is known is that the file on disk no longer produces the identity activation
  * pinned, and that every evaluation is graded against the pinned policy until
- * a new Activation transaction pins this one. The finding's code and severity
- * are unchanged.
+ * `gate sync` pins this one. The finding's code and severity are unchanged.
  */
 const namedConfigurationDrift = (finding, { repositoryRoot, configuration }) => {
   if (finding.code !== 'control-surface-drift' || finding.surface !== 'trusted-configuration') {
@@ -1390,7 +1442,7 @@ const namedConfigurationDrift = (finding, { repositoryRoot, configuration }) => 
     path: path.join(repositoryRoot, CONFIGURATION_FILE),
     detail: [
       finding.detail,
-      `${CONFIGURATION_FILE} changed since this clone was activated, and every evaluation is graded against the policy the receipt pinned, not the file, until a new Activation transaction pins it.`,
+      `${CONFIGURATION_FILE} changed since this clone was activated, and every evaluation is graded against the policy the receipt pinned, not the file, until \`gate sync\` pins it.`,
       ...(configuration.ok ? [] : [`It no longer resolves to a Gate policy at all: ${configuration.detail}`]),
     ].join(' '),
   };
@@ -2181,6 +2233,286 @@ const operateBypass = async ({ repositoryRoot, environment, selector, confirmati
   };
 };
 
+/**
+ * The Trusted configuration as this clone's history holds it.
+ *
+ * An Activation receipt pins the configuration's identity and not the policy,
+ * so a sync that must judge a transition against the Trusted policy has to
+ * recover the document. The committed `.agent-framework.yaml` at `HEAD` is the
+ * one place it ordinarily still is — a drifted clone denies every commit, so
+ * the edit being synced is normally not committed yet. What is read here is
+ * only a candidate: `previewSync` accepts it only if it reproduces the
+ * identity the receipt pinned (`FR-CFG-005`, `TB-062`).
+ */
+const committedConfiguration = async (repositoryRoot) => {
+  const contents = await runGit(repositoryRoot, ['show', `HEAD:${CONFIGURATION_FILE}`]).catch(() => null);
+  const parsed = contents === null ? null : parseConfigurationDocument(contents);
+
+  if (parsed?.ok !== true) {
+    return null;
+  }
+
+  return {
+    schemaVersion: parsed.value?.schema_version ?? null,
+    policy: parsed.value?.evaluation_gate ?? null,
+    source: 'committed-configuration',
+  };
+};
+
+/** Why a sync preview offers no token, and what to do instead. */
+const SYNC_REFUSALS = Object.freeze({
+  'nothing-to-sync': Object.freeze({
+    detail: 'the configuration and the commands it resolves to are exactly what the receipt pins',
+    next: 'nothing to sync',
+  }),
+  'weakening-unacknowledged': Object.freeze({
+    detail: 'the candidate is weaker than the trusted policy that authorized this clone, and a weaker candidate is pinned only when the invocation acknowledges the weakening by name',
+    next: 'gate sync --acknowledge-weakening',
+  }),
+  'receipt-drifted': Object.freeze({
+    detail: 'the Activation receipt no longer reproduces its own identity, and a sync never re-pins on top of a receipt that changed',
+    next: 'gate deactivate, then gate activate',
+  }),
+  'adapter-set-changed': Object.freeze({
+    detail: 'the installed gate no longer declares the adapter set the receipt pins; a sync keeps that set and never changes it',
+    next: 'gate deactivate, then gate activate',
+  }),
+  'hook-registration-drifted': Object.freeze({
+    detail: 'the gate-owned Git registration is not the one the receipt pins, and a sync keeps registrations rather than rewriting them',
+    next: 'gate repair',
+  }),
+  'hook-registration-not-reproducible': Object.freeze({
+    detail: 'the registered hook program is not the one this installed gate would register, so keeping the registration would pin a program this sync did not preview',
+    next: 'gate deactivate, then gate activate',
+  }),
+  'adapter-registration-changed': Object.freeze({
+    detail: 'a client registration the receipt pins is not the entry this sync would keep, and a sync never rewrites one',
+    next: 'gate status',
+  }),
+  'trusted-configuration-unrecoverable': Object.freeze({
+    detail: `no document reproduces the configuration identity the receipt pins — not the receipt, not ${CONFIGURATION_FILE} at HEAD — so the transition cannot be judged against the trusted policy`,
+    next: 'gate deactivate, then gate activate',
+  }),
+  'candidate-policy-invalid': Object.freeze({
+    detail: 'the candidate policy does not validate on its own terms',
+    next: `correct ${CONFIGURATION_FILE} so its evaluation_gate policy reads and validates`,
+  }),
+});
+
+/** Everything one sync of THIS clone would be, resolved from the clone itself. */
+const syncRequestFor = async ({ repositoryRoot, receipt, selector }) => {
+  const configuration = await resolveConfiguration(repositoryRoot);
+
+  if (!configuration.ok) {
+    return {
+      failed: failure({
+        command: 'sync',
+        reasonCode: configuration.reasonCode,
+        detail: `${configuration.detail} Sync pins the configuration this clone declares, and there is none it could pin; correct ${CONFIGURATION_FILE} first.`,
+      }),
+    };
+  }
+
+  const { checks, errors } = gateChecksFromConfiguration(configuration.configuration);
+
+  if (errors.length > 0) {
+    return {
+      failed: failure({
+        command: 'sync',
+        reasonCode: 'check-descriptors-invalid',
+        detail: `this clone's configured verification commands cannot be resolved into checks: ${errors.map((error) => `${error.path}: ${error.message}`).join(' ')}`,
+      }),
+    };
+  }
+
+  return {
+    request: {
+      scope: 'repository',
+      trigger: 'explicit',
+      repository: { root: repositoryRoot },
+      configuration: {
+        schemaVersion: configuration.configuration?.schema_version ?? null,
+        policy: configuration.policy,
+      },
+      runtime: {
+        // The program activation registers, and so the one whose registration
+        // a sync can prove it is keeping.
+        hookProgram: {
+          interpreter: process.execPath,
+          script: PACKAGED_HOOK_PROGRAM,
+          args: [],
+        },
+      },
+      checks,
+      runtimeInputs: declaredSensitiveInputs(configuration.policy),
+      prior: receipt,
+      trusted: await committedConfiguration(repositoryRoot),
+      acknowledgeWeakening: selector.acknowledgeWeakening === true,
+    },
+  };
+};
+
+/**
+ * `gate sync` — re-pin a changed configuration in one consented step, keeping
+ * the adapters this clone already has (`TB-062`).
+ *
+ * It is `gate activate` with the adapter set read from the receipt instead of a
+ * `--client` selector, one more section in the preview, and no registration
+ * written. The preview names the Trusted and candidate identities and every
+ * weakening `evaluatePolicyTransition` finds between them; a weaker candidate
+ * offers no token unless the invocation acknowledges the weakening, and the
+ * token then binds the candidate and the acknowledgement together — the
+ * candidate-hash approval `FR-CFG-005` requires. Confirming it runs
+ * `syncActivation`, which re-derives all of it and refuses anything that moved.
+ *
+ * Adding or removing an adapter is still `activate` and `deactivate`, and the
+ * preview says so rather than guessing a set (`FR-LIFE-019`, `SG-LIFE-001`).
+ */
+const operateSync = async ({ repositoryRoot, environment, selector, confirmation }) => {
+  const existing = await resolveReceipt(repositoryRoot);
+
+  if (!existing.ok) {
+    return failure({
+      command: 'sync',
+      reasonCode: existing.reasonCode,
+      detail: existing.reasonCode === 'activation-receipt-missing'
+        ? `${existing.detail} A sync re-pins an activated clone; run \`gate activate\` instead.`
+        : existing.detail,
+    });
+  }
+
+  const resolved = await syncRequestFor({ repositoryRoot, receipt: existing.receipt, selector });
+
+  if (resolved.failed) {
+    return resolved.failed;
+  }
+
+  const { request } = resolved;
+  const dependencies = { runGit, environment };
+  let preview;
+
+  try {
+    preview = await previewSync(request, dependencies);
+  } catch (error) {
+    return failure({
+      command: 'sync',
+      reasonCode: 'sync-unpreviewable',
+      detail: `this clone cannot be previewed for a sync (${error.message}); nothing was written.`,
+    });
+  }
+
+  const refusal = preview.refusal === null ? null : {
+    reasonCode: preview.refusal.reasonCode,
+    detail: SYNC_REFUSALS[preview.refusal.reasonCode]?.detail ?? null,
+    errors: preview.refusal.errors,
+  };
+  const observation = {
+    state: 'activated',
+    receiptId: preview.receiptId,
+    release: preview.release,
+    repositoryIdentity: preview.repository.identity,
+    trusted: preview.trusted,
+    candidate: preview.candidate,
+    transition: preview.transition,
+    acknowledgedWeakening: preview.acknowledgedWeakening,
+    adapters: preview.adapters,
+    hook: preview.hook,
+    adapterRegistrations: preview.adapterRegistrations,
+    commands: preview.commands,
+    unresolved: preview.unresolved,
+    dependencyRoots: preview.dependencyRoots,
+    dependencyProvisioning: preview.dependencyProvisioning,
+    runtimeInputs: preview.runtimeInputs,
+    refusal,
+    confirmationToken: refusal === null ? preview.previewId : null,
+  };
+  const nothingToDo = refusal?.reasonCode === 'nothing-to-sync';
+
+  if (confirmation === null) {
+    return { command: 'sync', healthy: refusal === null || nothingToDo, observation, mutation: null };
+  }
+
+  const clone = await resolveClone({ repositoryRoot, environment, command: 'sync' });
+
+  if (clone.failed) {
+    return clone.failed;
+  }
+
+  const refuse = async (reasonCode, summary) => {
+    await recordSurfaceRefusal({
+      evidenceStore: clone.store,
+      type: 'activation',
+      before: confirmation,
+      reason: `${reasonCode}: ${summary}`,
+    });
+
+    return {
+      command: 'sync',
+      healthy: false,
+      observation,
+      mutation: mutation({ confirmation, performed: false, reasonCode, summary }),
+    };
+  };
+
+  if (refusal !== null) {
+    return refuse(
+      refusal.reasonCode,
+      `Nothing was re-pinned (${refusal.reasonCode}): ${refusal.detail ?? 'this clone refuses the sync this invocation asked for'}, and a confirmation cannot change that.`,
+    );
+  }
+
+  if (confirmation !== preview.previewId) {
+    return refuse(
+      'preview-mismatch',
+      `Nothing was re-pinned (preview-mismatch): ${mismatchExplanation('sync', instructionSelectors('sync', selector))}`,
+    );
+  }
+
+  const consent = {
+    previewId: preview.previewId,
+    repositoryIdentity: preview.repository.identity,
+    configurationIdentity: preview.candidate.identity,
+    actor: null,
+    grantedAt: new Date().toISOString(),
+  };
+  const result = await syncActivation({ ...request, consent }, {
+    ...dependencies,
+    evidenceStore: clone.store,
+    // The same three seams `gate activate` binds, bound the same way and
+    // replaceable from nothing on the argument vector.
+    establishTrust: createTrustEstablishment({ consent, actor: null }),
+    selfTestEvaluation: () => selfTestEvaluationDenial({
+      runnerVersion: existing.receipt.runtime?.runnerVersion ?? null,
+    }),
+    selfTestAdapter: selfTestAdapterSurface,
+  });
+  const synced = result.activated === true;
+
+  return {
+    command: 'sync',
+    healthy: synced,
+    observation,
+    mutation: mutation({
+      confirmation,
+      performed: synced,
+      reasonCode: result.reasonCode,
+      step: result.step,
+      order: result.order,
+      state: result.state,
+      priorReceiptId: preview.receiptId,
+      receiptId: result.receipt?.receiptId ?? null,
+      transition: result.transition ?? null,
+      rollback: result.rollback,
+      errors: result.errors ?? [],
+      summary: synced
+        ? `The configuration ${preview.candidate.identity} is pinned: the receipt ${result.receipt.receiptId} replaced ${preview.receiptId} by one atomic write, every registration was kept byte for byte, and the next evaluation is graded under it.${result.transition?.weakened ? ` It is weaker than the policy it replaced, and that weakening was acknowledged by the token confirmed here: ${result.transition.weakenings.map((weakening) => `${weakening.code} ${weakening.checkId}`).join(', ')}.` : ''}`
+        : (result.state === 'recovery-required'
+          ? `The sync failed at ${result.step} (${result.reasonCode}) and could not be fully rolled back; this clone requires recovery: ${result.rollback.remains.join(' ')}`
+          : `Nothing was re-pinned (${result.reasonCode}): the sync failed at ${result.step}, and the receipt ${preview.receiptId} and every registration are exactly as they were.`),
+    }),
+  };
+};
+
 const OPERATIONS = Object.freeze({
   activate: operateActivate,
   status: operateStatus,
@@ -2192,6 +2524,7 @@ const OPERATIONS = Object.freeze({
   uninstall: operateUninstall,
   cleanup: operateCleanup,
   bypass: operateBypass,
+  sync: operateSync,
 });
 
 /** The envelope every rendering is made from, whether the command ran or not. */
@@ -2475,6 +2808,56 @@ const renderBypass = (observation, document) => [
     : line('next', BYPASS_REFUSALS[observation.rejectionCode] ?? `nothing to grant (${observation.rejectionCode})`),
 ];
 
+const renderSync = (observation, document) => {
+  const { transition } = observation;
+  const weakenings = transition?.weakenings ?? [];
+  const next = () => {
+    if (observation.refusal === null) {
+      return renderConfirmation('sync', observation, document);
+    }
+
+    return line('next', SYNC_REFUSALS[observation.refusal.reasonCode]?.next ?? `nothing to confirm (${observation.refusal.reasonCode})`);
+  };
+
+  return [
+    line('state', observation.state),
+    line('receipt', observation.receiptId ?? 'none'),
+    line('release', renderRelease(observation.release)),
+    line(
+      'trusted configuration',
+      `${observation.trusted.identity ?? 'none'} (${observation.trusted.source === null ? 'unrecoverable' : `read from ${observation.trusted.source}`})`,
+    ),
+    line('candidate configuration', observation.candidate.identity),
+    // The heading nobody can miss: the transition is judged, and a weaker
+    // candidate says so in capitals before anything else is read.
+    line('policy transition', transition === null
+      ? 'cannot be judged: the trusted policy could not be recovered'
+      : (transition.weakened
+        ? `WEAKER than the trusted policy (${weakenings.length})`
+        : 'not weaker than the trusted policy')),
+    ...weakenings.map((weakening) => `  - ${weakening.code} ${weakening.checkId}: ${weakening.detail}`),
+    ...(transition?.weakened ? [line('weakening acknowledged', observation.acknowledgedWeakening)] : []),
+    line('adapters kept', observation.adapters.map((adapter) => adapter.id).join(', ') || 'none'),
+    line('registrations kept', 1 + observation.adapterRegistrations.length),
+    `  - ${observation.hook.hook} ${observation.hook.path ?? 'unregistered'} (${observation.hook.ownership}, ${observation.hook.action})`,
+    ...observation.adapterRegistrations.map(
+      (registration) => `  - ${registration.adapter} ${registration.path ?? 'unregistered'} (${registration.state}, ${registration.action})`,
+    ),
+    line('commands', observation.commands.length),
+    ...observation.commands.map(
+      (command) => `  - ${command.check_id} ${command.runner} ${command.executable} ${command.version ?? 'unversioned'}`,
+    ),
+    line('unresolved', observation.unresolved.length),
+    ...observation.unresolved.map((entry) => `  - ${JSON.stringify(entry)}`),
+    line('dependency roots', renderDependencyRoots(observation)),
+    line('runtime inputs', observation.runtimeInputs.join(', ') || 'none'),
+    line('refusal', observation.refusal === null
+      ? 'none'
+      : `${observation.refusal.reasonCode}: ${observation.refusal.detail ?? 'see its errors'}`),
+    next(),
+  ];
+};
+
 const RENDERERS = Object.freeze({
   activate: renderActivate,
   status: renderStatus,
@@ -2486,6 +2869,7 @@ const RENDERERS = Object.freeze({
   uninstall: renderUninstall,
   cleanup: renderCleanup,
   bypass: renderBypass,
+  sync: renderSync,
 });
 
 /**

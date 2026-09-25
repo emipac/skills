@@ -23,11 +23,16 @@ import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { registerAdapterSurface, withdrawAdapterRegistration } from './adapter-registration.mjs';
+import {
+  reconcileAdapterRegistration,
+  registerAdapterSurface,
+  withdrawAdapterRegistration,
+} from './adapter-registration.mjs';
 import { describeAdapter } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
+import { evaluatePolicyTransition } from './security-control.mjs';
 import { recordedProvisioning } from './snapshot.mjs';
 
 /** The ordered steps of one Activation transaction; Git is always enabled last. */
@@ -169,8 +174,8 @@ export const ACTIVATION_STATES = Object.freeze([
  * that failed means a gate-owned change survived the transaction, so the clone
  * is not merely configured and must not say that it is (SG-LIFE-001).
  */
-const stateAfterRollback = (rollback) => (
-  rollback.failures.length > 0 ? 'recovery-required' : 'configured'
+const stateAfterRollback = (rollback, resting = 'configured') => (
+  rollback.failures.length > 0 ? 'recovery-required' : resting
 );
 
 const refusal = (step, reasonCode, errors = []) => ({
@@ -1305,6 +1310,58 @@ export const previewActivation = async (request, dependencies = {}) => {
   return { ...body, previewId: contentIdentity(body) };
 };
 
+/** What a receipt pins about each resolved runner. */
+const pinnedRunnerEntries = (resolved) => resolved.map((entry) => ({
+  check_id: entry.check_id,
+  role: entry.role,
+  runner: entry.runner,
+  executable: entry.executable,
+  // An executable that is a script needs its interpreter found before it
+  // can start, so what activation proved includes where that interpreter
+  // was, and the hook runs against the same one (TB-028).
+  interpreter: entry.interpreter ?? null,
+  version: entry.version,
+  // The exact invocation consent was granted against. The executable
+  // alone does not say what it would be asked to do, so a widened or
+  // narrowed argument vector would otherwise be invisible to every later
+  // reconciliation: `evaluation_gate` binds which checks are required,
+  // not what they run (TB-031, AC-CFG-004).
+  preview: entry.preview ?? null,
+}));
+
+/**
+ * The command one desktop surface would run.
+ *
+ * Desktop registration points at the packaged preflight program when the
+ * pinned hook program is `gate-precommit.mjs`, and at the fixture program
+ * otherwise. Every command names the adapter it is answering so an
+ * unreadable payload can still be returned through that adapter's declared
+ * feedback channel. A program the gate cannot safely quote yields no
+ * command, and a registration without one refuses rather than inventing one.
+ *
+ * Stated once, because `gate sync` has to know whether the registration it is
+ * keeping is the one this activation would write (`TB-062`).
+ */
+const desktopCommandFor = (request, adapterId) => {
+  const hookProgram = request.runtime?.hookProgram ?? null;
+  const preflightProgram = request.runtime?.preflightProgram ?? (
+    hookProgram !== null && path.basename(hookProgram.script ?? '') === 'gate-precommit.mjs'
+      ? {
+        ...hookProgram,
+        script: path.join(path.dirname(hookProgram.script), 'gate-preflight.mjs'),
+      }
+      : hookProgram
+  );
+
+  return quotedProgram({
+    program: {
+      ...preflightProgram,
+      args: [...(preflightProgram?.args ?? []), '--adapter', adapterId],
+    },
+    repositoryRoot: request.repository.root,
+  });
+};
+
 /**
  * Register one selected adapter in the surface that adapter declares.
  *
@@ -1405,7 +1462,16 @@ const pinnedRegistration = (result) => (
  * mutation has to reach the same unwind and the same report as a refusal, and
  * it cannot do that from inside the pipeline that threw (SG-LIFE-001).
  */
-const activationTransaction = ({ evidenceStore }) => {
+const activationTransaction = ({
+  evidenceStore,
+  // What a fully unwound failure leaves the clone as. An activation that
+  // unwinds leaves it `configured`; a `gate sync` that unwinds leaves it
+  // activated under the receipt it started from (`TB-062`).
+  restingState = 'configured',
+  // How the Lifecycle event names this transaction. Activation's own words are
+  // the default and are unchanged; `gate sync` states its own.
+  describeEvent = null,
+}) => {
   // Compensating actions, unwound last-in-first-out.
   const journal = [];
   const order = [];
@@ -1447,6 +1513,7 @@ const activationTransaction = ({ evidenceStore }) => {
         after: result.resumption?.transactionId ?? result.receipt?.receiptId ?? null,
         outcome: outcomeOf(result),
         reason: reasonOf(result),
+        ...(describeEvent === null ? {} : describeEvent(result)),
       });
     }
 
@@ -1482,7 +1549,7 @@ const activationTransaction = ({ evidenceStore }) => {
     const unwound = await rollback();
     const result = {
       ...refusal(step, reasonCode, errors),
-      state: stateAfterRollback(unwound),
+      state: stateAfterRollback(unwound, restingState),
       order,
       rollback: unwound,
     };
@@ -1796,35 +1863,7 @@ const runActivation = async (request, dependencies, transaction) => {
   });
 
   const adapters = [];
-  /**
-   * The command one desktop surface would run.
-   *
-   * Desktop registration points at the packaged preflight program when the
-   * pinned hook program is `gate-precommit.mjs`, and at the fixture program
-   * otherwise. Every command names the adapter it is answering so an
-   * unreadable payload can still be returned through that adapter's declared
-   * feedback channel. A program the gate cannot safely quote yields no
-   * command, and a registration without one refuses rather than inventing one.
-   */
-  const quotedDesktopCommand = (adapterId) => {
-    const hookProgram = request.runtime?.hookProgram ?? null;
-    const preflightProgram = request.runtime?.preflightProgram ?? (
-      hookProgram !== null && path.basename(hookProgram.script ?? '') === 'gate-precommit.mjs'
-        ? {
-          ...hookProgram,
-          script: path.join(path.dirname(hookProgram.script), 'gate-preflight.mjs'),
-        }
-        : hookProgram
-    );
-
-    return quotedProgram({
-      program: {
-        ...preflightProgram,
-        args: [...(preflightProgram?.args ?? []), '--adapter', adapterId],
-      },
-      repositoryRoot: request.repository.root,
-    });
-  };
+  const quotedDesktopCommand = (adapterId) => desktopCommandFor(request, adapterId);
 
   // An adapter becomes active only after it has proved itself, and the set is
   // all-or-nothing: the first failure unwinds every adapter already registered,
@@ -1916,23 +1955,7 @@ const runActivation = async (request, dependencies, transaction) => {
         protocolVersion: request.gate?.protocolVersion ?? null,
       },
       runnerVersion: request.runtime?.runnerVersion ?? null,
-      runners: described.runners.resolved.map((entry) => ({
-        check_id: entry.check_id,
-        role: entry.role,
-        runner: entry.runner,
-        executable: entry.executable,
-        // An executable that is a script needs its interpreter found before it
-        // can start, so what activation proved includes where that interpreter
-        // was, and the hook runs against the same one (TB-028).
-        interpreter: entry.interpreter ?? null,
-        version: entry.version,
-        // The exact invocation consent was granted against. The executable
-        // alone does not say what it would be asked to do, so a widened or
-        // narrowed argument vector would otherwise be invisible to every later
-        // reconciliation: `evaluation_gate` binds which checks are required,
-        // not what they run (TB-031, AC-CFG-004).
-        preview: entry.preview ?? null,
-      })),
+      runners: pinnedRunnerEntries(described.runners.resolved),
     },
     adapters,
     hooks: described.hooks.map((hook) => ({
@@ -2063,6 +2086,652 @@ const runActivation = async (request, dependencies, transaction) => {
 
   // An activation nobody can audit is not an activation. If the transition
   // cannot be recorded, authoritative Git is withdrawn again (NFR-AUD-001).
+  try {
+    await record(result);
+  } catch (error) {
+    return fail('git-enablement', 'activation-record-failed', [{ message: error.message }]);
+  }
+
+  return result;
+};
+
+/**
+ * Every receipt id one activation has been published under, newest first.
+ *
+ * The registration on disk names the receipt that authorized it, and neither
+ * an update nor a sync rewrites that registration, so every id in the lineage
+ * is still this activation's. `authorizedReceiptIds` in `lifecycle.mjs` reads
+ * the same two fields; it is not imported here only because `lifecycle.mjs`
+ * already imports this module.
+ */
+/** A receipt without its own id: what that id is the content identity of. */
+const receiptBodyOf = (receipt) => {
+  const { receiptId: _id, ...body } = receipt ?? {};
+
+  return body;
+};
+
+const receiptLineageOf = (receipt) => [
+  receipt?.receiptId ?? null,
+  ...(receipt?.receiptLineage ?? []),
+].filter((id) => typeof id === 'string' && id.length > 0);
+
+/**
+ * The gate-owned Git registration a sync keeps, as it is on disk now.
+ *
+ * `intact` is the receipt's own test — the pinned block identity, naming a
+ * receipt this activation issued. `reproducible` is the test that makes keeping
+ * it honest: the registration this sync would write for the hook program it is
+ * given is the registration already there, byte for byte once the receipt-id
+ * line is elided. A sync never writes it either way (`TB-062`).
+ */
+const keptHookRegistration = async ({ prior, request }) => {
+  const chain = prior?.hookChain ?? {};
+  const ownership = chain.strategy
+    ?? prior?.hooks?.find((hook) => hook?.hook === AUTHORITATIVE_HOOK)?.ownership
+    ?? 'gate-owned-shim';
+  const registration = typeof chain.path === 'string' && chain.path !== ''
+    ? await readHookRegistration(chain.path, ownership)
+    : { present: false, wellFormed: true, blockIdentity: null, receiptId: null };
+  let planned = null;
+
+  try {
+    planned = plannedHookRegistration({
+      strategy: chain.strategy ?? ownership,
+      hook: AUTHORITATIVE_HOOK,
+      program: request.runtime?.hookProgram ?? null,
+      repositoryRoot: request.repository.root,
+    });
+  } catch {
+    planned = null;
+  }
+
+  const pinned = chain.blockIdentity ?? null;
+
+  return {
+    hook: AUTHORITATIVE_HOOK,
+    path: chain.path ?? null,
+    ownership,
+    blockIdentity: registration.blockIdentity ?? null,
+    receiptId: registration.receiptId ?? null,
+    intact: pinned !== null
+      && registration.present === true
+      && registration.wellFormed === true
+      && registration.blockIdentity === pinned
+      && receiptLineageOf(prior).includes(registration.receiptId),
+    reproducible: pinned !== null && planned !== null && hookBlockIdentity(planned) === pinned,
+    action: 'keep',
+  };
+};
+
+/**
+ * Every client-file registration a sync keeps, reconciled through the adapter's
+ * own declaration, and whether it is the entry this sync would write.
+ */
+const keptAdapterRegistrations = async ({ prior, request }) => {
+  const kept = [];
+
+  for (const adapter of prior?.adapters ?? []) {
+    const registration = adapter?.registration ?? null;
+
+    if (registration?.kind !== 'client-configuration-file') {
+      continue;
+    }
+
+    const observed = await reconcileAdapterRegistration({
+      adapterId: adapter.id,
+      repositoryRoot: request.repository.root,
+      registration,
+    });
+    let command = null;
+
+    try {
+      command = desktopCommandFor(request, adapter.id);
+    } catch {
+      command = null;
+    }
+
+    const state = observed?.state ?? 'unverified';
+    const reproducible = command !== null && command === registration.command;
+
+    kept.push({
+      adapter: adapter.id,
+      path: registration.path ?? null,
+      entryIdentity: registration.entryIdentity ?? null,
+      state,
+      reproducible,
+      intact: registration.registered === true && state === 'registered' && reproducible,
+      detail: observed?.detail ?? null,
+      action: 'keep',
+    });
+  }
+
+  return kept;
+};
+
+/**
+ * Where the Trusted configuration a sync judges against is read from.
+ *
+ * An Activation receipt pins the configuration's IDENTITY, not the policy, so
+ * the policy itself has to come from somewhere, and it is accepted only from a
+ * document that reproduces the pinned identity: a receipt that `gate sync`
+ * wrote (it pins the policy it judged), the document the caller recovered —
+ * the operator surface reads the committed `.agent-framework.yaml` at `HEAD` —
+ * or the configuration file itself when its identity never moved. Anything
+ * that does not hash to the pinned identity is not the Trusted configuration,
+ * whatever it claims (`FR-CFG-005`, `TB-062`).
+ */
+const recoverTrustedConfiguration = ({ prior, trusted }) => {
+  const pinned = prior?.configuration?.identity ?? null;
+  const candidates = [
+    prior?.configuration?.policy === undefined ? null : {
+      schemaVersion: prior.configuration.schemaVersion ?? null,
+      policy: prior.configuration.policy,
+      source: 'receipt',
+    },
+    trusted ?? null,
+  ];
+
+  return candidates.find((candidate) => candidate !== null
+    && pinned !== null
+    && configurationIdentity(candidate) === pinned) ?? null;
+};
+
+/**
+ * Why a sync preview offers no token, in the order a reader has to act on them.
+ * Every one is a refusal the transaction repeats if it is confirmed anyway.
+ */
+const syncRefusal = ({
+  receiptIntact, trusted, adapterSetChanged, hook, registrations, changed, transition, acknowledged,
+}) => {
+  // A receipt that no longer reproduces its own identity is receipt drift, and
+  // re-pinning on top of it would launder that drift into a fresh receipt.
+  if (!receiptIntact) {
+    return { reasonCode: 'receipt-drifted', errors: [] };
+  }
+
+  if (adapterSetChanged) {
+    return { reasonCode: 'adapter-set-changed', errors: [] };
+  }
+
+  if (!hook.intact) {
+    return { reasonCode: 'hook-registration-drifted', errors: [{ path: hook.path }] };
+  }
+
+  if (!hook.reproducible) {
+    return { reasonCode: 'hook-registration-not-reproducible', errors: [{ path: hook.path }] };
+  }
+
+  const changedRegistrations = registrations.filter((registration) => !registration.intact);
+
+  if (changedRegistrations.length > 0) {
+    return {
+      reasonCode: 'adapter-registration-changed',
+      errors: changedRegistrations.map(({ adapter, path: registrationPath, state, reproducible }) => ({
+        adapter, path: registrationPath, state, reproducible,
+      })),
+    };
+  }
+
+  if (!changed) {
+    return { reasonCode: 'nothing-to-sync', errors: [] };
+  }
+
+  if (trusted === null) {
+    return { reasonCode: 'trusted-configuration-unrecoverable', errors: [] };
+  }
+
+  if (transition.candidate.valid !== true) {
+    return { reasonCode: 'candidate-policy-invalid', errors: transition.candidate.errors };
+  }
+
+  if (transition.weakened && !acknowledged) {
+    return { reasonCode: 'weakening-unacknowledged', errors: transition.weakenings };
+  }
+
+  return null;
+};
+
+/**
+ * Preview one `gate sync`: re-pin the configuration this clone declares now,
+ * under the adapter set its receipt already pins.
+ *
+ * The preview writes nothing. It states the Trusted identity the receipt
+ * pinned, the candidate identity the file produces, what
+ * `evaluatePolicyTransition` finds between the two — every way the candidate
+ * is weaker than the policy that authorized this clone — the adapters and
+ * registrations it keeps, and the commands it would pin. The token is the
+ * content identity of all of it, so confirming it approves exactly that
+ * candidate, and any weakening it names, by hash (`FR-CFG-005`, `FR-LIFE-004`,
+ * `SG-CFG-001`, `TB-062`).
+ *
+ * `refusal` is derived from the body, never hashed beside it: a preview that
+ * refuses offers no token, and a confirmation the transaction receives anyway
+ * is refused for the same reason.
+ */
+export const previewSync = async (request, dependencies = {}) => {
+  const prior = request.prior ?? null;
+  const {
+    runGit,
+    environment = process.env,
+    resolveExecutable = createRunnerResolver({
+      repositoryRoot: request.repository.root,
+      environment,
+    }),
+  } = dependencies;
+  const gitCommonDirectory = await resolveGitCommonDirectory({
+    repositoryRoot: request.repository.root,
+    runGit,
+  });
+  const runners = resolveExecutables(request.checks ?? [], resolveExecutable);
+  const candidate = {
+    schemaVersion: request.configuration?.schemaVersion ?? null,
+    identity: configurationIdentity(request.configuration),
+  };
+  const trustedIdentity = prior?.configuration?.identity ?? null;
+  const trusted = recoverTrustedConfiguration({
+    prior,
+    trusted: candidate.identity === trustedIdentity
+      ? { ...request.configuration, source: 'configuration-file' }
+      : (request.trusted ?? null),
+  });
+  const transition = evaluatePolicyTransition({
+    trusted: { identity: trustedIdentity, policy: trusted?.policy ?? null },
+    candidate: { identity: candidate.identity, policy: request.configuration?.policy ?? null },
+    checks: request.checks ?? [],
+    // Not an evaluation: nothing here may allow or deny a commit.
+    role: 'operator',
+    approval: null,
+  });
+  const weakened = trusted !== null && transition.weakened;
+  const acknowledged = weakened && request.acknowledgeWeakening === true;
+  // The adapter set is the receipt's, and nothing else's. What the installed
+  // gate declares under those ids is compared, never substituted: a changed
+  // set is `activate` and `deactivate`, not a sync.
+  const adapters = (prior?.adapters ?? []).map((adapter) => ({
+    id: adapter?.id ?? null,
+    version: adapter?.version ?? null,
+    authoritative: adapter?.authoritative === true,
+  }));
+  const declared = adapters.map((adapter) => {
+    const declaration = describeAdapter(adapter.id);
+
+    return {
+      id: adapter.id,
+      version: declaration?.version ?? null,
+      authoritative: declaration?.role === 'authoritative',
+    };
+  });
+  const hook = await keptHookRegistration({ prior, request });
+  const registrations = await keptAdapterRegistrations({ prior, request });
+  const pins = pinnedRunnerEntries(runners.resolved);
+  const policy = request.configuration?.policy ?? null;
+  const body = {
+    operation: 'sync',
+    repository: {
+      root: request.repository.root,
+      gitCommonDirectory,
+      identity: repositoryIdentity(gitCommonDirectory),
+    },
+    receiptId: prior?.receiptId ?? null,
+    // The Active gate release is `gate update`'s to move, and a sync keeps it.
+    release: prior?.runtime?.gate ?? null,
+    trusted: { identity: trustedIdentity, source: trusted?.source ?? null },
+    candidate,
+    transition: trusted === null ? null : {
+      weakened,
+      weakenings: transition.weakenings,
+      candidateValid: transition.candidate.valid,
+    },
+    acknowledgedWeakening: acknowledged,
+    adapters,
+    hook: {
+      hook: hook.hook,
+      path: hook.path,
+      ownership: hook.ownership,
+      blockIdentity: hook.blockIdentity,
+      receiptId: hook.receiptId,
+      action: hook.action,
+    },
+    adapterRegistrations: registrations.map(({ adapter, path: registrationPath, entryIdentity, state, action }) => ({
+      adapter, path: registrationPath, entryIdentity, state, action,
+    })),
+    commands: runners.resolved.map((entry) => ({
+      check_id: entry.check_id,
+      role: entry.role,
+      runner: entry.runner,
+      executable: entry.executable,
+      version: entry.version,
+      preview: entry.preview,
+      working_directory: entry.working_directory,
+    })),
+    unresolved: runners.unresolved,
+    dependencyRoots: [...(policy?.execution?.dependency_roots ?? [])],
+    dependencyProvisioning: recordedProvisioning(
+      policy?.execution?.dependency_provisioning,
+      policy?.execution?.dependency_roots ?? [],
+    ),
+    runtimeInputs: (request.runtimeInputs ?? []).map((input) => input.name),
+  };
+  const changed = candidate.identity !== trustedIdentity
+    || contentIdentity(pins) !== contentIdentity(prior?.runtime?.runners ?? [])
+    || contentIdentity(body.runtimeInputs) !== contentIdentity(prior?.runtimeInputs ?? []);
+
+  return {
+    ...body,
+    previewId: contentIdentity(body),
+    changed,
+    refusal: syncRefusal({
+      receiptIntact: prior !== null && contentIdentity(receiptBodyOf(prior)) === prior.receiptId,
+      trusted,
+      adapterSetChanged: adapterIdentity(declared) !== adapterIdentity(adapters),
+      hook,
+      registrations,
+      changed,
+      transition,
+      acknowledged,
+    }),
+    // What the transaction judges the approval against. Not hashed: its
+    // identity is `trusted.identity`, which is.
+    trustedPolicy: trusted?.policy ?? null,
+    runnerPins: pins,
+  };
+};
+
+/** How a sync's Lifecycle event names what happened. */
+const syncEvent = (prior) => (result) => ({
+  before: prior?.receiptId ?? null,
+  after: result.activated ? result.receipt?.receiptId ?? null : null,
+  reason: result.activated
+    ? `Sync re-pinned the configuration ${result.receipt?.configuration?.identity ?? 'unknown'} under the adapter set receipt ${prior?.receiptId ?? 'none'} pinned; every registration was kept byte for byte and the receipt was switched last.`
+    : `Sync failed at ${result.step} (${result.reasonCode}); ${result.state === 'recovery-required' ? `the clone requires recovery: ${result.rollback.remains.join(' ')}` : `the prior receipt ${prior?.receiptId ?? 'none'} and every registration are exactly as they were.`}`,
+});
+
+/**
+ * Run one `gate sync` — an Activation transaction scoped to a changed
+ * configuration under an adapter set that stays (`FR-LIFE-019`, `TB-062`).
+ *
+ * It takes the same ordered steps activation takes, runs the same self-tests,
+ * and registers nothing: every registration the receipt pins is kept exactly
+ * as it is, and a registration that is not what this sync would write refuses
+ * the whole sync rather than being rewritten. What changes is the receipt,
+ * published by one atomic write and read back; its lineage keeps every earlier
+ * id, so the registration that names one stays this activation's. Git was
+ * authoritative before and stays authoritative throughout — under the prior
+ * receipt until the switch, under the new one after it — and the last step
+ * re-confirms the registration the new receipt authorizes.
+ *
+ * A failure at any step unwinds to the prior receipt, byte for byte, and
+ * leaves the clone activated exactly as it was (`AC-LIFE-009`).
+ */
+export const syncActivation = async (request, dependencies = {}) => {
+  const transaction = activationTransaction({
+    evidenceStore: dependencies.evidenceStore ?? null,
+    restingState: 'activated',
+    describeEvent: syncEvent(request.prior ?? null),
+  });
+
+  try {
+    return await runSync(request, dependencies, transaction);
+  } catch (error) {
+    return transaction.fail(transaction.currentStep(), 'sync-interrupted', [{ message: error.message }]);
+  }
+};
+
+const runSync = async (request, dependencies, transaction) => {
+  const { journal, order, fail, record } = transaction;
+  const {
+    establishTrust,
+    selfTestEvaluation,
+    selfTestAdapter,
+    selfTestHookProgram = selfTestHookProgramDenial,
+    evidenceStore = null,
+    clock = () => new Date(),
+  } = dependencies;
+  const prior = request.prior ?? null;
+
+  // 1. Repository identity: a sync re-pins the clone its receipt names.
+  order.push('repository-identity');
+
+  if (prior === null) {
+    return fail('repository-identity', 'activation-absent', [{
+      message: 'Only an activated clone has a receipt to re-pin; activate it instead.',
+    }]);
+  }
+
+  if ((request.trigger ?? 'explicit') !== 'explicit') {
+    return fail('repository-identity', 'activation-trigger-prohibited', [{ trigger: request.trigger }]);
+  }
+
+  const preview = await previewSync(request, dependencies);
+
+  if (preview.repository.identity !== (prior.repository?.identity ?? null)) {
+    return fail('repository-identity', 'repository-identity-mismatch', [{
+      expected: prior.repository?.identity ?? null,
+      actual: preview.repository.identity,
+    }]);
+  }
+
+  // 2. Preview, re-derived from the clone as it is now.
+  order.push('preview');
+
+  if (preview.refusal !== null) {
+    return fail('preview', preview.refusal.reasonCode, preview.refusal.errors);
+  }
+
+  // 3. Consent, bound to this clone and this preview — and through it, the
+  //    candidate-hash approval `FR-CFG-005` requires, judged by the one
+  //    function that owns policy transitions.
+  order.push('consent');
+
+  const { consent = null } = request;
+
+  if (!consent) {
+    return fail('consent', 'consent-missing', []);
+  }
+
+  if (consent.previewId !== preview.previewId) {
+    return fail('consent', 'consent-preview-mismatch', [{
+      expected: preview.previewId,
+      actual: consent.previewId ?? null,
+    }]);
+  }
+
+  if (consent.repositoryIdentity !== preview.repository.identity
+    || consent.configurationIdentity !== preview.candidate.identity) {
+    return fail('consent', 'consent-identity-mismatch', [{
+      repository: preview.repository.identity,
+      configuration: preview.candidate.identity,
+    }]);
+  }
+
+  const transition = evaluatePolicyTransition({
+    trusted: { identity: preview.trusted.identity, policy: preview.trustedPolicy },
+    candidate: { identity: preview.candidate.identity, policy: request.configuration?.policy ?? null },
+    checks: request.checks ?? [],
+    role: 'operator',
+    approval: {
+      candidateId: consent.configurationIdentity,
+      grantedBy: consent.actor ?? null,
+      at: consent.grantedAt ?? null,
+    },
+  });
+
+  if (!transition.advanced) {
+    return fail('consent', transition.reasonCode, transition.weakenings);
+  }
+
+  // 4. Runner resolution: every command the configuration declares now.
+  order.push('runner-resolution');
+
+  if (preview.unresolved.length > 0) {
+    return fail('runner-resolution', 'runner-unresolved', preview.unresolved);
+  }
+
+  // 5. Trust, for the client the receipt pinned, by its declared model.
+  order.push('trust');
+
+  const client = { id: prior.trust?.client ?? 'git' };
+  const trust = await establishTrust({ client, repository: preview.repository });
+
+  if (trust?.established !== true) {
+    return fail('trust', 'trust-not-established', [trust ?? null]);
+  }
+
+  // 6. Hook chain: the registration the receipt pins is the one kept. The
+  //    preview already refused anything else; nothing here writes.
+  order.push('hook-chain-validation');
+
+  // 7. Self-test: the same proofs activation requires.
+  order.push('self-test');
+
+  const evaluationSelfTest = await selfTestEvaluation({
+    repository: preview.repository,
+    checks: request.checks ?? [],
+  });
+  const selfTests = [{
+    name: 'evaluation-process',
+    ok: evaluationSelfTest?.ok === true,
+    detail: evaluationSelfTest?.detail ?? null,
+  }];
+
+  if (!selfTests[0].ok) {
+    return fail('self-test', 'self-test-failed', [selfTests[0]]);
+  }
+
+  const hookProgramSelfTest = await selfTestHookProgram({
+    program: request.runtime?.hookProgram ?? null,
+    repositoryRoot: request.repository.root,
+  });
+
+  if (hookProgramSelfTest?.ok !== true) {
+    return fail('self-test', 'hook-program-self-test-failed', [{
+      name: 'hook-program',
+      ok: false,
+      reason: hookProgramSelfTest?.reason ?? null,
+      detail: hookProgramSelfTest?.detail ?? null,
+    }]);
+  }
+
+  selfTests.push({ name: 'hook-program', ok: true, detail: hookProgramSelfTest.detail ?? null });
+
+  const adapters = [];
+
+  for (const adapter of prior.adapters ?? []) {
+    const result = await selfTestAdapter(adapter, { repository: preview.repository });
+    const selfTest = { ok: result?.ok === true, detail: result?.detail ?? null };
+
+    selfTests.push({ name: `adapter:${adapter.id}`, ...selfTest });
+
+    if (!selfTest.ok) {
+      return fail('self-test', 'adapter-self-test-failed', [{ adapter: adapter.id, ...selfTest }]);
+    }
+
+    // The registration and any recorded client review are kept as pinned:
+    // nothing about them changed, because nothing wrote them.
+    adapters.push({ ...adapter, selfTest });
+  }
+
+  // 8. Receipt: the one write, atomic, read back, and undone to the prior
+  //    receipt byte for byte if anything after it fails.
+  order.push('receipt');
+
+  if (!evidenceStore) {
+    return fail('receipt', 'receipt-store-missing', [{
+      message: 'Sync has no evidence store, so the receipt the registered hook reads could not be published.',
+    }]);
+  }
+
+  const body = {
+    ...receiptBodyOf(prior),
+    receiptVersion: ACTIVATION_RECEIPT_VERSION,
+    previewId: preview.previewId,
+    syncedAt: clock().toISOString(),
+    // The policy itself, beside its identity, so the next sync judges its
+    // transition against this document rather than having to recover it.
+    configuration: {
+      schemaVersion: preview.candidate.schemaVersion,
+      identity: preview.candidate.identity,
+      policy: request.configuration?.policy ?? null,
+    },
+    runtime: { ...(prior.runtime ?? {}), runners: preview.runnerPins },
+    adapters,
+    trust: {
+      client: client.id,
+      established: true,
+      grantedBy: trust.grantedBy ?? null,
+      at: trust.at ?? null,
+    },
+    runtimeInputs: preview.runtimeInputs,
+    selfTests,
+    supersedes: {
+      operation: 'sync',
+      receiptId: prior.receiptId,
+      configurationIdentity: preview.trusted.identity,
+      previewId: preview.previewId,
+      weakenings: transition.weakenings,
+    },
+    receiptLineage: receiptLineageOf(prior),
+  };
+  const receipt = { ...body, receiptId: contentIdentity(body) };
+  const receiptFile = evidenceStore.activationReceipt();
+
+  try {
+    await receiptFile.write(receipt);
+  } catch (error) {
+    return fail('receipt', 'receipt-write-failed', [{ message: error.message }]);
+  }
+
+  journal.push({
+    name: 'receipt',
+    remains: `The activation receipt at ${receiptFile.path ?? 'the evidence store'} pins the synced configuration; the prior receipt ${prior.receiptId} was not restored.`,
+    undo: () => receiptFile.write(prior),
+  });
+
+  let persisted = null;
+
+  try {
+    persisted = await receiptFile.read();
+  } catch (error) {
+    return fail('receipt', 'receipt-not-confirmed', [{ message: error.message }]);
+  }
+
+  if (persisted?.receiptId !== receipt.receiptId) {
+    return fail('receipt', 'receipt-not-confirmed', [{
+      expected: receipt.receiptId,
+      actual: persisted?.receiptId ?? null,
+    }]);
+  }
+
+  // 9. Authoritative Git, last: the registration the new receipt authorizes
+  //    is re-confirmed on disk, and nothing is written to it.
+  order.push('git-enablement');
+
+  const confirmed = await keptHookRegistration({ prior: receipt, request });
+
+  if (!confirmed.intact) {
+    return fail('git-enablement', 'hook-registration-drifted', [{ path: confirmed.path }]);
+  }
+
+  const result = {
+    activated: true,
+    state: 'activated',
+    step: 'git-enablement',
+    reasonCode: null,
+    errors: [],
+    receipt,
+    transition: {
+      trustedId: transition.trustedId,
+      candidateId: transition.candidateId,
+      weakened: transition.weakened,
+      weakenings: transition.weakenings,
+    },
+    order,
+    rollback: { performed: false, actions: [], failures: [], remains: [] },
+    resumption: null,
+  };
+
+  // A sync nobody can audit is not a sync: the prior receipt is restored.
   try {
     await record(result);
   } catch (error) {
