@@ -41,6 +41,19 @@
  *    authorizes — blocking again, with the repository's own prior chain intact
  *    and a Lifecycle event for each attempt (AC-LIFE-010, FR-LIFE-019,
  *    SG-HOOK-001, NFR-AUD-001).
+ * 7. `packaged-configuration-drift` — a clone activated by the packaged command
+ *    against the real runner has its `.agent-framework.yaml` edited: `gate
+ *    status` reports `broken` with a `trusted-configuration` finding and a
+ *    `next:` line naming `git gate sync`, writing nothing; the following commit
+ *    is denied `integrity-drift` for the same surface; and after exactly the
+ *    named sync — one preview, one confirmation — the clone is healthy, the
+ *    receipt pins the edited policy, the registered hook is byte-identical
+ *    throughout, and the next real commit is evaluated under the new policy
+ *    with no drift (AC-SEC-001, NFR-SEC-004, AC-LIFE-010, FR-LIFE-019,
+ *    TB-060, TB-062). The denial names that same sync from the one remedy
+ *    table, and `git gate repair` previews nothing to restore and names it too,
+ *    so the command every surface names is the one this scenario performs
+ *    (NFR-OPER-001, TB-065).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -74,6 +87,7 @@ import {
   uninstallGate,
   updateGate,
 } from './lib/lifecycle.mjs';
+import { remedyInstruction } from './lib/remedies.mjs';
 
 const CAPABILITY = 'gate-lifecycle-smoke';
 
@@ -111,14 +125,48 @@ const UNCONFIGURED_CONFIGURATION = [
 /** A hook the gate never previews, never registers, and never owns. */
 const UNRELATED_HOOK = '#!/bin/sh\necho "unrelated" > unrelated-ran\nexit 0\n';
 
+/**
+ * The one check every fixture activates, under the identity the runners derive
+ * for it from the configuration below. A receipt that pinned a check, or a
+ * policy, the configuration does not declare describes a clone the runners
+ * deny — and `gate status` observes exactly what they observe (`TB-060`).
+ */
+const CHECK_ID = 'configuration.broad-tests.test';
+
 /** A shared configuration file that is mostly not about the Gate at all. */
 const SHARED_CONFIGURATION = [
   'schema_version: 4',
   'backend: laravel',
   'frontend: none',
   'tracker: local-markdown',
+  'verification:',
+  '  commands:',
+  '    test:',
+  '      backend:',
+  '        - runner: repository-script',
+  '          args:',
+  '            - tools/check.mjs',
+  '          working_directory: .',
+  '          timeout_seconds: 60',
+  '          allowed_environment:',
+  '            - PATH',
+  '          evidence_category: test',
+  '          source_scope: backend',
+  '      frontend: []',
+  '      both: []',
   'evaluation_gate:',
-  '  enabled: true',
+  '  checks:',
+  '    required:',
+  `      - ${CHECK_ID}`,
+  '    advisory: []',
+  '  budget:',
+  '    total_seconds: 600',
+  '  bypass:',
+  '    enabled: false',
+  '    marker: null',
+  '  execution:',
+  '    budget_skippable: []',
+  '  evidence: {}',
   'history:',
   '  path: docs/history',
   '  required: true',
@@ -176,7 +224,7 @@ const commit = (cwd, message) => git(cwd, [
 ]);
 
 const gatePolicy = () => ({
-  checks: { required: ['broad_test'], advisory: [] },
+  checks: { required: [CHECK_ID], advisory: [] },
   budget: { total_seconds: 600 },
   bypass: { enabled: false, marker: null },
   execution: { budget_skippable: [] },
@@ -196,7 +244,7 @@ const activationRequest = (root, overrides = {}) => ({
     hookProgram: { interpreter: process.execPath, script: 'tools/gate-runner.mjs', args: [] },
   },
   checks: [{
-    id: 'broad_test',
+    id: CHECK_ID,
     evaluate: {
       runner: 'repository-script',
       args: ['tools/check.mjs'],
@@ -1076,6 +1124,153 @@ const packagedRepair = async () => {
   return { name: 'packaged-repair', ok: findings.length === 0, findings };
 };
 
+/**
+ * Status sees the configuration it pinned, and says what next (`TB-060`).
+ *
+ * Every other scenario here registers a fixture hook program. This one is
+ * activated by the packaged command, so the registered program is the real
+ * authoritative runner, and "the next commit agrees with status" is observed
+ * rather than assumed.
+ */
+const packagedConfigurationDrift = async () => {
+  const findings = [];
+  const root = await temporaryDirectory(`${CAPABILITY}-drift-`);
+
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), 'process.exitCode = 0;\n', 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), SHARED_CONFIGURATION, 'utf8');
+  await writeFile(path.join(root, 'source.txt'), 'baseline\n', 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const packaged = (args) => runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).catch((error) => error);
+  // The shortcut activation records, run the way the `next:` line names it.
+  const shortcut = (args) => git(root, ['gate', ...args]).catch((error) => error);
+  const documentOf = (run) => JSON.parse(run.stdout || '{}');
+  const confirmThrough = async (run, command) => {
+    const token = documentOf(await run([command, '--json'])).observation?.confirmationToken ?? 'none';
+
+    return documentOf(await run([command, '--confirm', token, '--json'])).mutation?.performed === true;
+  };
+
+  check(findings, await confirmThrough(packaged, 'activate'), 'The packaged command did not activate the clone.');
+
+  const hookPath = path.join(root, '.git', 'hooks', 'pre-commit');
+  const hookBytes = await readFile(hookPath, 'utf8').catch(() => null);
+
+  const healthy = documentOf(await shortcut(['status', '--json']));
+
+  check(findings, healthy.observation?.health === 'healthy', `A freshly activated clone reported ${healthy.observation?.health}.`);
+  check(findings, healthy.observation?.next?.instruction === 'nothing', `A healthy clone named ${healthy.observation?.next?.instruction} as next.`);
+
+  // The maintainer edits the policy, as they would in an editor.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    SHARED_CONFIGURATION.replace('total_seconds: 600', 'total_seconds: 900'),
+    'utf8',
+  );
+
+  const before = await snapshotOf(root);
+  const human = await shortcut(['status']);
+  const drifted = documentOf(await shortcut(['status', '--json']));
+  const surfaces = (drifted.observation?.findings ?? [])
+    .filter((finding) => finding.code === 'control-surface-drift')
+    .map((finding) => finding.surface);
+
+  check(findings, (await snapshotOf(root)) === before, 'Observing a drifted clone changed it.');
+  check(findings, human.code === 1, `A drifted clone exited ${human.code ?? 0} from gate status rather than 1.`);
+  check(findings, drifted.observation?.health === 'broken', `A drifted configuration reported ${drifted.observation?.health}.`);
+  check(findings, surfaces.join(',') === 'trusted-configuration', `The drift was reported on ${JSON.stringify(surfaces)}.`);
+  check(
+    findings,
+    /^next: git gate sync — /m.test(human.stdout ?? ''),
+    'Status did not name `git gate sync` through the clone\'s shortcut.',
+  );
+  check(
+    findings,
+    drifted.observation?.next?.instruction === remedyInstruction('sync', 'git gate'),
+    `Status did not render its remedy from the one table: ${drifted.observation?.next?.instruction}`,
+  );
+
+  // `gate repair` restores registrations and nothing else: it previews nothing
+  // to restore here, and names the same remedy status does (`TB-065`).
+  const repair = await shortcut(['repair']);
+
+  check(
+    findings,
+    /^actions: 0$/m.test(repair.stdout ?? '') && /^next: git gate sync — /m.test(repair.stdout ?? ''),
+    `gate repair did not refuse and name the sync that recovers the clone: ${repair.stdout}`,
+  );
+
+  // The next commit is denied for the reason status just gave.
+  await writeFile(path.join(root, 'source.txt'), 'changed after the policy edit\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const denied = await commit(root, 'against a drifted policy').then(() => null, (error) => `${error.stdout ?? ''}${error.stderr ?? ''}`);
+
+  check(findings, denied !== null, 'A commit against a drifted policy was accepted.');
+  check(
+    findings,
+    /integrity-drift/.test(denied ?? '') && /trusted-configuration/.test(denied ?? ''),
+    'The commit was not denied for the drift status reported.',
+  );
+  // And it names the remedy status named, from the same table, never the
+  // repair that would refuse (`TB-065`).
+  check(
+    findings,
+    (denied ?? '').includes(`Next: ${remedyInstruction('sync', 'git gate')}.`) && !/gate repair/.test(denied ?? ''),
+    `The denial did not name the recovery status named: ${denied}`,
+  );
+
+  // Exactly the remedy status named, and nothing else: one sync, previewed
+  // and confirmed, that keeps the registration it found.
+  const previewed = documentOf(await shortcut(['sync', '--json']));
+
+  check(
+    findings,
+    previewed.observation?.transition?.weakened === false
+      && previewed.observation?.trusted?.identity !== previewed.observation?.candidate?.identity,
+    `The sync preview did not show a trusted and a different, not-weaker candidate identity: ${JSON.stringify(previewed.observation?.transition)}.`,
+  );
+  check(findings, await confirmThrough(shortcut, 'sync'), 'git gate sync did not perform.');
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes,
+    'The sync rewrote the registered pre-commit hook.',
+  );
+
+  const receipt = JSON.parse(await readFile(
+    path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
+    'utf8',
+  ).catch(() => '{}'));
+
+  check(
+    findings,
+    receipt.configuration?.identity === previewed.observation?.candidate?.identity,
+    'The receipt after the sync does not pin the candidate identity it previewed.',
+  );
+
+  const recovered = documentOf(await shortcut(['status', '--json']));
+
+  check(findings, recovered.observation?.health === 'healthy', `The re-pinned clone reported ${recovered.observation?.health}.`);
+  check(
+    findings,
+    await commit(root, 'after the re-pin').then(() => true, () => false),
+    'The re-pinned clone still refused its commit.',
+  );
+  check(
+    findings,
+    (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes,
+    'The registered pre-commit hook changed across the edit, the sync, and the commit.',
+  );
+
+  return { name: 'packaged-configuration-drift', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1088,6 +1283,7 @@ const main = async () => {
       await packagedObservation(),
       await packagedLifecycleState(),
       await packagedRepair(),
+      await packagedConfigurationDrift(),
     ];
   } finally {
     for (const root of temporaryRoots) {

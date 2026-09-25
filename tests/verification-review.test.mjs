@@ -29,7 +29,7 @@ const verification = {
     'typescript',
   ],
   commands: {
-    format: ['vendor/bin/pint --dirty --format agent'],
+    format: ['vendor/bin/pint --test --format agent'],
     static_analysis: [
       'vendor/bin/phpstan analyse',
       'npm run lint',
@@ -171,7 +171,7 @@ test('preserves Laravel backend-only behavior with schema version 3 scopes', () 
       capabilities: verification.capabilities,
       commands: {
         format: {
-          backend: ['vendor/bin/pint --dirty --format agent'],
+          backend: ['vendor/bin/pint --test --format agent'],
           frontend: [],
           both: [],
         },

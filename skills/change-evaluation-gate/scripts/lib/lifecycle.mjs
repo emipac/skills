@@ -1217,14 +1217,20 @@ export const confirmConfigurationCleanup = async ({
  * and states exactly which gate-owned registrations it would restore and what
  * it would restore them to. The confirmation token identifies that exact set
  * against that exact receipt (FR-LIFE-019, AC-LIFE-010).
+ *
+ * A `controlSurface` observation, when the caller has one, is reconciled
+ * exactly as status reconciles it, so drift repair cannot restore is reported
+ * among `unrepairable` rather than going unmentioned. It adds nothing to what
+ * is repaired (`TB-065`).
  */
 export const previewRepair = async ({
   evidenceStore = null,
   repositoryRoot = null,
   runtime = null,
   adapters = null,
+  controlSurface = null,
 } = {}, dependencies = {}) => {
-  const status = await statusGate({ evidenceStore, adapters }, dependencies);
+  const status = await statusGate({ evidenceStore, adapters, controlSurface }, dependencies);
   const receipt = status.receipt;
   const pinned = receipt?.hookChain ?? {};
   const repairable = new Set(['hook-absent', 'hook-block-tampered', 'hook-receipt-mismatch']);
@@ -1259,8 +1265,12 @@ export const previewRepair = async ({
     repositoryRoot,
     runtime,
     // Adapter loss is a reinstall, not a repair: nothing here pretends to
-    // reinstate a client the machine no longer has (RISK-004).
-    unrepairable: status.findings.filter((finding) => !repairable.has(finding.code)),
+    // reinstate a client the machine no longer has (RISK-004). The one
+    // control surface a repair does restore is the managed hook block's own
+    // identity, which is the block these actions put back; reported beside
+    // them it would call the repair's own work unrepairable (`TB-065`).
+    unrepairable: status.findings.filter((finding) => !repairable.has(finding.code)
+      && !(actions.length > 0 && finding.code === 'control-surface-drift' && finding.surface === 'managed-hooks')),
     confirmationToken: contentIdentity(body),
   };
 };

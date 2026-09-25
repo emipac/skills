@@ -9,9 +9,10 @@
  * 1. `one-decision-four-surfaces` — a real commit is really blocked by
  *    authoritative Git on `deny`, and the *same decision that blocked it*,
  *    read back from disk, presents on Claude Code Desktop, Codex Desktop, and
- *    Cursor as a structured `not-authoritative` preflight result that blocks
- *    nothing and leaves the repository untouched (AC-ADAPT-001, FR-ADAPT-001,
- *    FR-ADAPT-003, FR-ADAPT-007).
+ *    Cursor as a structured `not-authoritative` preflight result — its
+ *    checks, diagnostics, and changed Grader surfaces — that blocks nothing
+ *    and leaves the repository untouched (AC-ADAPT-001, FR-ADAPT-001,
+ *    FR-ADAPT-003, FR-ADAPT-007, NFR-OPER-001).
  * 2. `supported-desktop-baseline` — every named desktop surface passes the
  *    shared compatibility baseline against a real repository and real Git
  *    despite declaring no native blocking; the exact Gate, Git, Node.js,
@@ -436,6 +437,17 @@ const oneDecisionFourSurfaces = async () => {
       JSON.stringify(view.presentation.checks.map((entry) => [entry.id, entry.outcome, entry.reasonCode]))
         === JSON.stringify(decision.checks.map((entry) => [entry.id, entry.outcome, entry.reasonCode])),
       `${adapterId} did not present the decision's own structured checks.`,
+    );
+    // TB-064: what the decision states beyond its checks reaches every surface
+    // too, so no surface renders a fragment of the decision (NFR-OPER-001,
+    // FR-EVAL-009).
+    check(
+      findings,
+      JSON.stringify(view.presentation.diagnostics.map((entry) => [entry.reasonCode, entry.detail]))
+        === JSON.stringify(decision.diagnostics.map((entry) => [entry.reasonCode, entry.detail]))
+        && JSON.stringify(view.presentation.changedGraderSurfaces.map((entry) => [entry.kind, entry.path]))
+        === JSON.stringify(decision.integrity.changedGraderSurfaces.map((entry) => [entry.kind, entry.path])),
+      `${adapterId} did not present the decision's own diagnostics and changed Grader surfaces.`,
     );
 
     // Each surface normalizes its own event, and only its own.

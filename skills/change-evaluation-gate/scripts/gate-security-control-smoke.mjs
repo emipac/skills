@@ -20,7 +20,7 @@
  * 3. `packaged-runner-drift` — the SHIPPED entry point, `gate-precommit.mjs`,
  *    run as a real process against an activated clone: it authorizes an
  *    undrifted commit and refuses the next one after the clone's Gate policy is
- *    edited, naming `integrity-drift`, the drifted surface, and `gate repair`,
+ *    edited, naming `integrity-drift`, the drifted surface, and `gate sync`,
  *    and leaving the receipt byte-identical. Scenario 2 proves the rule against
  *    a hand-assembled surface, which is how a reconciliation nothing called
  *    could look proved for as long as it did (`AC-SEC-001`, `AC-CFG-004`,
@@ -63,6 +63,26 @@
  *    byte-for-byte what it always was, no bypass record, ledger, or grant
  *    exists, and `gate bypass` refuses as `bypass-disabled` (`FR-POL-006`,
  *    `FR-POL-007`, `FR-POL-008`, `SG-BYP-001`, `NFR-AUD-001`).
+ * 8. `packaged-policy-sync` — the transition check on the real re-pin path
+ *    (`TB-062`). On a clone activated by the shipped command whose policy is
+ *    then weakened by demoting its required check, the shipped `gate sync`
+ *    refuses with the weakening named and no token, while a real commit is
+ *    still denied for the drift; with `--acknowledge-weakening` it offers a
+ *    token, confirming it pins the candidate, and the next real commit — a
+ *    failing change the trusted policy would have blocked — is graded under
+ *    the acknowledged policy with no drift. The registered hook is
+ *    byte-identical throughout (`SG-CFG-001`, `AC-CFG-003`, `FR-CFG-005`,
+ *    `NFR-SEC-004`).
+ * 9. `packaged-descriptor-recovery` — the command a denial names is one that
+ *    recovers (`TB-065`). On a clone activated by the shipped command whose
+ *    check descriptor is then corrected — the policy untouched — the shipped
+ *    hook denies `integrity-drift` on `command-descriptors` and names
+ *    `git gate sync` through the clone's own shortcut, never `gate repair`,
+ *    and says what survives it; `git gate repair` previews nothing to restore
+ *    and names the same remedy; and running exactly the named command,
+ *    previewed and confirmed, lets the next real commit through with no drift
+ *    and the registered hook byte-identical (`NFR-OPER-001`, `FR-LIFE-019`,
+ *    `AC-SEC-001`, `AC-LIFE-010`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -709,7 +729,9 @@ const packagedRunnerDrift = async () => {
     drifted.output.includes('trusted-configuration'),
     `The denial did not name the drifted surface: ${drifted.output}`,
   );
-  check(findings, drifted.output.includes('gate repair'), `The denial did not name gate repair: ${drifted.output}`);
+  // What recovers a changed policy is a sync, never `gate repair` (`TB-065`).
+  check(findings, drifted.output.includes('Next: gate sync — '), `The denial did not name gate sync: ${drifted.output}`);
+  check(findings, !drifted.output.includes('gate repair'), `The denial named gate repair, which re-pins nothing: ${drifted.output}`);
   check(
     findings,
     await readFile(receiptPath, 'utf8') === pinned,
@@ -1516,6 +1538,162 @@ const packagedBypass = async () => {
   return { name: 'packaged-bypass', ok: findings.length === 0, findings };
 };
 
+/**
+ * The dual-policy transition reached by the command a maintainer runs
+ * (`TB-062`): `evaluatePolicyTransition` judges a real re-pin, not a fixture
+ * pair, and a weakening is pinned only by a token that acknowledged it.
+ */
+const packagedPolicySync = async () => {
+  const findings = [];
+  const root = await cloneWithPolicy('sync', runnerConfiguration());
+
+  if (!(await activateClone(root, findings))) {
+    return { name: 'packaged-policy-sync', ok: false, findings };
+  }
+
+  const hookPath = path.join(root, '.git', 'hooks', 'pre-commit');
+  const hookBytes = await readFile(hookPath, 'utf8').catch(() => null);
+  const sync = async (args) => {
+    const run = await runPackagedCommand(root, ['sync', ...args, '--json']);
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || '{}') };
+  };
+
+  check(findings, hookBytes !== null, 'The shipped activation registered no pre-commit hook.');
+
+  // The maintainer demotes the one required check, as they would in an editor.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    runnerConfiguration({ required: [], advisory: [RUNNER_CHECK_ID] }),
+    'utf8',
+  );
+
+  const refused = await sync([]);
+  const weakenings = refused.document.observation?.transition?.weakenings ?? [];
+
+  check(findings, refused.exitCode === 1, `A weakening sync preview exited ${refused.exitCode} rather than 1.`);
+  check(
+    findings,
+    refused.document.observation?.refusal?.reasonCode === 'weakening-unacknowledged',
+    `A weakening sync was not refused as unacknowledged: ${JSON.stringify(refused.document.observation?.refusal)}.`,
+  );
+  check(findings, refused.document.observation?.confirmationToken === null, 'A refused weakening offered a token.');
+  check(
+    findings,
+    weakenings.length === 1 && weakenings[0].code === 'required-check-demoted' && weakenings[0].checkId === RUNNER_CHECK_ID,
+    `The weakening was not named: ${JSON.stringify(weakenings)}.`,
+  );
+
+  // Until it is pinned, the drift is what the commit is denied for.
+  await stageBroken(root);
+
+  const drifted = await commitAttempt(root, 'broken, before the re-pin');
+
+  check(findings, drifted.failed && drifted.output.includes('integrity-drift'), `The commit before the re-pin was not denied for drift: ${drifted.output}`);
+
+  const acknowledged = await sync(['--acknowledge-weakening']);
+  const token = acknowledged.document.observation?.confirmationToken ?? null;
+
+  check(findings, typeof token === 'string', 'An acknowledged weakening offered no token.');
+  check(findings, acknowledged.document.observation?.acknowledgedWeakening === true, 'The acknowledgement was not bound into the preview.');
+
+  const unacknowledged = await sync(['--confirm', token ?? `sha256:${'0'.repeat(64)}`]);
+
+  check(findings, unacknowledged.document.mutation?.performed === false, 'The acknowledged token pinned a weakening from an invocation that did not acknowledge it.');
+
+  const pinned = await sync(['--acknowledge-weakening', '--confirm', token ?? `sha256:${'0'.repeat(64)}`]);
+
+  check(findings, pinned.document.mutation?.performed === true, `The acknowledged sync did not perform: ${pinned.document.mutation?.summary}`);
+  check(findings, (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes, 'The sync rewrote the registered pre-commit hook.');
+
+  // The same failing change, now graded under the acknowledged policy.
+  const graded = await commitAttempt(root, 'broken, under the acknowledged policy');
+
+  check(findings, graded.failed === false, `The commit after the re-pin was not graded under the acknowledged policy: ${graded.output}`);
+  check(findings, !graded.output.includes('integrity-drift'), 'The commit after the re-pin still reported drift.');
+  check(findings, (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes, 'The registered pre-commit hook changed across the commit.');
+
+  return { name: 'packaged-policy-sync', ok: findings.length === 0, findings };
+};
+
+/**
+ * The recovery a denial names is one that performs (`TB-065`).
+ *
+ * The incident: a maintainer's agent corrected a descriptor that was genuinely
+ * wrong, every check passed, and the commit was denied `integrity-drift` with
+ * an instruction to run `gate repair` — the one command that re-pins nothing.
+ * Here the shipped hook names its remedy, and the remedy is run exactly as it
+ * was printed, through the clone's own shortcut.
+ */
+const packagedDescriptorRecovery = async () => {
+  const findings = [];
+  const root = await cloneWithPolicy('descriptor', runnerConfiguration());
+
+  if (!(await activateClone(root, findings))) {
+    return { name: 'packaged-descriptor-recovery', ok: false, findings };
+  }
+
+  const hookPath = path.join(root, '.git', 'hooks', 'pre-commit');
+  const hookBytes = await readFile(hookPath, 'utf8').catch(() => null);
+  const corrected = runnerConfiguration().replace(
+    '            - source.txt\n',
+    '            - source.txt\n            - --memory-limit=512M\n',
+  );
+  // The shortcut, run the way a maintainer pastes it; never rejects.
+  const shortcut = (args) => git(root, args).then(
+    (result) => ({ exitCode: 0, document: JSON.parse(result.stdout || '{}') }),
+    (error) => ({ exitCode: error.code ?? 1, document: JSON.parse(error.stdout || '{}') }),
+  );
+
+  check(findings, corrected !== runnerConfiguration(), 'The fixture descriptor could not be corrected, so nothing below proves anything.');
+  await writeFile(path.join(root, '.agent-framework.yaml'), corrected, 'utf8');
+  await writeFile(path.join(root, 'source.txt'), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const denied = await commitAttempt(root, 'after the descriptor was corrected');
+  const named = /Next: (git gate [a-z]+) — /.exec(denied.output)?.[1] ?? null;
+
+  check(findings, denied.failed === true, 'A commit against a corrected, unpinned descriptor was accepted.');
+  check(
+    findings,
+    denied.output.includes('unverified / deny') && denied.output.includes('integrity-drift') && denied.output.includes('(command-descriptors)'),
+    `The denial was not integrity-drift on command-descriptors: ${denied.output}`,
+  );
+  check(findings, named === 'git gate sync', `The denial named ${named} rather than git gate sync: ${denied.output}`);
+  check(findings, !denied.output.includes('gate repair'), `The denial named gate repair, which re-pins nothing: ${denied.output}`);
+  check(
+    findings,
+    denied.output.includes('keeps .agent-framework.yaml and all historical Evidence'),
+    `The denial did not say what its remedy keeps: ${denied.output}`,
+  );
+
+  // The command the Gate used to name restores nothing here, and says what does.
+  const repair = await shortcut(['gate', 'repair', '--json']);
+
+  check(findings, (repair.document.observation?.actions ?? []).length === 0, 'gate repair offered to restore a descriptor.');
+  check(
+    findings,
+    (repair.document.observation?.next?.remedies ?? []).map((remedy) => remedy.remedy).join(',') === 'sync',
+    `gate repair did not name the sync that recovers the clone: ${JSON.stringify(repair.document.observation?.next)}`,
+  );
+
+  // Exactly the named command, previewed and confirmed, and nothing else.
+  const words = (named ?? 'git gate sync').split(' ').slice(1);
+  const preview = await shortcut([...words, '--json']);
+  const token = preview.document.observation?.confirmationToken ?? `sha256:${'0'.repeat(64)}`;
+  const confirmed = await shortcut([...words, '--confirm', token, '--json']);
+
+  check(findings, confirmed.document.mutation?.performed === true, `${named} did not perform: ${JSON.stringify(confirmed.document.mutation)}`);
+  check(findings, (await readFile(hookPath, 'utf8').catch(() => null)) === hookBytes, 'The recovery rewrote the registered pre-commit hook.');
+
+  const recovered = await commitAttempt(root, 'after the named recovery');
+
+  check(findings, recovered.failed === false, `The clone did not commit after the named recovery: ${recovered.output}`);
+  check(findings, !recovered.output.includes('integrity-drift'), 'The recovered clone still reported drift.');
+
+  return { name: 'packaged-descriptor-recovery', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1529,6 +1707,8 @@ const main = async () => {
       await configuredDeclaration(),
       await declaredEnvironmentFile(),
       await packagedBypass(),
+      await packagedPolicySync(),
+      await packagedDescriptorRecovery(),
     ];
   } finally {
     for (const root of temporaryRoots) {

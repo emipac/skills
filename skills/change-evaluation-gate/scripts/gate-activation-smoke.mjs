@@ -1180,7 +1180,9 @@ const activatedConfigurationBinds = async (activated) => {
     deniedOutput.includes('trusted-configuration'),
     'The denial did not name the trusted configuration surface.',
   );
-  check(findings, deniedOutput.includes('gate repair'), 'The denial did not name `gate repair`.');
+  // A changed policy is re-pinned by a sync, never by `gate repair` (`TB-065`).
+  check(findings, /Next: (git )?gate sync — /.test(deniedOutput), `The denial did not name \`gate sync\`: ${deniedOutput}`);
+  check(findings, !deniedOutput.includes('gate repair'), 'The denial named `gate repair`, which re-pins nothing.');
   check(
     findings,
     (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
@@ -1667,8 +1669,9 @@ const vendorBinaryCommit = async () => {
   );
   check(
     findings,
-    drifted.output.includes(VENDOR_BINARY_PATH) && drifted.output.includes('gate repair'),
-    `The drift denial does not name the missing pin and the repair path: ${drifted.output}.`,
+    drifted.output.includes(VENDOR_BINARY_PATH) && /Next: (git )?gate sync — /.test(drifted.output)
+      && !drifted.output.includes('gate repair'),
+    `The drift denial does not name the missing pin and the sync that re-pins it: ${drifted.output}.`,
   );
 
   return { name: 'vendor-binary-commit', ok: findings.length === 0, findings };

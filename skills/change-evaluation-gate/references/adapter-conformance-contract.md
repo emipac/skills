@@ -72,6 +72,47 @@ returns no result. An adapter that declares no feedback channel returns none.
 The packaged preflight program (`gate-preflight.mjs`) answers only through that
 declaration: it never learns a client field name of its own.
 
+### What a feedback channel carries
+
+A declared channel carries the decision, not a summary of its checks (`TB-064`,
+`NFR-OPER-001`). `presentDecision` hands every surface the decision's
+`diagnostics` (`reasonCode`, `detail`) and `integrity.changedGraderSurfaces`
+(`kind`, `path`) beside its checks, and `formatFeedback` renders them as one
+message, one line per entry, in this order:
+
+1. `Preflight (not a commit decision): <outcome>.` The outcome is always
+   stated, so an `unverified` decision never reads as a shrinking list of
+   failures.
+2. `Failing checks:` each check that is neither `passed` nor `not-applicable`,
+   by its own summary. These come first because a maintainer can act on them
+   directly.
+3. `Diagnostics:` every `integrity-drift` diagnostic, then the others in the
+   order the decision records them, each as `<reasonCode>: <detail>`.
+4. `Changed Grader surfaces (this change edits what grades it; stated for
+   visibility):` each as `<kind> <path>`. It is observation, never a
+   classification of intent (`SG-CFG-001`).
+5. `Not listed:` only when something was left out, below.
+
+The message is bounded by `FEEDBACK_LIMITS` in `scripts/lib/adapters.mjs`: at
+most 8 failing-check summaries and 8 diagnostics other than drift, each cut to
+400 characters with a visible `…`. What is not listed is counted and named by
+reason code (`3 more failing checks (grader-negative ×2, timeout ×1)`) with the
+evaluation id that records every entry, so no reason code on the decision is
+silently lost. Drift and changed Grader surfaces are never capped: drift names
+surfaces activation pinned, and a Grader surface is recorded only for a path the
+configuration declares, so neither grows with the size of a change. A caller
+that declares test globs to `evaluate` is the one way to record more Grader
+surfaces than the configuration names, and neither runner does.
+
+A turn is silent — the declared `none` form, byte for byte — only when it is
+genuinely clean: `passed`, no adapter failure, no diagnostic, and no changed
+Grader surface. A changed Grader surface is stated even on a passing turn,
+because it is the one fact whose purpose is to be seen by someone other than the
+change's author. An adapter failure (`FR-ADAPT-005`) keeps its one sentence,
+`Preflight (not a commit decision): unverified — <detail>.`, because there is no
+decision to render. The Evidence envelope and this message are rendered from the
+same decision, so they name the same reason codes.
+
 ## 3a. Trust models
 
 `trust.model` is not a free string. Until `TB-046` it was: the contract required

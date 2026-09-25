@@ -128,8 +128,10 @@ evidence category, and source scope.
   descriptor's own working directory; a name containing a path separator is
   refused rather than joined. The authoritative hook runs the executables the
   receipt pinned and never re-resolves them: a pin that is absent, or that no
-  longer matches its runner, denies and names `gate repair`. Substituting a
-  different program is never a recovery.
+  longer matches its runner, denies and names `gate sync` — the Activation
+  transaction that re-resolves and re-pins it — from the one remedy table,
+  never `gate repair`, which restores registrations and re-pins nothing
+  (`TB-065`). Substituting a different program is never a recovery.
 - Resolving an executable includes resolving what it needs in order to start.
   Most real tool binaries are scripts naming an interpreter in their first
   line, so resolution reads that line and pins the interpreter beside the

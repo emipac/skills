@@ -130,16 +130,34 @@ state or historical Evidence — belongs to the
 update, repair, remove, or clean up implicitly, and never mutate anything while
 merely reporting status.
 
-All of that lifecycle is reachable as one command. Run
-`change-evaluation-gate <command>` where that executable is on the path, or run
-this installed skill's own `scripts/gate.mjs` with Node. Resolve that script
-beside the `SKILL.md` you are reading rather than assuming a path: an installed
-skill sits wherever the client placed it, so the same literal path does not hold
-across projects. The command is `activate`, `status`, `locks`, `prune`,
-`repair`, `update`, `deactivate`, `uninstall`, `cleanup`, or `bypass`. Add `--json` for
-the same document a person is shown. An activated clone also carries `git gate`,
-a shortcut this activation wrote into that clone's own `.git/config` and
-nowhere else.
+All of that lifecycle is reachable as one command. On an activated clone run it
+as `git gate <command>` — start with `git gate status` — a shortcut activation
+wrote into that clone's own `.git/config` and nowhere else. Before activation,
+or where that shortcut is absent, run `change-evaluation-gate <command>` where
+that executable is on the path, or run this installed skill's own
+`scripts/gate.mjs` with Node. Resolve that script beside the `SKILL.md` you are
+reading rather than assuming a path: an installed skill sits wherever the client
+placed it, so the same literal path does not hold across projects. The command
+is `activate`, `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
+`uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the same document
+a person is shown.
+
+`git gate status` reconciles every control surface the receipt pinned — the
+configuration included, through the same observation the commit runner makes —
+so a clone whose `.agent-framework.yaml` changed since activation is `broken`
+exactly when its next commit is denied `integrity-drift`. It ends with one
+`next:` line naming what recovers each finding: `git gate repair` for a
+gate-owned Git hook registration, `git gate sync` for a changed configuration
+or the commands it resolves to, `git gate deactivate` then `git gate activate`
+for anything else the receipt pinned (which re-pins the configuration too),
+`gate activate` for a configured clone, and `nothing` when nothing needs doing.
+Report that line; every command it names previews first, and none of them is
+performed implicitly. A commit denial, a preflight message, `gate repair` with
+nothing to restore, and a refused `gate sync` name their recovery from the same
+table, so follow the command a denial names: `gate repair` is named only for a
+gate-owned hook registration, and a changed configuration, descriptor, or runner
+pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
+historical Evidence.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
@@ -177,6 +195,22 @@ differently, the grant is refused as `snapshot-mismatch` and spent. Only run it
 when the maintainer explicitly asks to bypass a denied commit, show them the
 preview, and never confirm on their behalf.
 
+`gate sync [--acknowledge-weakening]` is the same two invocations, and the one
+step that re-pins a changed `.agent-framework.yaml` under the adapter set the
+receipt already pins. It is an Activation transaction that registers nothing:
+every registration it keeps must be exactly what it would write, or it refuses
+and names `gate repair`, `gate status`, or `gate deactivate` then `gate
+activate` — the last also whenever the installed gate's adapter set differs
+from the receipt's. The preview names the trusted identity, the candidate
+identity, and every way `evaluatePolicyTransition` finds the candidate weaker
+than the trusted policy, which it reads from a document that reproduces the
+pinned identity — a receipt `gate sync` wrote, or the committed file at `HEAD`
+— and refuses to guess when neither does. A weaker candidate offers no token;
+`gate sync --acknowledge-weakening` offers one that binds the candidate and the
+acknowledgement together. Show the maintainer that preview, name the weakening
+in your own words, and never add `--acknowledge-weakening` or confirm on their
+behalf.
+
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When
 reporting on a clone the surface observed, report the state that surface
@@ -198,7 +232,14 @@ before it may be called supported are defined by the
 Activation registers each desktop surface against the packaged
 `gate-preflight.mjs` program. That program evaluates the working tree as
 preflight, presents `not-authoritative`, and answers through the adapter's
-declared feedback channel — never through its exit status.
+declared feedback channel — never through its exit status. The channel carries
+the decision, not a summary of its checks: the outcome, each failing check's
+summary, every diagnostic by reason code (control-surface drift, an unprovided
+dependency root, an invalid configuration), and every changed Grader surface,
+bounded and with any truncation stated. A turn is silent only when it passed
+with no diagnostic and no changed Grader surface. When the channel reports
+drift or an environment reason, report it to the maintainer; do not edit the
+project to make it go away.
 
 Only authoritative Git authorizes a change. A desktop surface presents the same
 decision as structured `not-authoritative` preflight feedback and blocks

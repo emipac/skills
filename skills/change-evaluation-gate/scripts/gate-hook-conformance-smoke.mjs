@@ -34,6 +34,13 @@
  *    The same clone still decides a commit exactly as it does today, denying a
  *    breakage and allowing its repair (AC-EVAL-004, FR-ADAPT-005, NFR-PERF-001,
  *    NFR-REL-001).
+ * 7. `drifted-channel` — a real activated clone whose configuration moved
+ *    after activation and declares a dependency root it does not have, driven
+ *    through the real packaged preflight program while every check passes:
+ *    the declared channel states the `unverified` outcome, the
+ *    `integrity-drift` and the drifted surface, the unprovided root, and the
+ *    changed Grader surface, and lists no check as a result (AC-SEC-001,
+ *    NFR-OPER-001, FR-EVAL-009, FR-ADAPT-005, TB-064).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime — in particular no hook manager and no desktop client
@@ -76,6 +83,7 @@ import {
   configurationIdentity,
   previewActivation,
 } from './lib/activation.mjs';
+import { describeAdapter } from './lib/adapters.mjs';
 import { createBoundedExecutor } from './lib/bounded-execution.mjs';
 import { readRepositoryConfiguration } from './lib/configuration.mjs';
 import { evaluate } from './lib/evaluate.mjs';
@@ -1137,6 +1145,69 @@ const settledTurn = async () => {
   return { name: 'settled-turn', ok: findings.length === 0, findings };
 };
 
+/**
+ * TB-064 — the channel that asks for the change says why.
+ *
+ * The incident's decision had every check `passed`, an `unverified` outcome,
+ * control-surface drift, unprovided dependency roots, and a changed Gate
+ * configuration, and the agent was told `unverified.` and nothing else. This is
+ * that clone, reduced: it is activated, its configuration is then edited to
+ * declare a root it does not have, and the real packaged program answers it.
+ */
+const driftedChannel = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-hook-conformance-drifted-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), settledConfiguration(), 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'activated');
+  await publishReceipt(root);
+
+  // The policy the receipt pinned, changed and never re-pinned.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    settledConfiguration().replace('  execution: {}', '  execution:\n    dependency_roots:\n      - vendor'),
+    'utf8',
+  );
+
+  const drifted = await runPackagedPreflight({ root, temporaryRoot: await temporaryDirectory('gate-hook-conformance-drifted-tmp-') });
+  let message = null;
+
+  try {
+    message = JSON.parse(drifted.stdout)[describeAdapter('cursor').capabilities.feedback.field];
+  } catch (error) {
+    check(findings, false, `The drifted clone was not answered through the declared channel (${error.message}): ${drifted.stdout}${drifted.stderr}`);
+  }
+
+  if (typeof message === 'string') {
+    for (const [pattern, detail] of [
+      [/^Preflight \(not a commit decision\): unverified\./, 'the unverified outcome'],
+      [/integrity-drift/, 'the integrity-drift reason code'],
+      [/trusted-configuration/, 'the drifted surface'],
+      [/dependency-root-unavailable[^\n]*"vendor"/, 'the unprovided dependency root'],
+      [/gate-configuration \.agent-framework\.yaml/, 'the changed Grader surface'],
+    ]) {
+      check(findings, pattern.test(message), `The channel did not state ${detail}: ${message}`);
+    }
+
+    check(
+      findings,
+      !message.includes('configuration.broad-tests.test'),
+      `A passing check was rendered as a reason on a drifted clone: ${message}`,
+    );
+  }
+
+  check(findings, drifted.exitCode === 0, `A preflight blocked on drift: exit ${drifted.exitCode}.`);
+
+  return { name: 'drifted-channel', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1149,6 +1220,7 @@ const main = async () => {
       await trustPauseAndResume(),
       await desktopRegistration(),
       await settledTurn(),
+      await driftedChannel(),
     ];
   } finally {
     for (const root of temporaryRoots) {

@@ -79,6 +79,10 @@ malicious classification: it never changes the outcome by itself. The
 dual-policy transition that a control-surface change requires is owned by the
 configuration-transition slice (`SG-CFG-001`).
 
+Every changed surface is also named, by kind and path, on each declared
+preflight feedback channel — on a passing turn too — and never truncated there
+(`TB-064`; see the [adapter conformance contract](adapter-conformance-contract.md)).
+
 ## Served-source binding
 
 A check whose Command descriptor declares a `smoke` or `browser` evidence

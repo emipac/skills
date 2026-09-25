@@ -17,6 +17,7 @@ import { evaluate as realEvaluate } from '../skills/change-evaluation-gate/scrip
 import { contentIdentity } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
 import { runHook } from '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs';
 import { runPreflight } from '../skills/change-evaluation-gate/scripts/lib/preflight-runner.mjs';
+import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 
 const runFile = promisify(execFile);
 
@@ -263,7 +264,10 @@ test('TB-031 AC-CFG-004 / SG-POL-001: a clone whose Gate policy is weakened afte
   );
   assert.match(output, /integrity-drift/, 'the denial names the drift, not merely a failing check.');
   assert.match(output, /trusted-configuration/, 'the denial names the surface that drifted.');
-  assert.match(output, /gate repair/, 'the maintainer is told what to do, and nothing is repaired.');
+  // What recovers a changed policy is the Activation transaction that re-pins
+  // it, never `gate repair` (`TB-065`).
+  assert.match(output, /Next: gate sync — /, 'the maintainer is told what to do, and nothing is repaired.');
+  assert.doesNotMatch(output, /gate repair/);
 });
 
 test('TB-031 AC-CFG-004: a command argument widened after activation is denied, so the pinned invocation is what runs', async (t) => {
@@ -418,7 +422,7 @@ test('TB-031 FR-LIFE-019: a drifted clone is reported and never repaired; no gat
 
   assert.notEqual(result.exitCode, 0);
   assert.match(output, /trusted-configuration/, 'the drifted surface is named.');
-  assert.match(output, /gate repair/, 'the one confirmed operator action is named, and nothing else is done.');
+  assert.match(output, /Next: gate sync — /, 'the one confirmed operator action is named, and nothing else is done.');
   assert.equal(
     await readFile(path.join(directory, 'receipt.json'), 'utf8'),
     receiptBefore,
@@ -522,13 +526,23 @@ test('TB-031 AC-SEC-001 / NFR-SEC-004: each pinned control surface, drifted on i
     assert.notEqual(result.exitCode, 0, `drift of ${surface} still authorized a commit: ${output}`);
     assert.match(output, /integrity-drift/, `drift of ${surface} was not reported as drift: ${output}`);
     assert.match(output, new RegExp(surface), `drift of ${surface} did not name that surface: ${output}`);
+    // TB-065: and names what recovers THAT surface, from the one table — a
+    // registration is repaired, everything else is re-established.
+    const remedy = remedyInstruction(REMEDIES['control-surface-drift'][surface], 'gate');
+
+    assert.ok(output.includes(`Next: ${remedy}.`), `drift of ${surface} did not name its remedy: ${output}`);
+    assert.equal(/gate repair/.test(output), surface === 'managed-hooks', `drift of ${surface} named the wrong recovery: ${output}`);
   }
 });
 
-test('TB-031 SG-OWNER-001: exactly one function assembles the observed control surface, and both runners reach it', async () => {
+test('TB-031 SG-OWNER-001: exactly one function assembles the observed control surface, and both runners and status reach it', async () => {
   const sources = (await readdir(LIBRARY)).filter((entry) => entry.endsWith('.mjs'));
   const definitions = [];
   const callers = [];
+  // `gate status` is the third reader since `TB-060`: it reconciles the same
+  // observation through `statusGate`, so it and the next commit can never
+  // disagree about whether the clone drifted. It observes; it does not build.
+  const readers = ['hook-runner.mjs', 'operator-surface.mjs', 'preflight-runner.mjs'];
 
   for (const source of sources) {
     const contents = await readFile(path.join(LIBRARY, source), 'utf8');
@@ -537,16 +551,17 @@ test('TB-031 SG-OWNER-001: exactly one function assembles the observed control s
       definitions.push(source);
     }
 
-    // The call is required in the shape that reaches `evaluate`: a runner that
-    // merely mentions the observer is not one that reconciles anything.
-    if (/controlSurface: await observeControlSurface\(\{/.test(contents)) {
+    // The call is required in the shape that reaches reconciliation: a reader
+    // that merely mentions the observer is not one that reconciles anything.
+    if (/controlSurface: await observeControlSurface\(\{/.test(contents)
+      || /await observeControlSurface\(\{[\s\S]*controlSurface: surface\?\.observed/.test(contents)) {
       callers.push(source);
     }
 
-    // A second assembly of the observed surface is how the two runners would
-    // come to disagree about what this machine is, so there is none: nothing
-    // outside the observer builds the dependency `evaluate` reconciles.
-    if (source !== 'hook-runner.mjs' && source !== 'preflight-runner.mjs') {
+    // A second assembly of the observed surface is how the readers would come
+    // to disagree about what this machine is, so there is none: nothing
+    // outside the observer builds the dependency reconciliation compares.
+    if (!readers.includes(source)) {
       assert.doesNotMatch(
         contents,
         /controlSurface:/,
@@ -558,7 +573,43 @@ test('TB-031 SG-OWNER-001: exactly one function assembles the observed control s
   assert.deepEqual(definitions, ['hook-runner.mjs'], 'the observed control surface has exactly one owner.');
   assert.deepEqual(
     callers.sort(),
-    ['hook-runner.mjs', 'preflight-runner.mjs'],
-    'both runners that reach a maintainer observe through that owner.',
+    readers,
+    'both runners that reach a maintainer, and the status command, observe through that owner.',
   );
+});
+
+/* -------------------------------------------------------------------------
+ * TB-065: name the command that actually recovers.
+ *
+ * `gate repair` restores exactly three gate-owned Git registration findings.
+ * A drifted descriptor, configuration, receipt, provider, runtime, or runner
+ * pin is re-established by an Activation transaction, and the denial says so.
+ * ------------------------------------------------------------------------- */
+
+test('TB-065 NFR-OPER-001 / FR-LIFE-019: a commit denied for command-descriptors drift names gate sync, the Activation transaction that recovers it, never gate repair', async (t) => {
+  const root = await activatedClone(t);
+
+  await stage(root, 'baseline\nrepaired\n');
+  // The incident's shape: a descriptor corrected after activation, the Gate
+  // policy section untouched.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    configuration({ argument: 'tools/check.mjs' }),
+    'utf8',
+  );
+  await git(root, ['add', '--all']);
+
+  const result = await runHook({ cwd: root, environment: process.env });
+  const output = result.lines.join('\n');
+
+  // AC-SEC-001: the outcome, reason code, and authorization are unchanged;
+  // only the sentence after them is.
+  assert.notEqual(result.exitCode, 0, output);
+  assert.equal(result.reasonCode, 'denied');
+  assert.match(output, /^change-evaluation-gate: unverified \/ deny$/m);
+  assert.match(output, /integrity-drift/);
+  assert.match(output, /\(command-descriptors\)/, output);
+  assert.match(output, /Next: gate sync — a new Activation transaction/, `the denial names the transaction that re-pins descriptors: ${output}`);
+  assert.doesNotMatch(output, /gate repair/, `gate repair cannot re-pin a descriptor, and is not named: ${output}`);
+  assert.match(output, /keeps \.agent-framework\.yaml and all historical Evidence/, `the remedy says what survives it: ${output}`);
 });

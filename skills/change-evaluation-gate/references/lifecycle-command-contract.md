@@ -35,7 +35,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | --- | --- | --- |
 | candidate release | `inspectRelease({ receipt, distribution })` | nothing |
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
-| `gate status` | `statusGate(...)` | nothing |
+| `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
 | `gate deactivate` | `deactivateGate(...)` | withdraws registrations and the receipt |
 | `gate uninstall` | `uninstallGate(...)` | unchanged project assets only |
@@ -43,6 +43,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | `gate prune` | `previewEvidencePrune(...)`, `confirmEvidencePrune(...)` | blobs only, confirmed |
 | `gate locks` | `inspectCoordination(...)` | nothing |
 | `gate bypass` | `captureSnapshot(...)`, `resolveBypass(...)`, `store.bypassGrant().write(...)` | one grant file, confirmed |
+| `gate sync` | `previewSync(...)`, `syncActivation(...)` (`activation.mjs`), `evaluatePolicyTransition(...)` | one atomic receipt write, confirmed; no registration |
 
 `gate prune` and `gate locks` are the operator surfaces TB-008 and TB-009
 deliberately deferred to this slice. They add no removal or recovery logic of
@@ -75,6 +76,7 @@ gate deactivate [--confirm <token>] [--json]
 gate uninstall  --asset <path> ... [--confirm <token>] [--json]
 gate cleanup    [--confirm <token>] [--json]
 gate bypass     --reason <text> [--reference <ref>] [--actor <name>] [--confirm <token>] [--json]
+gate sync       [--acknowledge-weakening] [--confirm <token>] [--json]
 ```
 
 **Two invocations, never one.** Every command previews by default and writes
@@ -170,9 +172,89 @@ rather than reporting an injected pass as a proof the clone cannot support.
 
 **Adapter observation.** An adapter the receipt pinned that the installed gate
 no longer declares (`describeAdapter`) is not observed as present, which is the
-loss `statusGate` already grades by the authority the receipt recorded. The
-surface passes no `controlSurface` observation, so independent control-surface
-drift is not yet part of what `gate status` reports.
+loss `statusGate` already grades by the authority the receipt recorded.
+
+**Control-surface observation** (`TB-060`). On an activated clone `gate status`
+reads the configuration with `resolveConfiguration`, pins its checks with
+`pinnedRunners`, and passes `observeControlSurface`'s observation to
+`statusGate` as `controlSurface` — the same observer, configuration reader, and
+runner pinning the authoritative and preflight runners use before every
+evaluation. One observation, two readers: a clone whose trusted configuration,
+descriptors, receipt, runtime, adapter set, managed hook block, or providers
+moved since activation is `broken` to status exactly when its next commit is
+`unverified` with `integrity-drift` (`NFR-SEC-004`, `AC-SEC-001`). Before this
+the surface passed no observation, and status reported `healthy` over a policy
+the next commit was denied for. Runner pinning re-observes each pinned
+executable with one `access(2)` and composes each argument vector in-process: no
+pinned program is started and nothing is written. A trusted-configuration
+finding names `.agent-framework.yaml` as its `path`; the receipt pins an
+identity, not a document, so which key moved is not reported.
+
+A supporting adapter the installed gate no longer declares is therefore both an
+`adapter-lost` finding (still `supporting`) and drift of the pinned `adapters`
+surface, which the runners deny every commit for — so that clone is `broken`,
+not `degraded`. `degraded` remains the grade for a supporting surface whose
+registration is lost while everything the runners pinned still matches.
+
+**Status says what next** (`NFR-OPER-001`, `TB-060`). The rendering ends with
+one `next:` line and the document carries the same answer as
+`observation.next`: `instruction` (exactly what the line prints), `shortcut`
+(`git gate` when this clone's `.git/config` holds the alias activation writes
+for this command, byte for byte, otherwise `null` and the line says `gate`),
+`remedies` (each with the finding codes it answers, in the order they must be
+performed), and `informational` (codes that need nothing). A clone with nothing
+to act on prints `next: nothing`, and its rendering is otherwise unchanged. The
+document also gains `observation.controlSurface` — the `observed` surface and
+the `drifted` surface names, or `null` on a clone with no receipt. No existing
+field changed. `REMEDIES` (`remedies.mjs`) is the one table, and every place
+the Gate tells a maintainer what to run renders through it (`TB-065`, below):
+
+| Finding | Remedy |
+| --- | --- |
+| `hook-absent`, `hook-block-tampered`, `hook-receipt-mismatch`, `control-surface-drift` on `managed-hooks` | `gate repair` |
+| `control-surface-drift` on `trusted-configuration`, `command-descriptors`; the runner-pin denials `runner-unpinned` and `runner-pin-drift` | `gate sync` (`TB-062`) — all are pinned from `.agent-framework.yaml`, and a sync re-resolves and re-pins them under the adapter set the receipt already pins |
+| `control-surface-drift` on `receipt`, `runtime`, `adapters`, `providers`; `adapter-lost`, `authoritative-adapter-lost`, `adapter-registration-absent`, `adapter-registration-unverified` | a new Activation transaction: `gate deactivate`, then `gate activate`, each previewed and confirmed |
+| `adapter-registration-drifted`, `adapter-registration-ambiguous` | reconcile the client's changed entry by hand — deactivation refuses a drifted entry and the Gate never overwrites a client's own file — then run `gate status` again |
+| `activation-absent` | `gate activate` |
+| `gate-policy-invalid`, `configuration-unreadable` | correct `.agent-framework.yaml` |
+| `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
+
+A finding with no entry fails the unit suite, which enumerates every code
+`statusGate` can emit from its source. Deactivation leaves the `git gate` alias
+in place, so the pair runs through it end to end. Where a clone needs both a
+sync and a new Activation transaction, `next:` names only the pair: it re-pins
+the configuration as well, and a sync refuses a clone whose adapter set moved.
+
+**Every surface names the command that recovers** (`TB-065`, `FR-LIFE-019`,
+`NFR-OPER-001`). The table is a leaf module that imports nothing which
+evaluates, activates, or observes, so both runners, `evaluate`, and the
+operator surface read it without the operator surface importing a runner. It is
+rendered, per drifted surface or reason code, by:
+
+- the `integrity-drift` diagnostic `evaluate` composes on both runners — so the
+  commit denial and the preflight channel (`TB-064`) carry it verbatim — which
+  names the drifted surfaces and then `Next: <remedy>.`;
+- the `runner-unpinned` and `runner-pin-drift` denials `pinnedRunners` raises,
+  in the same form;
+- `gate status`'s `next:` line;
+- `gate repair`'s `next:` line when it has nothing to restore: repair now
+  reconciles the same control-surface observation status does, reports drift it
+  cannot restore among `unrepairable`, and names that drift's remedy instead of
+  `nothing to repair`. What it restores is unchanged — exactly `hook-absent`,
+  `hook-block-tampered`, and `hook-receipt-mismatch` (`AC-LIFE-010`). The
+  `managed-hooks` drift of the very block those actions restore is not listed
+  beside them as unrepairable;
+- the `next:` line of every `gate sync` refusal that a recovery answers.
+
+Each remedy names the clone's own shortcut (`git gate`) exactly where status
+would, asked once and only when something needs naming, so an undrifted commit
+pays nothing for it. Each recovery that writes says what survives it: `gate
+repair`, `gate sync`, and the deactivate/activate pair each keep
+`.agent-framework.yaml` and all historical Evidence. The unit suite fails on a
+control surface or runner-pin reason code with no entry, and on any Gate
+library module other than the table naming a recovery command in its code.
+Outcomes, reason codes, and authorization are unchanged: only the sentence
+after them is (`AC-SEC-001`).
 
 **Observation creates nothing** (`TB-041`). `openCoordinationLock` used to ensure
 its own directory existed before it read anything, so the first `gate locks` on a
@@ -212,6 +294,7 @@ it was authorized against, and the migrations that ran.
 | Everything reconciles | `healthy` |
 | A non-authoritative adapter is gone or unresponsive | `degraded` |
 | An authoritative adapter is gone or unresponsive | `broken` |
+| A pinned Gate control surface drifted (`gate status` observes it; `TB-060`) | `broken` |
 | The authoritative registration is absent | `broken` |
 | The gate-owned block no longer matches its durable identity | `broken` |
 | The gate-owned block names a different Activation receipt | `broken` |
@@ -345,10 +428,96 @@ with outcome `refused`. What the grant then does belongs to the
 next commit attempt spends it, applied or refused, and a bypassed commit is
 recorded as `bypassed`, never `passed`, with every failed check preserved.
 
+## `gate sync` (`TB-062`)
+
+A maintainer who changed the Gate policy re-pins it with one previewed,
+confirmed command that keeps the adapters the clone already has. Until this,
+every policy edit took `deactivate` and `activate` — four invocations, two of
+them withdrawing registrations the next two put back byte for byte — and
+nothing between the edit and the pin ever asked whether the new policy was
+weaker than the one that authorized it (`FR-CFG-005`, `SG-CFG-001`).
+
+**It is an Activation transaction** (`FR-LIFE-019`). `syncActivation` takes
+activation's ordered steps — `repository-identity → preview → consent →
+runner-resolution → trust → hook-chain-validation → self-test → receipt →
+git-enablement` — runs the same evaluation, hook-program, and adapter
+self-tests, and records one `activation` Lifecycle event, `before` the prior
+receipt id and `after` the new one. It writes exactly one thing: the receipt,
+by one atomic write that is read back. The adapter set comes from the receipt
+and from nothing else; the registration the receipt pins for each surface is
+kept, never rewritten, and must be exactly what this sync would write — the
+hook block's receipt-independent identity reproduced by the installed hook
+program, each client entry's command the one this sync would register. Git is
+authoritative throughout: under the prior receipt until the switch, under the
+new one after it, and `git-enablement` re-confirms on disk the registration the
+new receipt authorizes. The new receipt keeps `activatedAt` and the Active gate
+release (`gate update` alone moves that), pins the candidate configuration's
+identity *and its policy*, the commands it resolves to, and the Sensitive input
+names it declares, records `supersedes` (the prior receipt, the prior
+configuration identity, the preview, and any weakening acknowledged), and adds
+the prior id to `receiptLineage`, so the untouched registration naming it stays
+this activation's for status, repair, and deactivation. A failure at any step
+restores the prior receipt byte for byte and leaves the clone `activated`
+exactly as it was (`AC-LIFE-009`); only a restore that itself fails reports
+`recovery-required`.
+
+**The preview says what changed and whether it is weaker.** It names the
+Trusted identity the receipt pins, the candidate identity the file produces, the
+findings `evaluatePolicyTransition` produces for the pair (`weakened`,
+`weakenings`, `candidateValid`), the adapters and registrations kept, the
+commands, and the runtime input names. The rendering heads the transition
+`WEAKER than the trusted policy (n)` or `not weaker than the trusted policy`.
+The token is the content identity of all of it. The Trusted *policy* is read
+from a document that reproduces the pinned identity, in order: the receipt
+itself when `gate sync` wrote it (an activation receipt pins the identity only),
+the configuration file when its identity never moved, and the committed
+`.agent-framework.yaml` at `HEAD` — which is where it ordinarily still is,
+because a drifted clone denies every commit. What no document reproduces is
+refused as `trusted-configuration-unrecoverable` rather than guessed.
+
+**A weakening is refused by default and confirmable by name.** A weaker
+candidate is refused as `weakening-unacknowledged`, with every weakening named
+and no token. `gate sync --acknowledge-weakening` previews the same candidate
+with the acknowledgement bound in and offers a token; the confirmation must
+carry the same flag, so the token names the candidate and the acknowledgement
+together. At confirmation `evaluatePolicyTransition` receives that candidate
+identity as its approval, which is the candidate-hash approval `FR-CFG-005`
+asks for. A candidate that is not weaker needs nothing extra. Nothing skips the
+check; the flag only acknowledges its result.
+
+**Refusals** (no token; a confirmation anyway appends an `activation` event with
+outcome `refused` and writes nothing). A refusal a recovery answers renders that
+recovery from the remedy table (`TB-065`) — through the clone's shortcut, with
+what it keeps — so the `next:` lines below show its command only; the
+document carries the rendered line as `observation.refusal.next`:
+
+| Reason | `next:` |
+| --- | --- |
+| `receipt-drifted` — the receipt no longer reproduces its own identity | `gate deactivate, then gate activate` |
+| `adapter-set-changed` — the installed gate declares a different adapter set than the receipt pins | `gate deactivate, then gate activate` |
+| `hook-registration-drifted` | `gate repair` |
+| `hook-registration-not-reproducible` — the installed hook program would write a different registration | `gate deactivate, then gate activate` |
+| `adapter-registration-changed` | `gate status` |
+| `nothing-to-sync` — configuration, commands, and input names are what the receipt pins (exit `0`) | `nothing to sync` |
+| `trusted-configuration-unrecoverable` | `gate deactivate, then gate activate` |
+| `candidate-policy-invalid` | correct `.agent-framework.yaml` |
+| `weakening-unacknowledged` | `gate sync --acknowledge-weakening` |
+
+**Honest limits.** "Weaker" is what `policyWeakenings` recognizes today: a
+trusted required check the candidate demotes to advisory or no longer binds.
+Loosening the budget, enabling bypass, or making work budget-skippable is not
+recognized as a weakening and previews as `not weaker`. No check runs during a
+sync, so the "satisfy both policies" half of `FR-CFG-005` is not exercised
+here: that is the commit-time evaluation of a policy-changing commit under the
+old policy, a separate seam in the runners and its own contract. And like
+every surface here, it resists nobody (`SG-TRUST-001`).
+
 ## Recovery
 
 Drift changes only through a confirmed `gate repair` or a new Activation
-transaction. `gate status` does not repair it; an ordinary update does not
+transaction — `gate sync` for a changed configuration, its descriptors, or a
+runner pin — and every surface that reports drift names which, from one table
+(`TB-065`). `gate status` does not repair it; an ordinary update does not
 repair it; a distribution bump does not repair it. `previewRepair` reconciles
 through `statusGate` (so it, too, writes nothing) and states exactly which
 registrations it would restore; `confirmRepair` runs only when the operator
@@ -381,7 +550,27 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   changes nothing until confirmed and a failed update that preserves the prior
   release; a confirmed prune and its tombstones; stale-lock recovery against its
   own token and never against a live holder; and every operation and refusal
-  recorded while `status` records none.
+  recorded while `status` records none. `TB-060` adds clones activated through
+  the real command: a configuration edited after activation is `broken` with a
+  `trusted-configuration` finding, its commit is denied `integrity-drift`, and
+  the named deactivate/activate pair makes it healthy again; a healthy clone
+  prints `next: nothing` and otherwise exactly what it printed before; status
+  runs no pinned program; and every finding code maps to a remedy. `TB-062`
+  adds `gate sync`: a weakened policy is refused with the weakening named and no
+  token; a not-weaker one is pinned by one confirmation and the next commit is
+  graded under it with no drift; an acknowledged weakening is pinned only by the
+  token that binds candidate and acknowledgement, the second sync judging
+  against the policy the first pinned; the hook and a desktop client's
+  registration file are byte-identical across a sync; a failed self-test and a
+  failure after the receipt switch both leave the prior receipt and
+  registrations intact; and a changed adapter set, a drifted receipt, and an
+  unrecoverable trusted policy are each refused and name what to do. `TB-065`
+  adds a clone whose descriptor is corrected after activation: its commit is
+  denied naming `git gate sync`, `gate repair` restores nothing and names the
+  same sync, and following that command exactly lets the next commit through;
+  a foreign `gate` alias is never named; every control surface and runner-pin
+  reason code has a remedy entry; no module but the table names a recovery
+  inline; and repair's scope is unchanged beside configuration drift.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle
@@ -389,4 +578,9 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   `git commit` invocations, plus `packaged-observation` and `packaged-repair`,
   which drive `gate.mjs` as a real child process against a real activated clone
   that really blocks a commit, has its block clobbered, stops blocking, and is
-  repaired back to exactly what its receipt authorizes.
+  repaired back to exactly what its receipt authorizes — and
+  `packaged-configuration-drift`, which activates through the packaged command
+  so the real runner is registered, edits the configuration, and proves status,
+  the denied commit, and the named `git gate sync` agree, with the registered
+  hook byte-identical throughout and the next real commit graded under the new
+  policy.

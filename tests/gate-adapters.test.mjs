@@ -15,6 +15,8 @@ import {
   BASELINE_CHECKS,
   classifySupport,
   describeAdapter,
+  FEEDBACK_LIMITS,
+  formatFeedback,
   normalizeNativeInvocation,
   normalizeTrigger,
   presentDecision,
@@ -1461,4 +1463,247 @@ test('every declared trust model is defined by the contract, and a model it does
 
   // The declaration every v1 adapter actually carries is still valid.
   assert.deepEqual(validateAdapterDeclaration(complete), []);
+});
+
+/**
+ * TB-064 — say why, in the channel that asks for the change.
+ *
+ * These fixtures drive the real presentation and the real `formatFeedback`
+ * through every adapter that declares a channel. The decisions are built in the
+ * shape `evaluate` returns, carrying exactly the facts the incident's decision
+ * carried, so what is asserted is what a maintainer's agent is actually told.
+ */
+const CHANNELLED_ADAPTER_IDS = ADAPTER_IDS.filter(
+  (adapterId) => typeof describeAdapter(adapterId).capabilities.feedback.channel === 'string',
+);
+
+const DRIFT_DETAIL = 'The Gate control surface drifted independently of this change (command-descriptors); nothing here is proved.';
+
+const channelDecision = ({
+  outcome = 'unverified',
+  checks = [],
+  diagnostics = [],
+  changedGraderSurfaces = [],
+} = {}) => ({
+  evaluationId: 'sha256:tb-064-evaluation',
+  outcome,
+  authorization: outcome === 'passed' ? 'allow' : 'deny',
+  checks,
+  diagnostics,
+  integrity: {
+    changedGraderSurfaces,
+    controlSurfaceChanged: changedGraderSurfaces.some((surface) => surface.kind === 'gate-configuration'),
+  },
+});
+
+const passedCheck = (id) => ({
+  id,
+  stage: 'test',
+  policy: 'required',
+  outcome: 'passed',
+  reasonCode: null,
+  summary: `${id}: passed`,
+});
+
+const failedCheck = (id, reasonCode = 'grader-negative') => ({
+  id,
+  stage: 'test',
+  policy: 'required',
+  outcome: 'failed',
+  reasonCode,
+  summary: `${id}: failed (${reasonCode})`,
+});
+
+const channelMessage = (adapterId, decision) => {
+  const rendered = formatFeedback({ adapterId, view: presentDecision({ adapterId, decision }) });
+  const field = describeAdapter(adapterId).capabilities.feedback.field;
+
+  return JSON.parse(rendered)[field];
+};
+
+test('TB-064 AC-SEC-001 / NFR-SEC-004: every check passed and the control surface drifted — the channel names integrity-drift and the drifted surface, and never reads as passing', () => {
+  assert.notEqual(CHANNELLED_ADAPTER_IDS.length, 0, 'at least one adapter declares a feedback channel.');
+
+  const decision = channelDecision({
+    checks: [passedCheck('configuration.broad-tests.test'), passedCheck('configuration.format.formatter')],
+    diagnostics: [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+
+    assert.match(message, /integrity-drift/, `${adapterId}: ${message}`);
+    assert.match(message, /command-descriptors/, `${adapterId} must name the drifted surface: ${message}`);
+    assert.match(message, /unverified/, `${adapterId} must state the outcome: ${message}`);
+    assert.doesNotMatch(
+      message,
+      /:\s*passed\b|\bclean\b/i,
+      `${adapterId}: a drifted clone must never read as passing: ${message}`,
+    );
+    assert.doesNotMatch(
+      message,
+      /integrity-drift[^\n]*\((grader-negative|failed)\)/,
+      `${adapterId}: drift is not rendered as a check-level result: ${message}`,
+    );
+  }
+});
+
+test('TB-064 NFR-OPER-001: every diagnostic reason code on the decision reaches the channel — integrity-drift, dependency-root-unavailable, and configuration-invalid', () => {
+  const decision = channelDecision({
+    checks: [passedCheck('configuration.broad-tests.test')],
+    diagnostics: [
+      { reasonCode: 'integrity-drift', detail: DRIFT_DETAIL },
+      { reasonCode: 'dependency-root-unavailable', detail: 'The declared dependency root "vendor" could not be provided to this evaluation; a check that needs it cannot run and nothing here is proved.' },
+      { reasonCode: 'configuration-invalid', detail: 'The policy names a check the configuration does not declare.' },
+    ],
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+
+    for (const reasonCode of ['integrity-drift', 'dependency-root-unavailable', 'configuration-invalid']) {
+      assert.match(message, new RegExp(reasonCode), `${adapterId} dropped ${reasonCode}: ${message}`);
+    }
+
+    assert.match(message, /"vendor"/, `${adapterId} must say which root was not provided: ${message}`);
+  }
+});
+
+test('TB-064 FR-EVAL-009 / SG-CFG-001: a changed Grader surface is named even when everything passed, as observation and never as accusation', () => {
+  const surfaces = [
+    { kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: 'sha256:a' },
+    { kind: 'verification-script', path: 'tools/check.mjs', checkId: 'configuration.broad-tests.test', role: 'evaluate', identity: 'sha256:b' },
+  ];
+  const intent = /tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i;
+
+  for (const decision of [
+    channelDecision({ outcome: 'passed', checks: [passedCheck('configuration.broad-tests.test')], changedGraderSurfaces: surfaces }),
+    channelDecision({
+      checks: [passedCheck('configuration.broad-tests.test')],
+      diagnostics: [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+      changedGraderSurfaces: surfaces,
+    }),
+    channelDecision({ outcome: 'failed', checks: [failedCheck('configuration.broad-tests.test')], changedGraderSurfaces: surfaces }),
+  ]) {
+    for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+      const rendered = formatFeedback({ adapterId, view: presentDecision({ adapterId, decision }) });
+
+      assert.notEqual(rendered, '', `${adapterId} stayed silent over a changed Grader surface (${decision.outcome}).`);
+
+      const message = channelMessage(adapterId, decision);
+
+      for (const surface of surfaces) {
+        assert.match(message, new RegExp(`${surface.kind}\\b[^\\n]*${surface.path.replaceAll('.', '\\.')}`), `${adapterId} did not name ${surface.path}: ${message}`);
+      }
+
+      assert.doesNotMatch(message, intent, `${adapterId} implied intent: ${message}`);
+    }
+  }
+});
+
+test('TB-064: a failing check keeps its own summary, and a message carrying a failing check and a diagnostic carries both, checks first', () => {
+  const decision = channelDecision({
+    checks: [
+      failedCheck('configuration.format.formatter'),
+      failedCheck('configuration.static-analysis.1'),
+      passedCheck('configuration.broad-tests.test'),
+    ],
+    diagnostics: [{ reasonCode: 'dependency-root-unavailable', detail: 'The declared dependency root "vendor" could not be provided to this evaluation.' }],
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+
+    assert.match(message, /configuration\.format\.formatter: failed \(grader-negative\)/, message);
+    assert.match(message, /configuration\.static-analysis\.1: failed \(grader-negative\)/, message);
+    assert.doesNotMatch(message, /configuration\.broad-tests\.test/, `a passing check is not a reason: ${message}`);
+    assert.match(message, /dependency-root-unavailable/, message);
+    assert.ok(
+      message.indexOf('configuration.format.formatter') < message.indexOf('dependency-root-unavailable'),
+      `a failing check a maintainer can act on is not buried behind an environment reason: ${message}`,
+    );
+    assert.match(message, /unverified/, `the outcome is stated whenever it is not passed: ${message}`);
+  }
+});
+
+test('TB-064: the message is bounded by a stated cap, truncation is explicit and names every omitted reason code, and neither drift nor a changed Grader surface is ever dropped', () => {
+  assert.equal(Number.isInteger(FEEDBACK_LIMITS.checks) && FEEDBACK_LIMITS.checks > 0, true);
+  assert.equal(Number.isInteger(FEEDBACK_LIMITS.diagnostics) && FEEDBACK_LIMITS.diagnostics > 0, true);
+  assert.equal(Number.isInteger(FEEDBACK_LIMITS.entryCharacters) && FEEDBACK_LIMITS.entryCharacters > 0, true);
+
+  const failing = Array.from({ length: FEEDBACK_LIMITS.checks + 7 }, (_, index) => failedCheck(
+    `configuration.check-${String(index).padStart(2, '0')}`,
+    index % 2 === 0 ? 'grader-negative' : 'timeout',
+  ));
+  const roots = Array.from({ length: FEEDBACK_LIMITS.diagnostics + 30 }, (_, index) => ({
+    reasonCode: 'dependency-root-unavailable',
+    detail: `The declared dependency root "root-${index}" could not be provided. ${'x'.repeat(FEEDBACK_LIMITS.entryCharacters * 3)}`,
+  }));
+  const decision = channelDecision({
+    checks: failing,
+    // The drift arrives last, behind every other diagnostic, and still survives.
+    diagnostics: [...roots, { reasonCode: 'configuration-invalid', detail: 'late' }, { reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+    changedGraderSurfaces: [{ kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: null }],
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+    const bound = 200
+      + (FEEDBACK_LIMITS.checks + FEEDBACK_LIMITS.diagnostics) * (FEEDBACK_LIMITS.entryCharacters + 8)
+      + DRIFT_DETAIL.length + 400;
+
+    assert.ok(message.length <= bound, `the message is bounded (${message.length} > ${bound}).`);
+    assert.match(message, /integrity-drift/, 'drift is never truncated away.');
+    assert.match(message, /command-descriptors/, 'the drifted surface is never truncated away.');
+    assert.match(message, /gate-configuration[^\n]*\.agent-framework\.yaml/, 'a changed Grader surface is never truncated away.');
+    assert.match(message, /7 more failing checks/, `truncated checks are counted: ${message}`);
+    assert.match(message, /grader-negative/, message);
+    assert.match(message, /timeout/, message);
+    assert.match(message, /configuration-invalid/, `an omitted reason code is named: ${message}`);
+    assert.match(message, /dependency-root-unavailable ×\d+/, `omitted diagnostics are named by reason code: ${message}`);
+    assert.match(message, /sha256:tb-064-evaluation/, 'truncation points at the evaluation that records every entry.');
+    assert.equal(message.includes('x'.repeat(FEEDBACK_LIMITS.entryCharacters)), false, 'a long entry is cut.');
+    assert.match(message, /…/, 'a cut entry says it was cut.');
+  }
+});
+
+test('TB-064 AC-ADAPT-002: a genuinely clean turn keeps its declared silence byte for byte, and adapter failures still render exactly as they did', () => {
+  for (const adapterId of ADAPTER_IDS) {
+    const feedback = describeAdapter(adapterId).capabilities.feedback;
+    const clean = channelDecision({ outcome: 'passed', checks: [passedCheck('configuration.broad-tests.test')] });
+
+    assert.equal(
+      formatFeedback({ adapterId, view: presentDecision({ adapterId, decision: clean }) }),
+      feedback.none,
+      `${adapterId}: a clean turn is silent.`,
+    );
+  }
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const field = describeAdapter(adapterId).capabilities.feedback.field;
+    const view = {
+      outcome: 'unverified',
+      failure: { family: 'timeout', reasonCode: 'timeout', detail: 'The evaluation did not return within the declared 5ms invocation timeout.' },
+      presentation: { kind: 'unverified', evaluationId: null, outcome: 'unverified', checks: [] },
+    };
+
+    assert.equal(
+      formatFeedback({ adapterId, view }),
+      `${JSON.stringify({ [field]: 'Preflight (not a commit decision): unverified — The evaluation did not return within the declared 5ms invocation timeout..' })}\n`,
+    );
+  }
+});
+
+test('TB-064: the presentation carries the decision\'s diagnostics and changed Grader surfaces to every surface, unchanged', () => {
+  const decision = channelDecision({
+    diagnostics: [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+    changedGraderSurfaces: [{ kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: 'sha256:a' }],
+  });
+
+  for (const adapterId of ADAPTER_IDS) {
+    const { presentation } = presentDecision({ adapterId, decision });
+
+    assert.deepEqual(presentation.diagnostics, [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }]);
+    assert.deepEqual(presentation.changedGraderSurfaces, [{ kind: 'gate-configuration', path: '.agent-framework.yaml' }]);
+  }
 });

@@ -289,6 +289,13 @@ names it. Rollback binds to it through the in-flight journal instead. A durable
 gate-owned content identity belongs with `gate status` and `gate repair`.
 
 Update, status, repair, deactivation, and uninstall are lifecycle commands of
-their own. The desktop adapters themselves, and the approval and injection of
+their own. So is `gate sync` (`TB-062`), which is an Activation transaction of
+this pipeline's nine steps scoped to a changed configuration under the adapter
+set a receipt already pins: it keeps every registration instead of writing one,
+re-confirms at `git-enablement` the registration it kept, switches the receipt
+by one atomic write it can undo, and leaves the clone activated under the prior
+receipt when any step fails. `activate` itself is unchanged by it; the
+[lifecycle command contract](lifecycle-command-contract.md#gate-sync-tb-062)
+owns it. The desktop adapters themselves, and the approval and injection of
 runtime input *values*, are likewise separate: this contract owns the self-test
 mechanism and records input names only.

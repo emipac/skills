@@ -63,6 +63,34 @@ the Trusted policy decides the outcome regardless of what the candidate says
 about itself. A candidate that removes the one required check the change fails
 therefore passes its own policy and still cannot authorize anything.
 
+### Reached by `gate sync` (`TB-062`)
+
+Until `TB-062` no runner called `evaluatePolicyTransition`; its only caller was
+this capability's smoke, so a policy re-pinned by `gate deactivate` and `gate
+activate` was never asked whether it was weaker. `gate sync` — the operator
+command that re-pins a changed configuration — now calls it on every preview and
+again at confirmation, with `trusted` the policy the receipt pins, `candidate`
+the file's, `checks` the configured checks, and `role: 'operator'`
+(non-authoritative: it allows and denies nothing). The preview renders every
+weakening under `WEAKER than the trusted policy`; a weaker candidate offers no
+token unless the invocation carries `--acknowledge-weakening`, and then the
+token binds the candidate identity and that acknowledgement together. At
+confirmation the candidate identity the token reproduced is the `approval`, and
+trust advances only when the function says `advanced` — the hash-bound approval
+this section describes, on a real path for the first time. The transaction is in
+the [lifecycle command contract](lifecycle-command-contract.md#gate-sync-tb-062).
+
+Three limits are stated rather than hidden. An Activation receipt pins the
+configuration's identity, not its policy, so the Trusted policy is recovered
+from a document that reproduces that identity — a receipt `gate sync` wrote
+(which pins the policy beside its identity), the unchanged file, or the
+committed file at `HEAD` — and a transition with no such document is refused,
+never guessed. `policyWeakenings` recognizes only a demoted or removed required
+check, so a looser budget or an enabled bypass previews as not weaker. And no
+check runs during a sync, so both policies' outcomes there are over checks with
+no results; evaluating a policy-changing *commit* under both policies is the
+runners' commit-time half of `FR-CFG-005`, which this does not touch.
+
 ## Sensitive runtime inputs (`FR-CFG-006`, `AC-CFG-004`, `SG-SECRET-001`)
 
 `materializeRuntimeInputs({ approved, inputs, executionRoot })`:
@@ -122,8 +150,10 @@ of any of them is `authoritative` severity:
 `observeControlSurface` (`hook-runner.mjs`) is the one function that assembles
 the observed side, and both runners that reach a maintainer reach it: the
 authoritative runner and the packaged preflight runner pass its result to
-`evaluate` as the `controlSurface` dependency on every evaluation. A second
-assembly of it is prohibited (`SG-OWNER-001`).
+`evaluate` as the `controlSurface` dependency on every evaluation, and
+`gate status` passes the same observation to `statusGate` (`TB-060`), so status
+and the next commit cannot disagree about drift. A second assembly of it is
+prohibited (`SG-OWNER-001`).
 
 What it observes, and what it cannot:
 
@@ -137,11 +167,20 @@ What it observes, and what it cannot:
 | `command-descriptors` | The pinned executables re-observed on disk, and the invocation each declared check would run now, composed through the one shared composition rule |
 | `providers` | Nothing. Activation pins no provider identities, so a receipt that names some cannot be matched by this machine — and an unobservable surface is drift, never an assumed match |
 
-- `gate status` reports `broken` (`lifecycle.mjs`, `controlSurface` input).
+- `gate status` reports `broken` (`lifecycle.mjs`, `controlSurface` input,
+  supplied by the operator surface from `observeControlSurface`), and its
+  `next:` line names the recovery — `gate repair` for the managed hook block, a
+  new Activation transaction for every other surface.
 - An authoritative evaluation carries the `integrity-drift` diagnostic, which
   normalizes the decision to `unverified` and the authorization to `deny`
   (`evaluate.mjs`, `controlSurface` dependency). The check results themselves
-  are never rewritten.
+  are never rewritten. The diagnostic names the drifted surfaces and then what
+  recovers each of them, rendered from the same remedy table status reads
+  (`remedies.mjs`): `gate repair` only for `managed-hooks`, `gate sync` for
+  `trusted-configuration` and `command-descriptors`, and the deactivate/activate
+  pair for the rest, through the clone's own `git gate` shortcut where
+  activation recorded it (`TB-065`). The outcome, reason code, and
+  authorization are unchanged.
 - Nothing is repaired. Reconciliation opens no file for writing, appends no
   event, and returns `repaired: false` with no mutations. Recovery stays a
   confirmed operator action (`FR-LIFE-019`, `SG-LIFE-001`).
@@ -168,7 +207,10 @@ independent drift of the machine.
 
 ## Capability
 
-`gate-security-control-smoke` proves all four packaged behaviors against
+`gate-security-control-smoke` proves every packaged behavior above — including,
+as `packaged-policy-sync`, a weakening refused by the shipped `gate sync`, pinned
+only with its acknowledgement, and then honoured by the next real commit with the
+hook byte-identical — against
 throwaway Git repositories under the OS temporary directory, a real Evidence
 store, a real child-process check, and a real isolated materialization. Its
 canaries are synthetic literals invented for the fixture.
