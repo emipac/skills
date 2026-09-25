@@ -1,14 +1,14 @@
 # TB-065 — Name the command that actually recovers
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 65-name-the-command-that-actually-recovers
 Draft key: TB-065
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -208,24 +208,38 @@ as a recovery.
 
 ## Acceptance Criteria
 
-- [ ] `NFR-OPER-001`, `FR-LIFE-019`: each control surface's drift names a
+- [x] `NFR-OPER-001`, `FR-LIFE-019`: each control surface's drift names a
   recovery that performs it — hook-registration drift names `gate repair`, and
   configuration, descriptor, receipt, provider, and runtime drift name a new
-  Activation transaction.
-- [ ] `runner-unpinned` and both `runner-pin-drift` cases name a recovery that
-  performs them, and no longer name `gate repair`.
-- [ ] A fixture enumerates every control surface and every runner-pin reason
-  code and fails if any has no remedy entry.
-- [ ] One mapping serves every site; no second table exists, proved by the
-  absence of any remaining inline remedy string.
-- [ ] `AC-LIFE-010`: `gate repair` still previews and repairs exactly
+  Activation transaction. (`gate sync` for `trusted-configuration` and
+  `command-descriptors`, since `TB-062` provides it; the deactivate/activate
+  pair for `receipt`, `runtime`, `adapters`, and `providers`. Proved per
+  surface through the real hook runner.)
+- [x] `runner-unpinned` and both `runner-pin-drift` cases name a recovery that
+  performs them, and no longer name `gate repair`. (`gate sync`, which
+  re-resolves and re-pins every declared check. A pinned program that is gone
+  from the machine entirely still has to be installed before a sync can
+  resolve it; sync's own preview reports it unresolved.)
+- [x] A fixture enumerates every control surface and every runner-pin reason
+  code and fails if any has no remedy entry. (Runner-pin codes are read from
+  `pinnedRunners`' source.)
+- [x] One mapping serves every site; no second table exists, proved by the
+  absence of any remaining inline remedy string. (`REMEDIES` in the leaf module
+  `scripts/lib/remedies.mjs` owns it; `TB-060`'s `STATUS_REMEDIES` moved there
+  from `operator-surface.mjs`, and the recovery rows of `gate sync`'s refusals
+  render through it too.)
+- [x] `AC-LIFE-010`: `gate repair` still previews and repairs exactly
   `hook-absent`, `hook-block-tampered`, and `hook-receipt-mismatch`, and still
-  reports everything else as unrepairable.
-- [ ] Where the receipt records the clone-local shortcut, the named command uses
-  it.
-- [ ] `AC-SEC-001`: outcomes, reason codes, and authorization for every drift
+  reports everything else as unrepairable. (It now reconciles the control
+  surface status does, so drift it cannot restore appears among
+  `unrepairable` and its `next:` names that drift's remedy. The `managed-hooks`
+  drift of the very block its actions restore is not listed beside them.)
+- [x] Where the receipt records the clone-local shortcut, the named command uses
+  it. (Read from the clone's `.git/config` exactly as `TB-060` reads it; a
+  foreign `gate` alias is never named.)
+- [x] `AC-SEC-001`: outcomes, reason codes, and authorization for every drift
   are byte-identical to today.
-- [ ] The remedy states that configuration and historical evidence survive it.
+- [x] The remedy states that configuration and historical evidence survive it.
 
 ## Verification Matrix
 

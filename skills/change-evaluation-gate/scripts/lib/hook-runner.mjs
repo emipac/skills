@@ -38,6 +38,7 @@ import {
   readHookRegistration,
   repositoryIdentity,
 } from './activation.mjs';
+import { cloneShortcut } from './activation-seams.mjs';
 import { describeAdapter } from './adapters.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
 import { commandPreview, composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
@@ -58,6 +59,7 @@ import {
 import { bypassGrantFrom, declaredEnvironmentFiles, validateGatePolicy } from './policy.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { createRedactor } from './redaction.mjs';
+import { nextRemedies } from './remedies.mjs';
 import { resolveRuntimeInputs } from './runtime-inputs.mjs';
 import { materializeRuntimeInputs } from './security-control.mjs';
 
@@ -636,8 +638,32 @@ export const resolveReceipt = async (repositoryRoot) => {
   return { ok: true, receipt, receiptPath, gitCommonDirectory: common };
 };
 
-/** What a maintainer does about a receipt that no longer describes this machine. */
-const REPAIR = 'run `gate repair` to re-resolve and re-pin the commands this clone was activated with';
+/**
+ * Deny a runner pin that no longer describes this clone, naming what recovers
+ * it from the one remedy table — a new Activation transaction, never
+ * `gate repair`, which restores registrations and re-pins nothing (`TB-065`).
+ * The shortcut is asked only here, on the denial, so an undrifted commit pays
+ * nothing for it.
+ */
+const pinDenial = async (reasonCode, detail, shortcut) => ({
+  ok: false,
+  reasonCode,
+  detail: `${detail} Next: ${nextRemedies([{ code: reasonCode }], await shortcut?.() ?? null).instruction}.`,
+});
+
+/**
+ * How a runner answers "what does this clone call the Gate": asked lazily, at
+ * most once, and only when something is reported that needs a remedy named.
+ */
+export const shortcutOf = (repositoryRoot) => {
+  let asked = null;
+
+  return () => {
+    asked ??= cloneShortcut({ repositoryRoot }).catch(() => null);
+
+    return asked;
+  };
+};
 
 /**
  * Take every executable from the pin the Activation receipt recorded.
@@ -654,7 +680,7 @@ const REPAIR = 'run `gate repair` to re-resolve and re-pin the commands this clo
  * derived, so the invocation activation previewed and the one this runs cannot
  * diverge.
  */
-export const pinnedRunners = async (checks, { receipt, compose }) => {
+export const pinnedRunners = async (checks, { receipt, compose, shortcut = null }) => {
   const pins = new Map((receipt?.runtime?.runners ?? [])
     .filter((entry) => entry?.role === 'evaluate' && typeof entry?.check_id === 'string')
     .map((entry) => [entry.check_id, entry]));
@@ -665,29 +691,29 @@ export const pinnedRunners = async (checks, { receipt, compose }) => {
     const pin = pins.get(check.id) ?? null;
 
     if (typeof pin?.executable !== 'string' || pin.executable === '') {
-      return {
-        ok: false,
-        reasonCode: 'runner-unpinned',
-        detail: `the Activation receipt pins no executable for ${check.id}; this clone was activated with different commands, so nothing is authorized. ${REPAIR}.`,
-      };
+      return pinDenial(
+        'runner-unpinned',
+        `the Activation receipt pins no executable for ${check.id}; this clone was activated with different commands, so nothing is authorized.`,
+        shortcut,
+      );
     }
 
     if (pin.runner !== command.runner) {
-      return {
-        ok: false,
-        reasonCode: 'runner-pin-drift',
-        detail: `${check.id} now names the ${command.runner} runner, but the Activation receipt pinned ${pin.runner}; the pinned program is never replaced by a different one. ${REPAIR}.`,
-      };
+      return pinDenial(
+        'runner-pin-drift',
+        `${check.id} now names the ${command.runner} runner, but the Activation receipt pinned ${pin.runner}; the pinned program is never replaced by a different one.`,
+        shortcut,
+      );
     }
 
     const usable = await access(pin.executable, X_OK).then(() => true, () => false);
 
     if (!usable) {
-      return {
-        ok: false,
-        reasonCode: 'runner-pin-drift',
-        detail: `${check.id} was activated against ${pin.executable}, which is no longer an executable on this machine; it is never re-resolved to a different program. ${REPAIR}.`,
-      };
+      return pinDenial(
+        'runner-pin-drift',
+        `${check.id} was activated against ${pin.executable}, which is no longer an executable on this machine; it is never re-resolved to a different program.`,
+        shortcut,
+      );
     }
 
     const composition = compose(command);
@@ -1182,7 +1208,8 @@ export const runHook = async ({
     );
   }
 
-  const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose });
+  const shortcut = shortcutOf(repository.root);
+  const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose, shortcut });
 
   if (!runners.ok) {
     return denied(runners.reasonCode, runners.detail);
@@ -1276,6 +1303,8 @@ export const runHook = async ({
       // the check that blocked it and commit against the weakened policy with
       // no re-consent and no signal (`AC-SEC-001`, `AC-CFG-004`, `NFR-SEC-004`).
       controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
+      // How the drift diagnostic names the Gate on this clone (`TB-065`).
+      remedyShortcut: shortcut,
       housekeeping,
       // The grant the operator wrote, and the clone's durable one-shot ledger
       // it is resolved against. `resolveBypass` refuses it on its own terms —

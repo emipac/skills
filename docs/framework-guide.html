@@ -1935,7 +1935,10 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
         It ends with one <code>next:</code> line naming the command that recovers what it found
         — <code>git gate repair</code> for a moved Git hook, <code>git gate sync</code> for a
         changed policy, <code>nothing</code> on a healthy clone. It names the command; it never
-        runs it.
+        runs it. A denied commit, a Cursor follow-up, and a <code>git gate repair</code> with
+        nothing to restore name their recovery from the same table, so whichever one you read
+        first names the command that actually recovers the clone — and says that your
+        configuration and all historical evidence survive it.
       </p>
 
       <p>
@@ -1959,7 +1962,7 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
-            <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12.</td></tr>
+            <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12. With nothing to restore, its <code>next:</code> line names what does recover the clone.</td></tr>
             <tr><td><strong>sync</strong></td><td>Re-pins a changed <code>.agent-framework.yaml</code> under the adapters this clone already has, keeping every registration byte for byte. Its preview says whether the new policy is weaker than the one it replaces. Section 12.</td></tr>
             <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
             <tr><td><strong>bypass</strong></td><td>Grants one one-shot bypass of the exact staged snapshot, where policy enables it. Section 10 covers what it demands.</td></tr>
@@ -2016,7 +2019,10 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           makes, so it reports <span class="pill p-deny">broken</span> with a
           <code>control-surface-drift</code> finding on <code>trusted-configuration</code> that names
           <code>.agent-framework.yaml</code>, and its <code>next:</code> line names the re-pin below.
-          Status and the commit agree: when one says drifted, so does the other.
+          Status and the commit agree: when one says drifted, so does the other. The denial itself
+          ends <code>Next: git gate sync — …</code> for a changed policy, a changed check command,
+          or a pinned runner that moved, and names <code>git gate repair</code> only when what
+          drifted is the Gate's own hook.
         </p>
       </div>
 
@@ -2141,8 +2147,8 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             </tr>
             <tr>
               <td>Every commit is denied with <code>integrity-drift</code></td>
-              <td>The configuration moved after activation.</td>
-              <td>Section 12.</td>
+              <td>The configuration, a check's command, or a pinned runner moved after activation.</td>
+              <td>Run what the denial's <code>Next:</code> names — <code>git gate sync</code> for these. Section 12.</td>
             </tr>
             <tr>
               <td>A required check never seems to run at all</td>
@@ -2223,14 +2229,14 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
       </p>
       <pre><code>Preflight (not a commit decision): unverified.
 Diagnostics:
-- integrity-drift: The Gate control surface drifted independently of this change (trusted-configuration); nothing here is proved. …
+- integrity-drift: The Gate control surface drifted independently of this change (trusted-configuration); nothing here is proved. Next: git gate sync — a new Activation transaction that re-pins the configuration …
 - dependency-root-unavailable: The declared dependency root "vendor" could not be provided to this evaluation; …
 Changed Grader surfaces (this change edits what grades it; stated for visibility):
 - gate-configuration .agent-framework.yaml</code></pre>
       <p>
         Read <code>integrity-drift</code> and <code>dependency-root-unavailable</code> as messages
-        about the clone and its environment, not about your code: <code>gate status</code> names the
-        remedy for drift, a missing dependency root is cleared by installing it, and editing code
+        about the clone and its environment, not about your code: the drift line names the command
+        that recovers it, a missing dependency root is cleared by installing it, and editing code
         clears neither. A changed Grader surface is stated
         even on a turn that passed, because editing what grades a change is worth a second pair of
         eyes; it is an observation, never an accusation. The message lists at most eight failing
@@ -2264,15 +2270,8 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
       <p>
         There is no command that reports what this machine can do before you commit to anything, and
         no command that evaluates the tree on demand. You learn that a runner does not resolve here
-        when an activation preview refuses, and that a check fails when a commit is denied. Two more
-        specific gaps, both known and both slated:
+        when an activation preview refuses, and that a check fails when a commit is denied.
       </p>
-      <ul>
-        <li><strong>Status does not see configuration drift.</strong> Section 12. It reports
-        <code>healthy</code> over a policy the commit runners will deny.</li>
-        <li><strong>Status does not tell you what to do next.</strong> A finding names what is
-        wrong, not the command that puts it right.</li>
-      </ul>
 
       <h3>Two risks stay open</h3>
       <ul>

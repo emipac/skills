@@ -404,7 +404,10 @@ test('TB-024 AC-EVAL-001: a check the receipt pins no executable for denies rath
   assert.notEqual(result.exitCode, 0);
   assert.equal(result.reasonCode, 'runner-unpinned');
   assert.match(result.lines.join('\n'), /configuration\.broad-tests\.test/);
-  assert.match(result.lines.join('\n'), /gate repair/);
+  // A sync re-resolves and re-pins; `gate repair` restores registrations and
+  // re-pins nothing (`TB-065`).
+  assert.match(result.lines.join('\n'), /Next: gate sync — /);
+  assert.doesNotMatch(result.lines.join('\n'), /gate repair/);
 });
 
 test('TB-024 NFR-REL-003: a pinned executable that is gone denies as drift, never re-resolved to another program', async (t) => {
@@ -426,7 +429,8 @@ test('TB-024 NFR-REL-003: a pinned executable that is gone denies as drift, neve
   );
   assert.equal(result.reasonCode, 'runner-pin-drift');
   assert.match(output, /vendor\/bin\/removed/, 'the drift names the executable that is gone.');
-  assert.match(output, /gate repair/, 'the maintainer is told what to do, and nothing is substituted.');
+  assert.match(output, /Next: gate sync — /, 'the maintainer is told what to do, and nothing is substituted.');
+  assert.doesNotMatch(output, /gate repair/);
 });
 
 test('TB-024 NFR-REL-003: a pin recorded for a different runner is drift, not a near-enough match', async (t) => {
@@ -439,7 +443,8 @@ test('TB-024 NFR-REL-003: a pin recorded for a different runner is drift, not a 
 
   assert.notEqual(result.exitCode, 0);
   assert.equal(result.reasonCode, 'runner-pin-drift');
-  assert.match(result.lines.join('\n'), /gate repair/);
+  assert.match(result.lines.join('\n'), /Next: gate sync — /);
+  assert.doesNotMatch(result.lines.join('\n'), /gate repair/);
 });
 
 test('a descriptor its own runner cannot compose is surfaced by that reason', async (t) => {

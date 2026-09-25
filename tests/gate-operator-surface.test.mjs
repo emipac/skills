@@ -32,10 +32,10 @@ import {
   EXIT_UNHEALTHY,
   EXIT_UNRUNNABLE,
   PACKAGED_HOOK_PROGRAM,
-  STATUS_REMEDIES,
   quoteForShell,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
+import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 import { CONTROL_SURFACES } from '../skills/change-evaluation-gate/scripts/lib/security-control.mjs';
 
 const runFile = promisify(execFile);
@@ -2400,7 +2400,8 @@ test('TB-060 NFR-SEC-004 / AC-SEC-001: a clone whose configuration changed since
   // shortcut — never `gate repair`, which cannot re-pin a policy (`TB-062`).
   const next = nextLineOf(status);
 
-  assert.equal(next, 'git gate sync');
+  assert.equal(next, remedyInstruction('sync', 'git gate'));
+  assert.match(next, /^git gate sync — /);
   assert.deepEqual(
     status.document.observation.next.remedies.map((remedy) => remedy.remedy),
     ['sync'],
@@ -2537,7 +2538,8 @@ test('TB-060: next: uses git gate only where the shortcut activation records is 
   const broken = await observe(root, ['status']);
 
   assert.equal(broken.document.observation.health, 'broken');
-  assert.equal(nextLineOf(broken), 'gate repair');
+  assert.equal(nextLineOf(broken), remedyInstruction('repair', 'gate'));
+  assert.match(nextLineOf(broken), /^gate repair — /);
 
   // A `gate` alias somebody else owns is not the shortcut activation records,
   // and status never sends a maintainer to it.
@@ -2546,7 +2548,7 @@ test('TB-060: next: uses git gate only where the shortcut activation records is 
   await runGit(shadowed, ['config', '--local', 'alias.gate', '!echo mine']);
   await writeFile(path.join(shadowed, '.agent-framework.yaml'), activatableConfiguration({ totalSeconds: 900 }), 'utf8');
 
-  assert.equal(nextLineOf(await observe(shadowed, ['status'])), 'gate sync');
+  assert.match(nextLineOf(await observe(shadowed, ['status'])), /^gate sync — /);
 });
 
 /**
@@ -2590,7 +2592,7 @@ test('TB-060 NFR-OPER-001: every finding status can emit maps to a remedy or an 
   assert.match(statusBody, /reconcileControlSurface\(/);
 
   for (const code of codes) {
-    const entry = STATUS_REMEDIES[code];
+    const entry = REMEDIES[code];
 
     assert.equal(typeof entry, 'string', `status can emit ${code}, and no remedy or informational marker is recorded for it.`);
   }
@@ -2598,7 +2600,7 @@ test('TB-060 NFR-OPER-001: every finding status can emit maps to a remedy or an 
   // Control-surface drift has one remedy per surface, and every surface has one.
   for (const surface of CONTROL_SURFACES) {
     assert.equal(
-      typeof STATUS_REMEDIES['control-surface-drift'][surface],
+      typeof REMEDIES['control-surface-drift'][surface],
       'string',
       `control-surface drift of ${surface} has no remedy.`,
     );
@@ -2608,15 +2610,15 @@ test('TB-060 NFR-OPER-001: every finding status can emit maps to a remedy or an 
   // configuration is re-pinned by a sync (`TB-062`), an unactivated clone is
   // activated.
   for (const code of ['hook-absent', 'hook-block-tampered', 'hook-receipt-mismatch']) {
-    assert.equal(STATUS_REMEDIES[code], 'repair');
+    assert.equal(REMEDIES[code], 'repair');
   }
 
-  assert.equal(STATUS_REMEDIES['control-surface-drift']['managed-hooks'], 'repair');
-  assert.equal(STATUS_REMEDIES['control-surface-drift']['trusted-configuration'], 'sync');
-  assert.equal(STATUS_REMEDIES['control-surface-drift']['command-descriptors'], 'sync');
-  assert.equal(STATUS_REMEDIES['control-surface-drift'].adapters, 'activation-transaction');
-  assert.equal(STATUS_REMEDIES['activation-absent'], 'activate');
-  assert.equal(STATUS_REMEDIES['gate-policy-missing'], 'informational');
+  assert.equal(REMEDIES['control-surface-drift']['managed-hooks'], 'repair');
+  assert.equal(REMEDIES['control-surface-drift']['trusted-configuration'], 'sync');
+  assert.equal(REMEDIES['control-surface-drift']['command-descriptors'], 'sync');
+  assert.equal(REMEDIES['control-surface-drift'].adapters, 'activation-transaction');
+  assert.equal(REMEDIES['activation-absent'], 'activate');
+  assert.equal(REMEDIES['gate-policy-missing'], 'informational');
   assert.ok(codes.has('configuration-missing') && codes.has('gate-policy-invalid') && codes.has('adapter-registration-drifted'));
 });
 
@@ -3000,7 +3002,8 @@ test('TB-062: sync refuses a changed adapter set, a drifted receipt, and an unre
   assert.equal(retired.exitCode, EXIT_UNHEALTHY);
   assert.equal(retired.document.observation.refusal.reasonCode, 'adapter-set-changed');
   assert.equal(retired.document.observation.confirmationToken, null);
-  assert.equal(nextLineOf(retired), 'gate deactivate, then gate activate');
+  assert.equal(nextLineOf(retired), remedyInstruction('activation-transaction', 'gate'));
+  assert.match(nextLineOf(retired), /^gate deactivate, then gate activate — /);
 
   const forced = await observe(root, ['sync', '--confirm', `sha256:${'d'.repeat(64)}`]);
 
@@ -3019,7 +3022,8 @@ test('TB-062: sync refuses a changed adapter set, a drifted receipt, and an unre
   const drifted = await observe(edited, ['sync']);
 
   assert.equal(drifted.document.observation.refusal.reasonCode, 'receipt-drifted');
-  assert.equal(nextLineOf(drifted), 'gate deactivate, then gate activate');
+  // Through the shortcut this clone's activation recorded (`TB-065`).
+  assert.match(nextLineOf(drifted), /^git gate deactivate, then git gate activate — /);
 
   // The trusted policy is accepted only from a document that reproduces the
   // pinned identity. A committed file that moved past it does not.
@@ -3036,4 +3040,190 @@ test('TB-062: sync refuses a changed adapter set, a drifted receipt, and an unre
   assert.equal(unrecoverable.document.observation.trusted.source, null);
   assert.equal(unrecoverable.document.observation.confirmationToken, null);
   assert.match(unrecoverable.stdout, /^policy transition: cannot be judged/m);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-065: name the command that actually recovers.
+ *
+ * Every place the Gate tells a maintainer what to run renders through the one
+ * remedy table in `remedies.mjs`. These fixtures run the named command on a
+ * real clone rather than reading the sentence alone.
+ * ------------------------------------------------------------------------- */
+
+/** The incident's edit: a descriptor corrected after activation, the policy section untouched. */
+const correctedDescriptorConfiguration = () => activatableConfiguration().replace(
+  '            - app/Order.php\n',
+  '            - app/Order.php\n            - --memory-limit=512M\n',
+);
+
+test('TB-065 NFR-OPER-001 / FR-LIFE-019 / AC-SEC-001: a corrected descriptor is denied naming git gate sync, repair refuses it and names the same remedy, and following that remedy exactly lets the next commit through', async (t) => {
+  const root = await commandActivatedClone(t);
+
+  assert.notEqual(correctedDescriptorConfiguration(), activatableConfiguration());
+  await writeFile(path.join(root, '.agent-framework.yaml'), correctedDescriptorConfiguration(), 'utf8');
+  await stageEdit(root, 'baseline\nrepaired\n');
+
+  // AC-SEC-001: the denial is what it always was — `integrity-drift`, on the
+  // descriptor surface — and now names what recovers it, through the shortcut
+  // this clone's activation recorded.
+  const denied = await commitAttempt(root, 'after the descriptor was corrected');
+
+  assert.equal(denied.committed, false, 'a commit against drifted descriptors was accepted.');
+  assert.match(denied.output, /unverified \/ deny/);
+  assert.match(denied.output, /integrity-drift: The Gate control surface drifted independently of this change \(command-descriptors\)/);
+  assert.ok(
+    denied.output.includes(`Next: ${remedyInstruction('sync', 'git gate')}.`),
+    `the denial does not name the sync that recovers it: ${denied.output}`,
+  );
+  assert.doesNotMatch(denied.output, /gate repair/);
+
+  // Status and repair read the same table. Repair keeps its three findings,
+  // restores nothing here, and says what does recover the clone.
+  const status = await observe(root, ['status']);
+
+  assert.equal(nextLineOf(status), remedyInstruction('sync', 'git gate'));
+
+  const before = await cloneFingerprint(root);
+  const repair = await observe(root, ['repair']);
+
+  assert.deepEqual(repair.document.observation.actions, [], 'repair offered to restore something that is not a registration.');
+  assert.deepEqual(
+    repair.document.observation.unrepairable.map((finding) => `${finding.code}:${finding.surface}`),
+    ['control-surface-drift:command-descriptors'],
+  );
+  assert.equal(nextLineOf(repair), remedyInstruction('sync', 'git gate'));
+  assert.equal(await cloneFingerprint(root), before, 'previewing a repair wrote something.');
+
+  // Performing exactly the named command — `git gate sync`, previewed and
+  // confirmed through the clone's own shortcut — recovers the clone.
+  const [, named] = denied.output.match(/Next: (git gate sync) — /);
+  const verb = named.split(' ').at(-1);
+  const preview = JSON.parse(await runGit(root, ['gate', verb, '--json']));
+  const confirmed = JSON.parse(await runGit(root, ['gate', verb, '--confirm', preview.observation.confirmationToken, '--json']));
+
+  assert.equal(confirmed.mutation.performed, true, JSON.stringify(confirmed.mutation));
+  assert.equal((await observe(root, ['status'])).document.observation.health, 'healthy');
+
+  const recovered = await commitAttempt(root, 'after the named recovery');
+
+  assert.equal(recovered.committed, true, recovered.output);
+});
+
+test('TB-065: a remedy names git gate only where the clone carries the shortcut activation records', async (t) => {
+  const root = await commandActivatedClone(t);
+
+  // A `gate` alias somebody else owns runs something else.
+  await runGit(root, ['config', '--local', 'alias.gate', '!echo mine']);
+  await writeFile(path.join(root, '.agent-framework.yaml'), correctedDescriptorConfiguration(), 'utf8');
+  await stageEdit(root, 'baseline\nrepaired\n');
+
+  const denied = await commitAttempt(root, 'with a foreign alias');
+
+  assert.equal(denied.committed, false);
+  assert.ok(denied.output.includes(`Next: ${remedyInstruction('sync', 'gate')}.`), denied.output);
+  assert.doesNotMatch(denied.output, /git gate/);
+});
+
+/**
+ * `NFR-OPER-001`. Every runner-pin reason code the runners deny with has a
+ * remedy, read from the source that emits them, and none of them is `gate
+ * repair`, which re-pins nothing. With the TB-060 fixture above covering every
+ * status code and every control surface, no drift the Gate reports can reach a
+ * maintainer without a remedy.
+ */
+test('TB-065 NFR-OPER-001: every control surface and every runner-pin reason code has a remedy entry, and only a registration is repaired', async () => {
+  const hookRunner = await readFile(path.join(LIBRARY, 'hook-runner.mjs'), 'utf8');
+  const pinning = hookRunner.slice(
+    hookRunner.indexOf('export const pinnedRunners'),
+    hookRunner.indexOf('\n};\n', hookRunner.indexOf('export const pinnedRunners')),
+  );
+  const pinCodes = new Set([...pinning.matchAll(/pinDenial\(\s*'([a-z-]+)'/g)].map((match) => match[1]));
+
+  assert.deepEqual([...pinCodes].sort(), ['runner-pin-drift', 'runner-unpinned']);
+  // Every denial in the pinning path renders through the table.
+  assert.doesNotMatch(pinning, /reasonCode: 'runner-/);
+
+  for (const code of pinCodes) {
+    assert.equal(typeof REMEDIES[code], 'string', `${code} has no remedy entry.`);
+    assert.equal(REMEDIES[code], 'sync', `${code} is re-pinned by a sync, never repaired.`);
+    assert.ok(remedyInstruction(REMEDIES[code]) !== null, `${code}'s remedy renders nothing.`);
+  }
+
+  for (const surface of CONTROL_SURFACES) {
+    const remedy = REMEDIES['control-surface-drift'][surface];
+
+    assert.equal(typeof remedy, 'string', `control-surface drift of ${surface} has no remedy.`);
+    assert.ok(remedyInstruction(remedy) !== null, `${surface}'s remedy renders nothing.`);
+    // FR-LIFE-019: a gate-owned registration is repaired; everything else is
+    // re-established by an Activation transaction.
+    assert.equal(
+      remedy === 'repair',
+      surface === 'managed-hooks',
+      `${surface} names ${remedy}, but only the managed hook registration is repair's to restore.`,
+    );
+    assert.ok(['repair', 'sync', 'activation-transaction'].includes(remedy), `${surface} names ${remedy}.`);
+  }
+
+  // What survives each recovery is stated in it.
+  for (const remedy of ['repair', 'sync', 'activation-transaction']) {
+    assert.match(remedyInstruction(remedy), /keeps \.agent-framework\.yaml and all historical Evidence/);
+  }
+});
+
+/**
+ * One table, proved by absence: no Gate library module but the table's own
+ * names a recovery command in its code. Comments may mention a command; the
+ * usage text lists them; neither tells a maintainer what recovers a drift.
+ */
+test('TB-065: one remedy table serves every site, and no inline remedy string remains', async () => {
+  const sources = (await readdir(LIBRARY)).filter((entry) => entry.endsWith('.mjs'));
+  const inline = /gate repair|gate deactivate|deactivate, then|`gate sync`|'gate sync'|re-pin what this clone was activated with/;
+
+  for (const source of sources) {
+    const contents = await readFile(path.join(LIBRARY, source), 'utf8');
+
+    if (source === 'remedies.mjs') {
+      continue;
+    }
+
+    const code = contents
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\/\*\*?|\*)/.test(line))
+      // The usage text lists every command; it recommends none.
+      .filter((line) => !/^\s*'  gate [a-z]+ /.test(line));
+
+    for (const line of code) {
+      assert.doesNotMatch(line, inline, `${source} names a remedy inline: ${line.trim()}`);
+    }
+
+    assert.doesNotMatch(contents, /REMEDIES = |remedyInstruction = /, `${source} defines a second remedy table.`);
+  }
+});
+
+/**
+ * AC-LIFE-010. Repair's scope is untouched: it previews exactly the three
+ * registration findings, and reports a drifted configuration beside them as
+ * unrepairable rather than restoring it.
+ */
+test('TB-065 AC-LIFE-010: repair still restores exactly its three findings and reports configuration drift beside them as unrepairable', async (t) => {
+  const root = await commandActivatedClone(t);
+  const hookPath = path.join(root, '.git/hooks/pre-commit');
+
+  await writeFile(hookPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await writeFile(path.join(root, '.agent-framework.yaml'), correctedDescriptorConfiguration(), 'utf8');
+
+  const preview = await observe(root, ['repair']);
+  const { observation } = preview.document;
+
+  assert.ok(observation.actions.length > 0, 'the clobbered registration is repair\'s to restore.');
+  assert.ok(
+    observation.actions.every((action) => ['hook-absent', 'hook-block-tampered', 'hook-receipt-mismatch'].includes(action.code)
+      && action.kind === 'hook-registration'),
+    JSON.stringify(observation.actions),
+  );
+  assert.deepEqual(
+    observation.unrepairable.map((finding) => `${finding.code}:${finding.surface}`),
+    ['control-surface-drift:command-descriptors'],
+  );
+  assert.deepEqual(observation.next.remedies.map((remedy) => remedy.remedy), ['sync']);
 });

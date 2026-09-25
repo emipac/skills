@@ -1050,6 +1050,10 @@ test('TB-064 AC-SEC-001 / NFR-OPER-001 / FR-EVAL-009: a drifted clone whose chec
   assert.doesNotMatch(message, /configuration\.broad-tests\.test/, `every check passed, so none is listed: ${message}`);
   assert.match(message, /integrity-drift/, message);
   assert.match(message, /trusted-configuration/, `the drifted surface is named: ${message}`);
+  // TB-065: and so is what recovers it — a sync, carried verbatim through the
+  // channel, never `gate repair`, which cannot re-pin a configuration.
+  assert.match(message, /Next: gate sync — a new Activation transaction/, `the channel names the recovery: ${message}`);
+  assert.doesNotMatch(message, /gate repair/, message);
   assert.match(message, /dependency-root-unavailable/, message);
   assert.match(message, /"vendor"/, message);
   assert.match(message, /gate-configuration \.agent-framework\.yaml/, `the changed Grader surface is named: ${message}`);

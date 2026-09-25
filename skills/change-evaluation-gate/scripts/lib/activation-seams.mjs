@@ -53,6 +53,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
@@ -715,6 +716,28 @@ export const recordedCommandAlias = async ({
 
   return current !== '' && current === commandAliasValue({ interpreter, command });
 };
+
+/**
+ * The packaged `gate` command, as an activated clone's shortcut names it.
+ *
+ * The alias points at the installed distribution that performed the
+ * activation, which is the same distribution that registered the hook program
+ * beside it.
+ */
+export const PACKAGED_COMMAND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'gate.mjs');
+
+/**
+ * How a remedy names the Gate on this clone: `git gate` where the clone's own
+ * `.git/config` holds exactly the shortcut activation writes, and `null` —
+ * plain `gate` — otherwise. Status, repair, sync, and both runners ask this
+ * one question, so no reader can send a maintainer to an alias somebody else
+ * owns (`TB-060`, `TB-065`). Reading writes nothing.
+ */
+export const cloneShortcut = async ({ repositoryRoot, runGit = null } = {}) => (
+  await recordedCommandAlias({ repositoryRoot, command: PACKAGED_COMMAND, runGit })
+    ? `git ${COMMAND_ALIAS_NAME}`
+    : null
+);
 
 /**
  * Withdraw a shortcut this activation wrote — and only that.

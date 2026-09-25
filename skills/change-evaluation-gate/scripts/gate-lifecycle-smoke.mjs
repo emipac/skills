@@ -50,7 +50,10 @@
  *    receipt pins the edited policy, the registered hook is byte-identical
  *    throughout, and the next real commit is evaluated under the new policy
  *    with no drift (AC-SEC-001, NFR-SEC-004, AC-LIFE-010, FR-LIFE-019,
- *    TB-060, TB-062).
+ *    TB-060, TB-062). The denial names that same sync from the one remedy
+ *    table, and `git gate repair` previews nothing to restore and names it too,
+ *    so the command every surface names is the one this scenario performs
+ *    (NFR-OPER-001, TB-065).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime, and is safe to run repeatedly on a clean machine.
@@ -84,6 +87,7 @@ import {
   uninstallGate,
   updateGate,
 } from './lib/lifecycle.mjs';
+import { remedyInstruction } from './lib/remedies.mjs';
 
 const CAPABILITY = 'gate-lifecycle-smoke';
 
@@ -1183,8 +1187,23 @@ const packagedConfigurationDrift = async () => {
   check(findings, surfaces.join(',') === 'trusted-configuration', `The drift was reported on ${JSON.stringify(surfaces)}.`);
   check(
     findings,
-    /^next: git gate sync$/m.test(human.stdout ?? ''),
+    /^next: git gate sync — /m.test(human.stdout ?? ''),
     'Status did not name `git gate sync` through the clone\'s shortcut.',
+  );
+  check(
+    findings,
+    drifted.observation?.next?.instruction === remedyInstruction('sync', 'git gate'),
+    `Status did not render its remedy from the one table: ${drifted.observation?.next?.instruction}`,
+  );
+
+  // `gate repair` restores registrations and nothing else: it previews nothing
+  // to restore here, and names the same remedy status does (`TB-065`).
+  const repair = await shortcut(['repair']);
+
+  check(
+    findings,
+    /^actions: 0$/m.test(repair.stdout ?? '') && /^next: git gate sync — /m.test(repair.stdout ?? ''),
+    `gate repair did not refuse and name the sync that recovers the clone: ${repair.stdout}`,
   );
 
   // The next commit is denied for the reason status just gave.
@@ -1198,6 +1217,13 @@ const packagedConfigurationDrift = async () => {
     findings,
     /integrity-drift/.test(denied ?? '') && /trusted-configuration/.test(denied ?? ''),
     'The commit was not denied for the drift status reported.',
+  );
+  // And it names the remedy status named, from the same table, never the
+  // repair that would refuse (`TB-065`).
+  check(
+    findings,
+    (denied ?? '').includes(`Next: ${remedyInstruction('sync', 'git gate')}.`) && !/gate repair/.test(denied ?? ''),
+    `The denial did not name the recovery status named: ${denied}`,
   );
 
   // Exactly the remedy status named, and nothing else: one sync, previewed

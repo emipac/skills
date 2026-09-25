@@ -152,7 +152,12 @@ or the commands it resolves to, `git gate deactivate` then `git gate activate`
 for anything else the receipt pinned (which re-pins the configuration too),
 `gate activate` for a configured clone, and `nothing` when nothing needs doing.
 Report that line; every command it names previews first, and none of them is
-performed implicitly.
+performed implicitly. A commit denial, a preflight message, `gate repair` with
+nothing to restore, and a refused `gate sync` name their recovery from the same
+table, so follow the command a denial names: `gate repair` is named only for a
+gate-owned hook registration, and a changed configuration, descriptor, or runner
+pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
+historical Evidence.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.

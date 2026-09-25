@@ -75,9 +75,10 @@ import {
 } from './activation.mjs';
 import {
   COMMAND_ALIAS_NAME,
+  PACKAGED_COMMAND,
   SELF_DECLARED,
+  cloneShortcut,
   createTrustEstablishment,
-  recordedCommandAlias,
   registerCommandAlias,
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
@@ -129,6 +130,7 @@ import {
   uninstallGate,
   updateGate,
 } from './lifecycle.mjs';
+import { nextRemedies, remedyInstruction } from './remedies.mjs';
 import { TRUST_BOUNDARY } from './security-control.mjs';
 
 /** The document an agent parses. Versioned, so a later field is an addition rather than a surprise. */
@@ -368,12 +370,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGED_HOOK_PROGRAM = path.resolve(HERE, '..', 'gate-precommit.mjs');
 
 /**
- * This command itself, as an activated clone's shortcut has to name it.
- *
- * The alias points at the installed distribution that performed the activation,
- * which is the same distribution that registered the hook program beside it.
+ * This command itself, as an activated clone's shortcut has to name it. Stated
+ * once, beside the shortcut, so every remedy that names the shortcut asks
+ * about the same program (`TB-065`).
  */
-export const PACKAGED_COMMAND = path.resolve(HERE, '..', 'gate.mjs');
+export { PACKAGED_COMMAND };
 
 /** The gate this surface speaks for; one name, stated once. */
 const GATE_ID = 'change-evaluation-gate';
@@ -1266,138 +1267,6 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
 };
 
 /**
- * What recovers each finding `gate status` can report — or the explicit marker
- * that nothing needs recovering.
- *
- * One entry per finding code, and one per control surface for
- * `control-surface-drift`, whose code is shared by every surface. The lines
- * follow `FR-LIFE-019`: a gate-owned Git registration is restored by
- * `gate repair`, which repairs exactly those three findings and nothing else;
- * what the receipt pinned from `.agent-framework.yaml` — the policy's identity
- * and the commands it resolves to — is re-pinned by `gate sync`, the Activation
- * transaction that keeps the adapter set (`TB-062`); everything else the
- * receipt pinned is re-established by a new Activation transaction. A finding
- * with no entry here is a test failure, never a finding nobody is told how to
- * act on (`NFR-OPER-001`, `TB-060`).
- */
-export const STATUS_REMEDIES = Object.freeze({
-  // An installed clone holds no Gate policy: nothing is enforced, and adopting
-  // the Gate is a choice, not a fault.
-  'configuration-missing': 'informational',
-  'gate-policy-missing': 'informational',
-  'repository-unresolved': 'informational',
-  'configuration-unreadable': 'correct-configuration',
-  'gate-policy-invalid': 'correct-configuration',
-  'activation-absent': 'activate',
-  'hook-absent': 'repair',
-  'hook-block-tampered': 'repair',
-  'hook-receipt-mismatch': 'repair',
-  // Adapter loss is a reinstall, not a repair (`RISK-004`): a new Activation
-  // transaction pins the adapter set this installed gate declares.
-  'authoritative-adapter-lost': 'activation-transaction',
-  'adapter-lost': 'activation-transaction',
-  'adapter-registration-absent': 'activation-transaction',
-  'adapter-registration-unverified': 'activation-transaction',
-  // Deactivation refuses a client entry that changed underneath it, and the
-  // Gate never overwrites a client's own file.
-  'adapter-registration-drifted': 'reconcile-client-registration',
-  'adapter-registration-ambiguous': 'reconcile-client-registration',
-  'control-surface-drift': Object.freeze({
-    runtime: 'activation-transaction',
-    adapters: 'activation-transaction',
-    'managed-hooks': 'repair',
-    receipt: 'activation-transaction',
-    // Both are pinned from the configuration file, and a sync re-pins both.
-    'trusted-configuration': 'sync',
-    'command-descriptors': 'sync',
-    providers: 'activation-transaction',
-  }),
-});
-
-/** The order remedies are performed in when a clone needs more than one. */
-const REMEDY_ORDER = Object.freeze([
-  'correct-configuration',
-  'reconcile-client-registration',
-  'repair',
-  'sync',
-  'activation-transaction',
-  'activate',
-]);
-
-/**
- * One remedy, as the `next:` line says it.
- *
- * A new Activation transaction is the deactivate/activate pair; each half
- * previews and prints its own token. `gate sync` is the scoped one that keeps
- * the adapter set (`TB-062`).
- */
-const remedyInstruction = (remedy, command) => ({
-  'correct-configuration': `correct ${CONFIGURATION_FILE} so its evaluation_gate policy reads and validates`,
-  'reconcile-client-registration': `reconcile the changed client registration by hand — the Gate never overwrites a client's own file — and run ${command} status again`,
-  repair: `${command} repair`,
-  sync: `${command} sync`,
-  'activation-transaction': `${command} deactivate, then ${command} activate — a new Activation transaction that pins what this clone declares now; each previews first and prints the token that confirms it`,
-  activate: `${command} activate`,
-})[remedy] ?? null;
-
-const remedyFor = (finding) => {
-  const entry = STATUS_REMEDIES[finding.code] ?? null;
-
-  return typeof entry === 'string' ? entry : (entry?.[finding.surface] ?? null);
-};
-
-/**
- * What a maintainer does next about everything status found, in the order it
- * has to be done, through the clone's own shortcut where activation recorded
- * one. A clone with nothing to act on says `nothing`.
- */
-const statusNext = (findings, shortcut) => {
-  const command = shortcut ?? 'gate';
-  const informational = [];
-  const byRemedy = new Map();
-
-  for (const finding of findings) {
-    const remedy = remedyFor(finding);
-
-    if (remedy === 'informational') {
-      informational.push(finding.code);
-
-      continue;
-    }
-
-    // Unreachable while the fixture enumerating every code holds; stated
-    // rather than silently dropped if it ever does not.
-    const key = remedy ?? `unrecorded:${finding.code}`;
-
-    byRemedy.set(key, [...(byRemedy.get(key) ?? []), finding.surface === undefined ? finding.code : `${finding.code}:${finding.surface}`]);
-  }
-
-  // A new Activation transaction pins the configuration too, and a sync
-  // refuses a clone whose adapter set changed, so where both are needed the
-  // pair alone is named and answers for both.
-  if (byRemedy.has('sync') && byRemedy.has('activation-transaction')) {
-    byRemedy.set('activation-transaction', [...byRemedy.get('activation-transaction'), ...byRemedy.get('sync')]);
-    byRemedy.delete('sync');
-  }
-
-  const rank = (remedy) => (REMEDY_ORDER.includes(remedy) ? REMEDY_ORDER.indexOf(remedy) : REMEDY_ORDER.length);
-  const remedies = [...byRemedy.entries()]
-    .sort(([left], [right]) => rank(left) - rank(right))
-    .map(([remedy, codes]) => ({
-      remedy,
-      instruction: remedyInstruction(remedy, command) ?? `no remedy is recorded for ${codes.join(', ')}; read its finding above`,
-      findings: codes,
-    }));
-
-  return {
-    instruction: remedies.length === 0 ? 'nothing' : remedies.map((remedy) => remedy.instruction).join('; then '),
-    shortcut,
-    remedies,
-    informational,
-  };
-};
-
-/**
  * The Gate control surface of an activated clone, observed exactly as the
  * runners observe it before every evaluation.
  *
@@ -1430,7 +1299,9 @@ const observeStatusControlSurface = async ({ repositoryRoot, receipt }) => {
  * The receipt pins an identity, not a document, so no diff is available; what
  * is known is that the file on disk no longer produces the identity activation
  * pinned, and that every evaluation is graded against the pinned policy until
- * `gate sync` pins this one. The finding's code and severity are unchanged.
+ * an Activation transaction pins this one. The finding's code and severity are
+ * unchanged; the command that re-pins it is named once, by the `next:` line,
+ * from the one remedy table (`TB-065`).
  */
 const namedConfigurationDrift = (finding, { repositoryRoot, configuration }) => {
   if (finding.code !== 'control-surface-drift' || finding.surface !== 'trusted-configuration') {
@@ -1442,7 +1313,7 @@ const namedConfigurationDrift = (finding, { repositoryRoot, configuration }) => 
     path: path.join(repositoryRoot, CONFIGURATION_FILE),
     detail: [
       finding.detail,
-      `${CONFIGURATION_FILE} changed since this clone was activated, and every evaluation is graded against the policy the receipt pinned, not the file, until \`gate sync\` pins it.`,
+      `${CONFIGURATION_FILE} changed since this clone was activated, and every evaluation is graded against the policy the receipt pinned, not the file, until an Activation transaction re-pins it.`,
       ...(configuration.ok ? [] : [`It no longer resolves to a Gate policy at all: ${configuration.detail}`]),
     ].join(' '),
   };
@@ -1491,11 +1362,7 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
       repositoryRoot,
       configuration: surface.configuration,
     }));
-  const shortcut = await recordedCommandAlias({
-    repositoryRoot,
-    command: PACKAGED_COMMAND,
-    runGit: (args) => runGit(repositoryRoot, args),
-  }) ? `git ${COMMAND_ALIAS_NAME}` : null;
+  const shortcut = await cloneShortcut({ repositoryRoot, runGit: (args) => runGit(repositoryRoot, args) });
 
   return {
     command: 'status',
@@ -1515,7 +1382,7 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
           .filter((finding) => finding.code === 'control-surface-drift')
           .map((finding) => finding.surface),
       },
-      next: statusNext(findings, shortcut),
+      next: nextRemedies(findings, shortcut),
     },
     mutation: null,
   };
@@ -1630,21 +1497,38 @@ const operateRepair = async ({ repositoryRoot, environment, selector, confirmati
       args: [],
     },
   };
+  // The same observation status reconciles, so a clone whose configuration,
+  // descriptors, or receipt drifted is told so here, and told what does
+  // recover it, rather than hearing `nothing to repair` (`TB-065`). It is
+  // reported, never repaired: what repair restores is unchanged (`AC-LIFE-010`).
+  const surface = clone.receipt === null
+    ? null
+    : await observeStatusControlSurface({ repositoryRoot, receipt: clone.receipt });
   const preview = await previewRepair({
     evidenceStore: clone.store,
     repositoryRoot,
     runtime,
     adapters: observedAdapters(clone.receipt),
+    controlSurface: surface?.observed ?? null,
   });
+  const unrepairable = surface === null
+    ? preview.unrepairable
+    : preview.unrepairable.map((finding) => namedConfigurationDrift(finding, {
+      repositoryRoot,
+      configuration: surface.configuration,
+    }));
   const observation = {
     health: preview.status,
     receiptId: preview.receiptId,
     actions: preview.actions,
     // Adapter loss is a reinstall, not a repair. The seam already separates the
     // two and this reports its answer rather than re-deciding it (`RISK-004`).
-    unrepairable: preview.unrepairable,
+    unrepairable,
     hookProgram: runtime.hookProgram,
     confirmationToken: preview.confirmationToken,
+    // What recovers everything repair will not touch, from the one remedy
+    // table status reads (`NFR-OPER-001`, `TB-065`).
+    next: nextRemedies(unrepairable, await cloneShortcut({ repositoryRoot, runGit: (args) => runGit(repositoryRoot, args) })),
   };
 
   if (confirmation === null) {
@@ -2259,7 +2143,13 @@ const committedConfiguration = async (repositoryRoot) => {
   };
 };
 
-/** Why a sync preview offers no token, and what to do instead. */
+/**
+ * Why a sync preview offers no token, and what to do instead.
+ *
+ * A refusal the clone recovers from names its `remedy` from the one remedy
+ * table, never a sentence of its own (`TB-065`). The rest are not recoveries:
+ * there is nothing to do, a flag to add, or a registration to go and look at.
+ */
 const SYNC_REFUSALS = Object.freeze({
   'nothing-to-sync': Object.freeze({
     detail: 'the configuration and the commands it resolves to are exactly what the receipt pins',
@@ -2271,19 +2161,19 @@ const SYNC_REFUSALS = Object.freeze({
   }),
   'receipt-drifted': Object.freeze({
     detail: 'the Activation receipt no longer reproduces its own identity, and a sync never re-pins on top of a receipt that changed',
-    next: 'gate deactivate, then gate activate',
+    remedy: 'activation-transaction',
   }),
   'adapter-set-changed': Object.freeze({
     detail: 'the installed gate no longer declares the adapter set the receipt pins; a sync keeps that set and never changes it',
-    next: 'gate deactivate, then gate activate',
+    remedy: 'activation-transaction',
   }),
   'hook-registration-drifted': Object.freeze({
     detail: 'the gate-owned Git registration is not the one the receipt pins, and a sync keeps registrations rather than rewriting them',
-    next: 'gate repair',
+    remedy: 'repair',
   }),
   'hook-registration-not-reproducible': Object.freeze({
     detail: 'the registered hook program is not the one this installed gate would register, so keeping the registration would pin a program this sync did not preview',
-    next: 'gate deactivate, then gate activate',
+    remedy: 'activation-transaction',
   }),
   'adapter-registration-changed': Object.freeze({
     detail: 'a client registration the receipt pins is not the entry this sync would keep, and a sync never rewrites one',
@@ -2291,13 +2181,30 @@ const SYNC_REFUSALS = Object.freeze({
   }),
   'trusted-configuration-unrecoverable': Object.freeze({
     detail: `no document reproduces the configuration identity the receipt pins — not the receipt, not ${CONFIGURATION_FILE} at HEAD — so the transition cannot be judged against the trusted policy`,
-    next: 'gate deactivate, then gate activate',
+    remedy: 'activation-transaction',
   }),
   'candidate-policy-invalid': Object.freeze({
     detail: 'the candidate policy does not validate on its own terms',
-    next: `correct ${CONFIGURATION_FILE} so its evaluation_gate policy reads and validates`,
+    remedy: 'correct-configuration',
   }),
 });
+
+/** What to do instead of a refused sync, through the clone's own shortcut where it is a recovery. */
+const syncRefusalNext = async (reasonCode, repositoryRoot) => {
+  const entry = SYNC_REFUSALS[reasonCode] ?? null;
+
+  if (entry === null) {
+    return `nothing to confirm (${reasonCode})`;
+  }
+
+  if (entry.remedy === undefined) {
+    return entry.next;
+  }
+
+  const shortcut = await cloneShortcut({ repositoryRoot, runGit: (args) => runGit(repositoryRoot, args) });
+
+  return remedyInstruction(entry.remedy, shortcut ?? 'gate');
+};
 
 /** Everything one sync of THIS clone would be, resolved from the clone itself. */
 const syncRequestFor = async ({ repositoryRoot, receipt, selector }) => {
@@ -2404,6 +2311,7 @@ const operateSync = async ({ repositoryRoot, environment, selector, confirmation
   const refusal = preview.refusal === null ? null : {
     reasonCode: preview.refusal.reasonCode,
     detail: SYNC_REFUSALS[preview.refusal.reasonCode]?.detail ?? null,
+    next: await syncRefusalNext(preview.refusal.reasonCode, repositoryRoot),
     errors: preview.refusal.errors,
   };
   const observation = {
@@ -2726,7 +2634,7 @@ const renderRepair = (observation, document) => [
   line('unrepairable', observation.unrepairable.length),
   ...renderFindings(observation.unrepairable),
   observation.actions.length === 0
-    ? line('next', 'nothing to repair')
+    ? line('next', observation.next.instruction === 'nothing' ? 'nothing to repair' : observation.next.instruction)
     : renderConfirmation('repair', observation, document),
 ];
 
@@ -2816,7 +2724,7 @@ const renderSync = (observation, document) => {
       return renderConfirmation('sync', observation, document);
     }
 
-    return line('next', SYNC_REFUSALS[observation.refusal.reasonCode]?.next ?? `nothing to confirm (${observation.refusal.reasonCode})`);
+    return line('next', observation.refusal.next);
   };
 
   return [

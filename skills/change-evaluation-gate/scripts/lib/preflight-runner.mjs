@@ -34,6 +34,7 @@ import {
   releaseExecutionRoot,
   resolveConfiguration,
   resolveReceipt,
+  shortcutOf,
   sweepOrphanedExecutionRoots,
 } from './hook-runner.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
@@ -226,7 +227,8 @@ export const runPreflight = async ({
       );
     }
 
-    const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose });
+    const shortcut = shortcutOf(request.repository.root);
+    const runners = await pinnedRunners(checks, { receipt: activation.receipt, compose, shortcut });
 
     if (!runners.ok) {
       throw new Error(runners.detail);
@@ -277,6 +279,8 @@ export const runPreflight = async ({
       // `unverified` and `not-authoritative`: it warns a maintainer, and it
       // blocks nothing (`SG-SUPPORT-001`).
       controlSurface: await observeControlSurface({ activation, configuration, resolved: runners.resolved }),
+      // How the drift diagnostic names the Gate on this clone (`TB-065`).
+      remedyShortcut: shortcut,
     };
 
     // Is there a subject at all? This runner is registered on the end of every

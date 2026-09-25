@@ -46,6 +46,7 @@ import {
   requiresServedSourceBinding,
   unboundRuntime,
 } from './runtime-binding.mjs';
+import { nextRemedies } from './remedies.mjs';
 import { reconcileControlSurface } from './security-control.mjs';
 import {
   DEFAULT_DEPENDENCY_PROVISIONING,
@@ -85,6 +86,39 @@ const summarize = (checkId, outcome, reasonCode, detail = null) => [
 ].join(' — ');
 
 export { authorizationFor, decisionOutcome };
+
+/**
+ * The `integrity-drift` diagnostic for a drifted Gate control surface, or none.
+ *
+ * The drifted surfaces are named, and so is what recovers each of them, looked
+ * up per surface in the one remedy table rather than written here: a
+ * registration drift is `gate repair`'s, and a configuration, descriptor,
+ * receipt, provider, runtime, or adapter drift is a new Activation
+ * transaction's (`FR-LIFE-019`, `NFR-OPER-001`, `TB-065`). The clone's own
+ * shortcut, when a runner supplies `remedyShortcut`, is asked only once drift
+ * is found. Nothing is repaired here, and the outcome is unchanged.
+ */
+const driftDiagnostics = async (dependencies) => {
+  if (!dependencies.controlSurface) {
+    return [];
+  }
+
+  const reconciled = reconcileControlSurface({
+    receipt: dependencies.controlSurface.receipt ?? null,
+    observed: dependencies.controlSurface.observed ?? null,
+  });
+
+  if (!reconciled.drifted) {
+    return [];
+  }
+
+  const shortcut = await dependencies.remedyShortcut?.() ?? null;
+
+  return [{
+    reasonCode: reconciled.reasonCode,
+    detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Next: ${nextRemedies(reconciled.findings, shortcut).instruction}.`,
+  }];
+};
 
 /**
  * Resolve the Evaluation scope for one request. A decision that never reached a
@@ -524,21 +558,7 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
   // hooks, receipt, trusted configuration, descriptors, or providers is not in
   // a position to authorize anything, whatever the checks report
   // (AC-SEC-001, NFR-SEC-004). It is reported, never repaired here.
-  if (dependencies.controlSurface) {
-    const reconciled = reconcileControlSurface({
-      receipt: dependencies.controlSurface.receipt ?? null,
-      observed: dependencies.controlSurface.observed ?? null,
-    });
-
-    if (reconciled.drifted) {
-      diagnostics.push({
-        reasonCode: reconciled.reasonCode,
-        // The drifted surfaces are named, and so is the one confirmed operator
-        // action that resolves them. Nothing is repaired here (FR-LIFE-019).
-        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Run \`gate repair\` to re-resolve and re-pin what this clone was activated with.`,
-      });
-    }
-  }
+  diagnostics.push(...await driftDiagnostics(dependencies));
 
   const acceptanceIds = new Set(scope.acceptanceIds);
   const changedPaths = dependencies.changedPaths ?? capture.changedPaths;
@@ -836,19 +856,7 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     });
   }
 
-  if (dependencies.controlSurface) {
-    const reconciled = reconcileControlSurface({
-      receipt: dependencies.controlSurface.receipt ?? null,
-      observed: dependencies.controlSurface.observed ?? null,
-    });
-
-    if (reconciled.drifted) {
-      diagnostics.push({
-        reasonCode: reconciled.reasonCode,
-        detail: `The Gate control surface drifted independently of this change (${reconciled.findings.map((finding) => finding.surface).join(', ')}); nothing here is proved. Run \`gate repair\` to re-resolve and re-pin what this clone was activated with.`,
-      });
-    }
-  }
+  diagnostics.push(...await driftDiagnostics(dependencies));
 
   const scope = await scopeOf(request, null);
   const acceptanceIds = new Set(scope.acceptanceIds);

@@ -174,7 +174,13 @@ What it observes, and what it cannot:
 - An authoritative evaluation carries the `integrity-drift` diagnostic, which
   normalizes the decision to `unverified` and the authorization to `deny`
   (`evaluate.mjs`, `controlSurface` dependency). The check results themselves
-  are never rewritten.
+  are never rewritten. The diagnostic names the drifted surfaces and then what
+  recovers each of them, rendered from the same remedy table status reads
+  (`remedies.mjs`): `gate repair` only for `managed-hooks`, `gate sync` for
+  `trusted-configuration` and `command-descriptors`, and the deactivate/activate
+  pair for the rest, through the clone's own `git gate` shortcut where
+  activation recorded it (`TB-065`). The outcome, reason code, and
+  authorization are unchanged.
 - Nothing is repaired. Reconciliation opens no file for writing, appends no
   event, and returns `repaired: false` with no mutations. Recovery stays a
   confirmed operator action (`FR-LIFE-019`, `SG-LIFE-001`).

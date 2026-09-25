@@ -206,12 +206,13 @@ performed), and `informational` (codes that need nothing). A clone with nothing
 to act on prints `next: nothing`, and its rendering is otherwise unchanged. The
 document also gains `observation.controlSurface` — the `observed` surface and
 the `drifted` surface names, or `null` on a clone with no receipt. No existing
-field changed. `STATUS_REMEDIES` (`operator-surface.mjs`) is the one table:
+field changed. `REMEDIES` (`remedies.mjs`) is the one table, and every place
+the Gate tells a maintainer what to run renders through it (`TB-065`, below):
 
 | Finding | Remedy |
 | --- | --- |
 | `hook-absent`, `hook-block-tampered`, `hook-receipt-mismatch`, `control-surface-drift` on `managed-hooks` | `gate repair` |
-| `control-surface-drift` on `trusted-configuration`, `command-descriptors` | `gate sync` (`TB-062`) — both are pinned from `.agent-framework.yaml`, and a sync re-pins both under the adapter set the receipt already pins |
+| `control-surface-drift` on `trusted-configuration`, `command-descriptors`; the runner-pin denials `runner-unpinned` and `runner-pin-drift` | `gate sync` (`TB-062`) — all are pinned from `.agent-framework.yaml`, and a sync re-resolves and re-pins them under the adapter set the receipt already pins |
 | `control-surface-drift` on `receipt`, `runtime`, `adapters`, `providers`; `adapter-lost`, `authoritative-adapter-lost`, `adapter-registration-absent`, `adapter-registration-unverified` | a new Activation transaction: `gate deactivate`, then `gate activate`, each previewed and confirmed |
 | `adapter-registration-drifted`, `adapter-registration-ambiguous` | reconcile the client's changed entry by hand — deactivation refuses a drifted entry and the Gate never overwrites a client's own file — then run `gate status` again |
 | `activation-absent` | `gate activate` |
@@ -223,6 +224,37 @@ A finding with no entry fails the unit suite, which enumerates every code
 in place, so the pair runs through it end to end. Where a clone needs both a
 sync and a new Activation transaction, `next:` names only the pair: it re-pins
 the configuration as well, and a sync refuses a clone whose adapter set moved.
+
+**Every surface names the command that recovers** (`TB-065`, `FR-LIFE-019`,
+`NFR-OPER-001`). The table is a leaf module that imports nothing which
+evaluates, activates, or observes, so both runners, `evaluate`, and the
+operator surface read it without the operator surface importing a runner. It is
+rendered, per drifted surface or reason code, by:
+
+- the `integrity-drift` diagnostic `evaluate` composes on both runners — so the
+  commit denial and the preflight channel (`TB-064`) carry it verbatim — which
+  names the drifted surfaces and then `Next: <remedy>.`;
+- the `runner-unpinned` and `runner-pin-drift` denials `pinnedRunners` raises,
+  in the same form;
+- `gate status`'s `next:` line;
+- `gate repair`'s `next:` line when it has nothing to restore: repair now
+  reconciles the same control-surface observation status does, reports drift it
+  cannot restore among `unrepairable`, and names that drift's remedy instead of
+  `nothing to repair`. What it restores is unchanged — exactly `hook-absent`,
+  `hook-block-tampered`, and `hook-receipt-mismatch` (`AC-LIFE-010`). The
+  `managed-hooks` drift of the very block those actions restore is not listed
+  beside them as unrepairable;
+- the `next:` line of every `gate sync` refusal that a recovery answers.
+
+Each remedy names the clone's own shortcut (`git gate`) exactly where status
+would, asked once and only when something needs naming, so an undrifted commit
+pays nothing for it. Each recovery that writes says what survives it: `gate
+repair`, `gate sync`, and the deactivate/activate pair each keep
+`.agent-framework.yaml` and all historical Evidence. The unit suite fails on a
+control surface or runner-pin reason code with no entry, and on any Gate
+library module other than the table naming a recovery command in its code.
+Outcomes, reason codes, and authorization are unchanged: only the sentence
+after them is (`AC-SEC-001`).
 
 **Observation creates nothing** (`TB-041`). `openCoordinationLock` used to ensure
 its own directory existed before it read anything, so the first `gate locks` on a
@@ -454,7 +486,10 @@ asks for. A candidate that is not weaker needs nothing extra. Nothing skips the
 check; the flag only acknowledges its result.
 
 **Refusals** (no token; a confirmation anyway appends an `activation` event with
-outcome `refused` and writes nothing):
+outcome `refused` and writes nothing). A refusal a recovery answers renders that
+recovery from the remedy table (`TB-065`) — through the clone's shortcut, with
+what it keeps — so the `next:` lines below show its command only; the
+document carries the rendered line as `observation.refusal.next`:
 
 | Reason | `next:` |
 | --- | --- |
@@ -480,7 +515,9 @@ every surface here, it resists nobody (`SG-TRUST-001`).
 ## Recovery
 
 Drift changes only through a confirmed `gate repair` or a new Activation
-transaction — `gate sync` for a changed configuration. `gate status` does not repair it; an ordinary update does not
+transaction — `gate sync` for a changed configuration, its descriptors, or a
+runner pin — and every surface that reports drift names which, from one table
+(`TB-065`). `gate status` does not repair it; an ordinary update does not
 repair it; a distribution bump does not repair it. `previewRepair` reconciles
 through `statusGate` (so it, too, writes nothing) and states exactly which
 registrations it would restore; `confirmRepair` runs only when the operator
@@ -527,7 +564,13 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   registration file are byte-identical across a sync; a failed self-test and a
   failure after the receipt switch both leave the prior receipt and
   registrations intact; and a changed adapter set, a drifted receipt, and an
-  unrecoverable trusted policy are each refused and name what to do.
+  unrecoverable trusted policy are each refused and name what to do. `TB-065`
+  adds a clone whose descriptor is corrected after activation: its commit is
+  denied naming `git gate sync`, `gate repair` restores nothing and names the
+  same sync, and following that command exactly lets the next commit through;
+  a foreign `gate` alias is never named; every control surface and runner-pin
+  reason code has a remedy entry; no module but the table names a recovery
+  inline; and repair's scope is unchanged beside configuration drift.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle
