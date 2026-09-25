@@ -30,6 +30,15 @@ Git is last on purpose: until step 9 completes, nothing the transaction has done
 can stop a commit, so an abandoned or failed activation cannot leave a
 repository that refuses to work.
 
+Steps 1, 2, 4, and 6 are decided by observing the clone and the machine, and
+`inspectActivation` asks exactly those (`OBSERVABLE_ACTIVATION_STEPS`) without
+activating: it resolves what the transaction resolves, builds the same preview,
+and applies the same refusals — one function per refusal, called by both — in
+the same order, reporting the first. It reads no consent and writes nothing.
+The other five steps are `STEPS_ANSWERED_BY_ACTIVATION`: only performing them
+answers them, so they are named and never simulated. `gate doctor` is its one
+caller (`TB-063`, [lifecycle command contract](lifecycle-command-contract.md)).
+
 ## The receipt
 
 `<git-common-dir>/change-evaluation-gate/evidence/activation/receipt.json`

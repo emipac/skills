@@ -60,14 +60,16 @@
  */
 
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
+  STEPS_ANSWERED_BY_ACTIVATION,
   activate,
   adapterIdentity,
+  inspectActivation,
   previewActivation,
   previewSync,
   readHookRegistration,
@@ -112,9 +114,10 @@ import {
   resolveConfiguration,
   resolveReceipt,
   resolveRepositoryRoot,
+  resolveSensitiveInputs,
 } from './hook-runner.mjs';
 import { evaluateActivatedTree } from './preflight-runner.mjs';
-import { captureSnapshot } from './snapshot.mjs';
+import { captureSnapshot, probeDependencyProvisioning } from './snapshot.mjs';
 import {
   SHARED_CONFIGURATION_FILE,
   confirmConfigurationCleanup,
@@ -154,13 +157,15 @@ export const EXIT_UNHEALTHY = 1;
 export const EXIT_UNRUNNABLE = 2;
 
 /**
- * Every command this surface performs. All of them but `status` and `check`
- * preview by default; those two observe, and have nothing to confirm.
+ * Every command this surface performs. All of them but `status`, `check`, and
+ * `doctor` preview by default; those three observe, and have nothing to
+ * confirm.
  */
 export const COMMANDS = Object.freeze([
   'activate',
   'status',
   'check',
+  'doctor',
   'locks',
   'prune',
   'repair',
@@ -184,7 +189,8 @@ export const COMMANDS = Object.freeze([
  * `status` is absent deliberately: reconciliation has nothing to confirm, and
  * it is the one command that must still record nothing at all. `check` is
  * absent for the same reason it has no preview/confirm pair: it evaluates and
- * reports, and mutates nothing under the clone (`TB-061`).
+ * reports, and mutates nothing under the clone (`TB-061`). `doctor` observes
+ * this machine and writes nothing under the clone at all (`TB-063`).
  */
 export const CONFIRMABLE_COMMANDS = Object.freeze({
   activate: '--confirm',
@@ -252,6 +258,8 @@ const SELECTORS = Object.freeze({
   // The index instead of the working tree. A flag, because the scope is one of
   // exactly two, and neither is inferred from the other (`TB-061`).
   check: Object.freeze({ '--staged': 'flag' }),
+  // Observation only: nothing to select and nothing to confirm (`TB-063`).
+  doctor: Object.freeze({}),
   locks: Object.freeze({ '--recover': 'confirmation' }),
   prune: Object.freeze({
     '--evaluation': 'repeatable',
@@ -397,6 +405,7 @@ export const USAGE = [
   '  gate activate   [--client <id>]          Preview activating this configured clone.',
   '  gate status     [--json]                 Report this clone\'s health.',
   '  gate check      [--staged] [--json]      Evaluate the working tree (or the index) as a hook would.',
+  '  gate doctor     [--json]                 Report whether this machine can run the configured Gate.',
   '  gate locks      [--json]                 Inspect the coordination lock.',
   '  gate prune      [selector] [--json]      Preview what a prune would remove.',
   '  gate repair     [--hook-script <path>]   Preview restoring drifted gate-owned registrations.',
@@ -407,8 +416,8 @@ export const USAGE = [
   '  gate bypass     --reason <text> ...      Preview granting one one-shot bypass of the staged snapshot.',
   '  gate sync       [--acknowledge-weakening] Preview re-pinning a changed configuration, keeping the adapters.',
   '',
-  'Every command above but status and check previews. To perform one, run it',
-  'again with the token the preview printed:',
+  'Every command above but status, check, and doctor previews. To perform one,',
+  'run it again with the token the preview printed:',
   '',
   '  gate locks --recover <token>             Recover one stale lock.',
   '  gate prune --confirm <token>             Remove exactly the previewed blobs.',
@@ -462,6 +471,17 @@ export const USAGE = [
   'pre-commit hook. A passing check records nothing; one that did not pass',
   'appends its decision to the Evidence store and says where. Its exit status is',
   '0 passed, 1 failed or unverified, 2 could not run.',
+  '',
+  'A doctor asks, before anything is activated, the questions activation asks of',
+  'this machine: which configured runners resolve and to what, whether each',
+  'declared dependency root would be cloned, byte-copied, or linked, whether the',
+  'declared Sensitive inputs are found (names and sources, never values), and',
+  'whether the existing hook chain would be accepted. It ends with one verdict:',
+  "whether activation would proceed past every step it can see, from activation's",
+  'own preview, and names the steps only activation can answer. It installs,',
+  'fixes, and writes nothing under the clone; its one footprint is a probe',
+  'directory under the temporary directory, removed before it returns. Its exit',
+  'status is 0 activation would proceed, 1 it would stop, 2 could not run.',
   '',
   'Exit status:',
   '  0  the command ran and found nothing wrong, or performed what was confirmed',
@@ -1555,6 +1575,230 @@ const operateCheck = async ({ repositoryRoot, environment, selector }) => {
   };
 };
 
+/** What a doctor is, stated on every rendering of one (`SG-TRUST-001`, `TB-063`). */
+const DOCTOR_LIMIT = 'this describes this machine, now, to its owner: it installs, fixes, and activates nothing, and a proceeding verdict is not an activation — the steps answered by activation are still open until one runs.';
+
+/** The directory a doctor probes in, under the one the execution roots are created in. */
+const DOCTOR_PROBE_PREFIX = 'gate-doctor-probe-';
+
+/**
+ * Ask what a capture would do with the declared dependency roots, in a probe
+ * directory under the temporary directory that is removed before this returns
+ * (`TB-055`, `TB-063`). The probe is the one thing a doctor writes.
+ */
+const probeProvisioning = async ({ repositoryRoot, policy, copyProgram }) => {
+  const probeRoot = await createExecutionRoot(DOCTOR_PROBE_PREFIX);
+
+  try {
+    const probed = await probeDependencyProvisioning({
+      repositoryRoot,
+      dependencyRoots: policy?.execution?.dependency_roots ?? [],
+      provisioning: policy?.execution?.dependency_provisioning,
+      probeRoot,
+      copyProgram,
+    });
+
+    return { ...probed, probeRoot };
+  } finally {
+    await releaseExecutionRoot(probeRoot).catch(() => {});
+  }
+};
+
+/**
+ * What stopped an inspected activation, naming the declaration it came from
+ * (`NFR-OPER-001`): the unresolved descriptors, the hook that refused, or the
+ * preview's own refusal.
+ */
+const doctorStopDetail = ({ step, errors = [] }) => {
+  if (step === 'runner-resolution') {
+    return `no platform executable was found for ${errors
+      .map((entry) => `${entry.check_id} (${entry.role}): ${entry.runner}`)
+      .join(', ')}.`;
+  }
+
+  if (step === 'hook-chain-validation') {
+    return `the existing hook chain is not one activation registers into: ${JSON.stringify(errors)}.`;
+  }
+
+  return errors.map((entry) => entry?.message ?? JSON.stringify(entry)).join(' ');
+};
+
+/** The clone's lifecycle state, in `gate status`'s words, read without opening a store. */
+const doctorState = async (repositoryRoot) => {
+  if ((await resolveReceipt(repositoryRoot)).ok) {
+    return 'activated';
+  }
+
+  const configuration = await resolveConfiguration(repositoryRoot);
+
+  return configuration.ok || configuration.reasonCode === 'gate-policy-invalid' ? 'configured' : 'installed';
+};
+
+/**
+ * `gate doctor` — tell a maintainer, before activating anything, whether this
+ * machine can run the Gate this clone configured (`TB-063`).
+ *
+ * Every question is asked of the seam that answers it for activation or for
+ * the runners, so doctor's answer cannot disagree with what they then do:
+ *
+ * - configuration: `activationRequestFor`, the request `gate activate` builds,
+ *   through `resolveConfiguration` (the reader and the policy validator every
+ *   command uses);
+ * - runners, hook chain, and verdict: `inspectActivation`, which resolves
+ *   exactly what the transaction resolves, builds its preview — which writes
+ *   nothing (`FR-LIFE-004`) — and applies its own refusals in its own order;
+ * - dependency roots: `probeDependencyProvisioning`, the classification, clone
+ *   probe, volume rule, and `link` provisioner a capture uses;
+ * - Sensitive inputs: `resolveSensitiveInputs`, the resolution `openStore`
+ *   performs, for the names an activation would pin; names, sources, and file
+ *   statuses only, never a value (`FR-CFG-006`).
+ *
+ * It opens no Evidence store, writes no receipt, registers nothing, and prints
+ * no confirmation token. Its one footprint is the probe directory, created
+ * under the temporary directory and removed. Nothing here names an operating
+ * system: each capability is attempted (`NFR-PORT-002`).
+ */
+const operateDoctor = async ({ repositoryRoot, environment, copyProgram }) => {
+  const state = await doctorState(repositoryRoot);
+  const requested = await activationRequestFor({ repositoryRoot, selector: { client: null } });
+  const configurationFailure = requested.failed?.failure ?? null;
+  const policy = configurationFailure === null ? requested.request.configuration.policy : null;
+  const provisioning = await probeProvisioning({ repositoryRoot, policy, copyProgram });
+  const probeRemoved = await stat(provisioning.probeRoot).then(() => false, () => true);
+  const dependencies = {
+    declared: policy !== null,
+    probe: { directory: provisioning.probeRoot, removed: probeRemoved },
+    copyProgram: provisioning.copyProgram,
+    clone: provisioning.clone === null
+      ? null
+      : { program: provisioning.clone.program, request: [...provisioning.clone.request] },
+    directoryLink: provisioning.directoryLink,
+    repositorySharesVolume: provisioning.repositorySharesVolume,
+    roots: provisioning.roots,
+  };
+  const answeredByActivation = STEPS_ANSWERED_BY_ACTIVATION.map(({ step, question }) => ({ step, question }));
+
+  if (configurationFailure !== null) {
+    return {
+      command: 'doctor',
+      healthy: false,
+      observation: {
+        state,
+        configuration: {
+          resolved: false,
+          path: path.join(repositoryRoot, CONFIGURATION_FILE),
+          reasonCode: configurationFailure.reasonCode,
+          detail: configurationFailure.detail,
+        },
+        identities: null,
+        runners: null,
+        dependencies,
+        runtimeInputs: null,
+        hooks: null,
+        verdict: {
+          proceeds: false,
+          preview: 'not-reached',
+          reached: [],
+          stop: { step: null, reasonCode: configurationFailure.reasonCode, detail: configurationFailure.detail },
+        },
+        answeredByActivation,
+        limit: DOCTOR_LIMIT,
+      },
+      mutation: null,
+    };
+  }
+
+  const { request } = requested;
+  const inspected = await inspectActivation(request, { runGit, environment });
+  const { described, preview } = inspected;
+  // The descriptor an unresolved runner came from, as the configuration declares it.
+  const argumentsOf = (checkId, role) => [
+    ...((request.checks.find((entry) => entry.id === checkId) ?? {})[role]?.args ?? []),
+  ];
+  const sensitive = await resolveSensitiveInputs({
+    approved: request.runtimeInputs.map((input) => input.name),
+    environment,
+    policy,
+    repositoryRoot,
+  });
+  const hook = described?.hook ?? null;
+
+  return {
+    command: 'doctor',
+    healthy: inspected.stop === null,
+    observation: {
+      state,
+      configuration: {
+        resolved: true,
+        path: path.join(repositoryRoot, CONFIGURATION_FILE),
+        schemaVersion: request.configuration.schemaVersion,
+        checks: request.checks.map((entry) => entry.id),
+        reasonCode: null,
+        detail: null,
+      },
+      // The identities the receipt would pin; never the preview identity, which
+      // is the token that confirms an activation, and doctor confirms nothing.
+      identities: described === null ? null : {
+        repository: described.repository.identity,
+        configuration: described.configuration.identity,
+      },
+      runners: described === null ? null : {
+        resolved: described.runners.resolved.map((entry) => ({
+          checkId: entry.check_id,
+          role: entry.role,
+          runner: entry.runner,
+          executable: entry.executable,
+          interpreter: entry.interpreter ?? null,
+          version: entry.version ?? null,
+          preview: entry.preview ?? null,
+        })),
+        unresolved: described.runners.unresolved.map((entry) => ({
+          checkId: entry.check_id,
+          role: entry.role,
+          runner: entry.runner,
+          args: argumentsOf(entry.check_id, entry.role),
+          reason: entry.reason,
+        })),
+      },
+      dependencies,
+      runtimeInputs: {
+        resolved: sensitive.redaction.armed,
+        unresolved: sensitive.redaction.unresolved,
+        environmentFiles: sensitive.redaction.environmentFiles,
+      },
+      hooks: hook === null ? null : {
+        hook: described.hooks[0].hook,
+        path: hook.path,
+        action: hook.action,
+        ownership: hook.ownership,
+        strategy: hook.strategy,
+        hooksPath: {
+          configured: described.hooksPath.configured,
+          value: described.hooksPath.value,
+          shared: described.hooksPath.shared,
+          directory: described.hooksPath.directory,
+        },
+        manager: described.hookManager?.id ?? null,
+        valid: hook.reasonCode === null,
+        reasonCode: hook.reasonCode,
+      },
+      verdict: {
+        proceeds: inspected.stop === null,
+        preview: preview === null ? 'not-reached' : 'reached',
+        reached: inspected.reached,
+        stop: inspected.stop === null ? null : {
+          step: inspected.stop.step,
+          reasonCode: inspected.stop.reasonCode,
+          detail: doctorStopDetail(inspected.stop),
+        },
+      },
+      answeredByActivation,
+      limit: DOCTOR_LIMIT,
+    },
+    mutation: null,
+  };
+};
+
 /** `gate locks` — inspect the coordination lock, and recover one stale lock on confirmation. */
 const operateLocks = async ({ repositoryRoot, environment, confirmation }) => {
   const inspection = await inspectCoordination({ repositoryRoot });
@@ -2592,6 +2836,7 @@ const OPERATIONS = Object.freeze({
   activate: operateActivate,
   status: operateStatus,
   check: operateCheck,
+  doctor: operateDoctor,
   locks: operateLocks,
   prune: operatePrune,
   repair: operateRepair,
@@ -2822,6 +3067,125 @@ const renderCheck = (observation) => [
   line('limit', observation.limit),
 ];
 
+/** Why a section was not asked: the configuration it reads did not resolve. */
+const NOT_ASKED = 'not asked — the configuration did not resolve';
+
+const renderDoctorRunners = (runners) => {
+  if (runners === null) {
+    return [line('runners', NOT_ASKED)];
+  }
+
+  return [
+    line('runners', `${runners.resolved.length} resolved, ${runners.unresolved.length} unresolved`),
+    ...runners.resolved.map((entry) => `  - ${entry.checkId} (${entry.role}): ${entry.runner} -> ${entry.executable}${
+      entry.interpreter === null ? '' : ` (interpreter ${entry.interpreter})`}${
+      entry.version === null ? '' : ` ${entry.version}`}`),
+    ...runners.unresolved.map((entry) => `  - ${entry.checkId} (${entry.role}): ${[entry.runner, ...entry.args].join(' ')} — unresolved (${entry.reason})`),
+  ];
+};
+
+/** What a `copy` would be performed by here, and whether a `link` could be created, as probed (`TB-055`). */
+const renderDoctorDependencies = (dependencies) => {
+  const cloneLine = () => {
+    if (dependencies.copyProgram === null) {
+      return 'none found in the platform\'s own directories; a copy is a byte copy';
+    }
+
+    return dependencies.clone === null
+      ? `${dependencies.copyProgram}, does not clone into the temporary directory; a copy is a byte copy`
+      : `${dependencies.clone.program}, clones into the temporary directory (${dependencies.clone.request.join(' ')})`;
+  };
+  const rootLine = (entry) => {
+    if (entry.status !== 'available') {
+      return `  - ${entry.root} (${entry.strategy}): ${entry.status}`;
+    }
+
+    const volume = entry.sharesVolume === null
+      ? 'volume unknown'
+      : `${entry.sharesVolume ? 'same' : 'another'} volume as the temporary directory`;
+
+    return `  - ${entry.root} (${entry.strategy}): available, ${entry.mechanism ?? 'cannot be linked here'}, ${volume}`;
+  };
+
+  return [
+    line('dependency roots', dependencies.roots.length === 0 ? 'none declared' : dependencies.roots.length),
+    `  probe: ${dependencies.probe.directory} (${dependencies.probe.removed ? 'removed' : 'NOT removed'})`,
+    `  copy program: ${cloneLine()}`,
+    `  directory link: ${dependencies.directoryLink.created
+      ? 'can be created in the temporary directory'
+      : `cannot be created in the temporary directory (${dependencies.directoryLink.code})`}`,
+    `  repository: ${dependencies.repositorySharesVolume === null
+      ? 'volume unknown'
+      : `${dependencies.repositorySharesVolume ? 'same' : 'another'} volume as the temporary directory`}`,
+    ...dependencies.roots.map(rootLine),
+  ];
+};
+
+const renderDoctorRuntimeInputs = (runtimeInputs) => {
+  if (runtimeInputs === null) {
+    return [line('sensitive inputs', NOT_ASKED)];
+  }
+
+  const inputs = [
+    ...runtimeInputs.resolved.map((input) => `${input.name} (${input.source}) resolved`),
+    ...runtimeInputs.unresolved.map((input) => `${input.name} (${input.source}) unresolved`),
+  ];
+
+  return [
+    line('sensitive inputs', inputs.length === 0 ? 'none declared' : inputs.join(', ')),
+    ...(runtimeInputs.environmentFiles.length === 0
+      ? []
+      : [line('environment files', runtimeInputs.environmentFiles.map((file) => `${file.path} (${file.status})`).join(', '))]),
+  ];
+};
+
+const renderDoctorHooks = (hooks) => {
+  if (hooks === null) {
+    return [line('hooks', NOT_ASKED)];
+  }
+
+  return [
+    line('hooks', `${hooks.hook} ${hooks.path} (${hooks.action}, ${hooks.ownership}): ${hooks.valid
+      ? 'valid'
+      : `refused at hook-chain-validation (${hooks.reasonCode})`}`),
+    `  hooks path: ${hooks.hooksPath.directory} (${hooks.hooksPath.configured
+      ? `core.hooksPath ${hooks.hooksPath.value}${hooks.hooksPath.shared ? ', shared' : ''}`
+      : 'default'})`,
+    `  hook manager: ${hooks.manager ?? 'none'}`,
+  ];
+};
+
+const renderVerdict = (verdict) => {
+  if (verdict.proceeds) {
+    return `activation would proceed past every step doctor can see (${verdict.reached.join(', ')})`;
+  }
+
+  if (verdict.stop.step === null) {
+    return `activation would not start (${verdict.stop.reasonCode}): ${verdict.stop.detail}`;
+  }
+
+  return `activation would stop at ${verdict.stop.step} (${verdict.stop.reasonCode}): ${verdict.stop.detail}`;
+};
+
+const renderDoctor = (observation) => [
+  line('state', observation.state),
+  line('configuration', observation.configuration.resolved
+    ? `${observation.configuration.path} (schema ${observation.configuration.schemaVersion}, ${observation.configuration.checks.length} configured check${observation.configuration.checks.length === 1 ? '' : 's'})`
+    : `${observation.configuration.path}: ${observation.configuration.reasonCode} — ${observation.configuration.detail}`),
+  ...(observation.identities === null
+    ? []
+    : [line('identities', `repository ${observation.identities.repository}, configuration ${observation.identities.configuration} (what a receipt would pin)`)]),
+  ...renderDoctorRunners(observation.runners),
+  ...renderDoctorDependencies(observation.dependencies),
+  ...renderDoctorRuntimeInputs(observation.runtimeInputs),
+  ...renderDoctorHooks(observation.hooks),
+  line('verdict', renderVerdict(observation.verdict)),
+  line('answered by activation', observation.answeredByActivation.length),
+  ...observation.answeredByActivation.map((entry) => `  - ${entry.step}: ${entry.question}`),
+  line('footprint', `nothing under the clone or its Evidence store was written; one probe directory under the temporary directory was created and ${observation.dependencies.probe.removed ? 'removed' : 'NOT removed'}`),
+  line('limit', observation.limit),
+];
+
 const renderLocks = (observation, document) => [
   line('lock', observation.lockPath),
   line('held', observation.held),
@@ -3006,6 +3370,7 @@ const RENDERERS = Object.freeze({
   activate: renderActivate,
   status: renderStatus,
   check: renderCheck,
+  doctor: renderDoctor,
   locks: renderLocks,
   prune: renderPrune,
   repair: renderRepair,
@@ -3047,7 +3412,9 @@ export const renderDocument = (document) => [
   // A check is not a preview of a write: it may append a decision that did
   // not pass, and its own `evidence:` and `limit:` lines say what it did and
   // what it is, so the preview sentence would be false there (`TB-061`).
-  ...(document.command === 'check'
+  // Nor is a doctor: it writes nothing under the clone, and its own
+  // `footprint:` line states the one probe it made (`TB-063`).
+  ...(['check', 'doctor'].includes(document.command)
     ? []
     : (document.mutation === null
       ? ['preview: nothing was written, nothing was repaired, and nothing was removed.']
@@ -3062,11 +3429,19 @@ export const renderDocument = (document) => [
  *
  * The entry point does the writing; everything decided here is returned, so the
  * whole surface is provable in-process against a real activated clone.
+ *
+ * `copyProgram` is the copy program `gate doctor`'s clone probe asks, exactly
+ * as `captureSnapshot` takes it: left undefined — which is all the packaged
+ * command ever does — it is the platform's own; `null` says there is none, so
+ * the probe measures nothing. It is a parameter only so a test that is not
+ * about clone capability does not write a probe file other suites' free-space
+ * measurements would see (`TB-063`). No argument vector reaches it.
  */
 export const runOperatorCommand = async ({
   cwd = process.cwd(),
   argv = [],
   environment = process.env,
+  copyProgram = undefined,
 } = {}) => {
   const parsed = parseArguments(argv);
 
@@ -3119,6 +3494,7 @@ export const runOperatorCommand = async ({
     environment,
     selector: parsed.selector,
     confirmation: parsed.confirmation,
+    copyProgram,
   });
 
   return answer(documentOf({

@@ -279,6 +279,15 @@ const shareVolume = async (source, destination) => {
 };
 
 /**
+ * Whether `copy` asks the probed program for a clone of `source` at
+ * `destination`, rather than byte-copying it: only when the probe found a
+ * program that clones and the two paths share a volume. The one rule, asked by
+ * the provisioner and by `probeDependencyProvisioning` alike (`TB-063`).
+ */
+const clonesInto = async (clone, source, destination) => clone !== null
+  && shareVolume(source, destination);
+
+/**
  * `TB-054`'s byte copy: proved, and the mechanism every `copy` falls back to.
  *
  * `COPYFILE_FICLONE` is kept because it is free and reflinks where the runtime
@@ -337,7 +346,7 @@ const PROVISIONERS = Object.freeze({
     return null;
   },
   copy: async (source, destination, { clone = null } = {}) => {
-    if (clone !== null && await shareVolume(source, destination)) {
+    if (await clonesInto(clone, source, destination)) {
       try {
         await runFile(clone.program, [...clone.request, '--', source, destination]);
 
@@ -719,6 +728,110 @@ const provideDependencyRoots = async ({
     // wrote, whichever way a root turned out to be unavailable.
     missing: dependencyRoots.filter((declared) => missing.has(declared)),
     refused: classified.refused,
+  };
+};
+
+/**
+ * What this machine can do for the dependency roots a project declares, asked
+ * before anything is activated or captured (`TB-063`).
+ *
+ * Every answer comes from the seam a capture uses, run against `probeRoot` — a
+ * directory the caller created under the temporary directory, where execution
+ * roots are created — and never against the repository:
+ *
+ * - which declared roots are available, missing, or refused:
+ *   `unavailableDependencyRoots`, exactly as a capture classifies them;
+ * - whether the platform copy program clones here: `probeCloneCapability`,
+ *   the probe a capture runs on its first copied root, found through the same
+ *   `locatePlatformUtility`;
+ * - whether a root and the temporary directory share a volume, and so whether
+ *   `copy` would ask for a clone or byte-copy: `clonesInto`, the rule the
+ *   `copy` provisioner applies;
+ * - whether a directory link can be created there: the `link` provisioner
+ *   itself, linking one probe directory to another.
+ *
+ * It asks whether something CAN be done, never what the platform is called
+ * (`NFR-PORT-002`). It writes only under `probeRoot`, and removes what it
+ * wrote there; the caller removes `probeRoot`. A copy that would fail part way
+ * through a real tree is not something a probe can see; the capture states
+ * that one when it happens.
+ *
+ * @param {object} input the repository, its declared roots and provisioning, and where to probe
+ * @returns {Promise<{
+ *   copyProgram: string|null,
+ *   clone: {program: string, request: readonly string[]}|null,
+ *   directoryLink: {created: boolean, code: string|null},
+ *   repositorySharesVolume: boolean|null,
+ *   roots: Array<{root: string, strategy: string, status: string, sharesVolume: boolean|null, mechanism: string|null}>,
+ * }>}
+ */
+export const probeDependencyProvisioning = async ({
+  repositoryRoot,
+  dependencyRoots = [],
+  provisioning,
+  probeRoot,
+  copyProgram,
+}) => {
+  const program = copyProgram === undefined ? locatePlatformUtility(COPY_PROGRAM) : copyProgram;
+  const clone = await probeCloneCapability({ program, executionRoot: probeRoot });
+  // Where a provided root would be created: directly under the probe root, so
+  // the volume compared is the probe root's own.
+  const destination = path.join(probeRoot, 'provided');
+  const linkTarget = path.join(probeRoot, 'link-target');
+  let directoryLink;
+
+  try {
+    await mkdir(linkTarget, { recursive: true });
+    await PROVISIONERS.link(linkTarget, destination);
+    directoryLink = { created: true, code: null };
+  } catch (error) {
+    directoryLink = { created: false, code: error?.code ?? 'link-failed' };
+  } finally {
+    // The link, never what it points at.
+    await rm(destination, { force: true }).catch(() => {});
+    await rm(linkTarget, { recursive: true, force: true }).catch(() => {});
+  }
+
+  const repositorySharesVolume = await shareVolume(repositoryRoot, destination).catch(() => null);
+  const classified = await unavailableDependencyRoots({ repositoryRoot, dependencyRoots });
+  const roots = [];
+
+  for (const declared of dependencyRoots) {
+    const strategy = strategyForRoot(provisioning, declared);
+
+    if (!classified.available.includes(declared)) {
+      roots.push({
+        root: declared,
+        strategy,
+        status: classified.refused.includes(declared) ? 'refused' : 'missing',
+        sharesVolume: null,
+        mechanism: null,
+      });
+
+      continue;
+    }
+
+    const source = path.resolve(repositoryRoot, declared);
+    // eslint-disable-next-line no-await-in-loop
+    const sharesVolume = await shareVolume(source, destination).catch(() => null);
+    let mechanism;
+
+    if (strategy === 'copy') {
+      // eslint-disable-next-line no-await-in-loop
+      mechanism = await clonesInto(clone, source, destination).catch(() => false) ? 'clone' : 'byte-copy';
+    } else {
+      mechanism = directoryLink.created ? 'link' : null;
+    }
+
+    roots.push({ root: declared, strategy, status: 'available', sharesVolume, mechanism });
+  }
+
+  return {
+    copyProgram: program ?? null,
+    clone,
+    directoryLink,
+    repositorySharesVolume,
+    roots,
   };
 };
 

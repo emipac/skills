@@ -37,6 +37,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
 | `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
 | `gate check` | `evaluateActivatedTree(...)` (`preflight-runner.mjs`), the one evaluation the preflight calls | nothing under the clone; one Evidence append when the decision did not pass |
+| `gate doctor` | `inspectActivation(...)` (`activation.mjs`), `probeDependencyProvisioning(...)` (`snapshot.mjs`), `resolveSensitiveInputs(...)` (`hook-runner.mjs`) | nothing under the clone; one probe directory under the temporary directory, removed |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
 | `gate deactivate` | `deactivateGate(...)` | withdraws registrations and the receipt |
 | `gate uninstall` | `uninstallGate(...)` | unchanged project assets only |
@@ -70,6 +71,7 @@ Every lifecycle operation is reached here:
 ```
 gate status     [--json]
 gate check      [--staged] [--json]
+gate doctor     [--json]
 gate locks      [--recover <token>] [--json]
 gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
 gate repair     [--hook-script <path>] [--confirm <token>] [--json]
@@ -87,8 +89,9 @@ preview printed. There is no flag that does both: `--confirm` with no token, and
 `--preview` given alongside a confirmation, are both refused as
 `preview-and-confirm-refused` and say why. That does not stop a caller running
 both commands back to back, and it is not meant to — it means no single command
-destroys anything. `status` and `check` have no confirmed form at all: neither
-mutates anything under the clone, so neither has anything to confirm.
+destroys anything. `status`, `check`, and `doctor` have no confirmed form at
+all: none of them mutates anything under the clone, so none has anything to
+confirm.
 
 **The preview is re-derived, never carried.** Every invocation rebuilds the
 preview from the filesystem as it is right now, and the operator's token is
@@ -598,6 +601,69 @@ for the tree as it is now; a tree that changes before the commit is graded
 again by the hook, and a passing check is never evidence that a commit will
 pass.
 
+## `gate doctor` (`TB-063`)
+
+A maintainer — or a colleague who just cloned the repository on another
+machine — asks, before activating anything, whether this machine can run the
+Gate the clone configured. Until this, every one of those questions was asked
+only inside an operation that also did something: runner resolution inside
+activation, the clone probe inside a capture's first copied root, Sensitive
+input resolution inside `openStore`, hook-chain validation inside activation.
+The first sign a machine differed was a paused activation or a denied commit.
+
+**One implementation per question.** `doctor` asks each question of the seam
+that answers it for activation or the runners, so its answer cannot disagree
+with theirs:
+
+| Section | Seam | What is reported |
+| --- | --- | --- |
+| configuration | `activationRequestFor` (this surface), through `resolveConfiguration` — `readRepositoryConfiguration` and `validateGatePolicy` | resolved, or the reason code and detail `gate activate` refuses with |
+| runners | `inspectActivation` → `resolveExecutables` with `createRunnerResolver` | each resolved runner with the executable and interpreter activation would pin; each unresolved one with its check, role, runner, and declared arguments |
+| dependency roots | `probeDependencyProvisioning` → `unavailableDependencyRoots`, `probeCloneCapability`, `clonesInto`, the `link` provisioner | the copy program and whether it clones into the temporary directory; whether a directory link can be created there; whether the repository and each root share its volume; each declared root's strategy, availability, and the mechanism a capture would use |
+| sensitive inputs | `resolveSensitiveInputs`, the resolution `openStore` performs, for the names an activation would pin | each name `resolved` or `unresolved` with its source, and each declared environment file's status — never a value |
+| hooks | `inspectActivation` → the hook-chain validation activation performs | the hook path, the strategy's action and ownership, the hooks path and hook manager, and `valid` or the refusal code |
+
+**The verdict is activation's own.** `inspectActivation` builds the same
+preview `gate activate` builds, from the same request, and applies the refusals
+of steps 1, 4, and 6 — the functions the transaction calls — in the
+transaction's order. The last line is either that activation would proceed past
+every step doctor can see (`repository-identity`, `preview`,
+`runner-resolution`, `hook-chain-validation`) or the first step and reason code
+that stops it, which a confirmed `gate activate` then stops at with the same
+reason. A configuration that does not resolve stops activation before its first
+step, and the verdict says so. The identities reported are the repository and
+configuration identities the receipt would pin. The preview's own identity is
+not reported: it is the token that confirms an activation, and doctor confirms
+nothing.
+
+**What it cannot see, it names.** `consent`, `trust`, `self-test`, `receipt`,
+and `git-enablement` are listed as answered by activation, each with its
+question (`STEPS_ANSWERED_BY_ACTIVATION`). The hook-program self-test executes a
+registered program, and desktop client registration happens at activation; both
+are named, never simulated. A green doctor is not an activation.
+
+**Facts, not platforms** (`NFR-PORT-002`). No line says which operating system
+this is. A clone is attempted by the copy program and measured, a directory link
+is attempted, and a volume is compared by device number, all in the probe
+directory. The clone probe measures free space, so concurrent disk activity can
+make it under-report cloning: doctor may say `byte-copy` where a later capture
+clones. The fallback is the byte copy, correct but slower; the probe never
+reports a clone it did not measure.
+
+**Footprint** (`SG-LIFE-001`, `FR-LIFE-009`). Nothing under the clone or its
+Evidence store is written: no store is opened, no receipt, registration, alias,
+or lifecycle event is written, and no preview token is printed. Its one
+footprint is a probe directory created under the temporary directory with the
+`gate-doctor-probe-` prefix and removed before it returns (an interrupted one is
+reclaimed by the execution-root sweep); the rendering's `footprint:` line and
+`dependencies.probe` state it. It installs, fixes, and suggests nothing: a
+runner that does not resolve is named, and the report stops there.
+
+**Exit status.** `0` activation would proceed past every step doctor can see,
+`1` it would stop (or would not start), `2` the command could not run. It takes
+no selector and no `--confirm`. `--json` is the same document, and like `check`
+it prints no `preview:` sentence.
+
 ## Recovery
 
 Drift changes only through a confirmed `gate repair` or a new Activation
@@ -678,6 +744,36 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   after a passing `gate check --staged` is still evaluated by the registered
   hook against the snapshot the check previewed, and a commit after a failing
   one is really blocked.
+- `tests/gate-doctor-command.test.mjs` (`TB-063`) — `gate doctor` against real
+  clones: an unresolved PHP runner named with its check and arguments before
+  anything is activated, and the confirmed activation that follows stopping at
+  `runner-resolution` for `runner-unresolved`; a resolved runner reported at the
+  executable and interpreter the receipt then pins, under the repository and
+  configuration identities it pins, with no confirmation token printed; clone,
+  directory-link, and volume capability probed under the temporary directory,
+  the copy prediction following the `copy` rule from doctor's own probe result
+  and agreeing with a capture given the same probe input, with no
+  operating-system branch in the code; declared Sensitive inputs reported by
+  name, source, and file status while stdout, stderr, and `--json` are scanned
+  for known values; a refusing hook chain named `hook-exists` as activation
+  names it; the whole clone, `.git` and its Evidence store included,
+  byte-identical before and after on a configured and an activated clone, with
+  no probe left behind; the unanswerable steps listed, and every activation
+  step accounted for once; an unconfigured clone; and `--json` mirroring the
+  rendering. Only the capability and footprint tests run the real clone probe;
+  the rest pass `runOperatorCommand` a `copyProgram` of `null`, so they add no
+  8 MiB write to other suites' free-space measurements.
+- `npm run gate-activation-smoke`, scenario `doctor-then-activate` (`TB-063`) —
+  the packaged `gate doctor` on a real configured clone reports the runners the
+  packaged activation then pins, and on a clone whose PHP runner cannot resolve
+  names it while the confirmed activation refuses at the same step for the same
+  reason; neither doctor run changes a byte of the clone. `npm run
+  gate-runtime-portability`, fixture `dependency-provisioning-realpath` — the
+  mechanism `probeDependencyProvisioning` predicts for a copied root follows
+  the `copy` rule from its own probe result and agrees with a capture given
+  the same probe input; the prediction and the capture's own mechanism are
+  both recorded in the manifest, not compared, since each clone probe is a
+  separate free-space measurement.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle

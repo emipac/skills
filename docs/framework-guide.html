@@ -1760,6 +1760,23 @@ Diagnostics:
         change and writes nothing; the second performs that exact preview:
       </p>
 
+      <p class="cmd-label">0 — Ask whether this machine can run it <span class="who w-auto">read-only</span></p>
+      <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs doctor</code></pre>
+
+      <p>
+        Worth running first on any machine other than the one that configured the Gate — a
+        colleague's clone, another operating system. It asks activation's own questions without
+        activating: which runners resolve and the executable each would be pinned to (one that does
+        not is named with its command), whether each dependency root would be cloned, byte-copied, or
+        linked here, whether each declared sensitive input is found and where (never its value), and
+        whether your existing hook chain would be accepted. The last line is the verdict from
+        activation's own preview — proceed, or the first step and reason that would stop it — and
+        it lists what only activation can answer: consent, trust, the self-tests, the receipt, and
+        the hook itself. It installs and fixes nothing, writes nothing in the repository, and
+        prints no token; its only trace is a probe directory in the temporary directory, removed
+        before it returns.
+      </p>
+
       <p class="cmd-label">1 — Preview, and read it</p>
       <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code></pre>
 
@@ -1974,6 +1991,7 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
+            <tr><td><strong>doctor</strong></td><td>Reports, before or after activation, whether this machine can run the configured Gate: runners and the executables they would pin, how each dependency root would be provided, which sensitive inputs are found (names and sources only), whether the hook chain would be accepted, and one verdict from activation's own preview. Exit <code>0</code> activation would proceed, <code>1</code> it would stop. Writes nothing in the repository; no token.</td></tr>
             <tr><td><strong>check</strong></td><td>Evaluates the working tree — or with <code>--staged</code>, what the next commit would grade — exactly as the hook would, and prints every check's outcome and reason, the outcome, and <code>not-authoritative</code>. Exit <code>0</code> passed, <code>1</code> failed or unverified. Authorizes nothing; a passing check records nothing, a failing one appends its decision and says where. No token, because it changes nothing.</td></tr>
             <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12. With nothing to restore, its <code>next:</code> line names what does recover the clone.</td></tr>
             <tr><td><strong>sync</strong></td><td>Re-pins a changed <code>.agent-framework.yaml</code> under the adapters this clone already has, keeping every registration byte for byte. Its preview says whether the new policy is weaker than the one it replaces. Section 12.</td></tr>
@@ -2281,9 +2299,11 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
 
       <h3>Some things you have to find out by doing them</h3>
       <p>
-        There is no command that reports what this machine can do before you commit to anything. You
-        learn that a runner does not resolve here when an activation preview refuses. Whether a
-        check fails you can ask before committing, once the clone is activated:
+        What this machine can do you can ask before activating: <code>gate doctor</code> names a
+        runner that does not resolve, a dependency root that would be byte-copied rather than cloned,
+        or a sensitive input it cannot find, and says whether activation would proceed. What it
+        cannot see — the self-tests, and a desktop client's registration — you still learn by
+        activating. Whether a check fails you can ask before committing, once the clone is activated:
         <code>git gate check</code> evaluates the tree as the hook would, and the commit is still
         evaluated by the hook afterwards.
       </p>

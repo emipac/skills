@@ -97,6 +97,10 @@ export const EXECUTION_ROOT_PREFIXES = Object.freeze([
   // `gate bypass` materializes the staged snapshot to learn the identity a
   // grant binds to, through the same capture and the same lifecycle (`TB-052`).
   'gate-bypass-exec-',
+  // `gate doctor` probes what an execution root can do in a directory it
+  // creates beside them and removes; an interrupted one is reclaimed with
+  // them (`TB-063`).
+  'gate-doctor-probe-',
 ]);
 
 /**
@@ -896,6 +900,41 @@ const approvedRuntimeInputs = (receipt) => (receipt?.runtimeInputs ?? [])
   .filter((name) => typeof name === 'string' && name !== '');
 
 /**
+ * Resolve approved Sensitive runtime inputs and arm the redactor with them:
+ * one resolution, two consumers (`TB-059`).
+ *
+ * `openStore` calls it with the names the receipt pinned; `gate doctor` calls
+ * it with the names an activation would pin, so what doctor reports as found
+ * is what the runners will find (`TB-063`). The summary carries names,
+ * sources, and each declared file's status — never a value (`FR-CFG-006`,
+ * `SG-SECRET-001`).
+ */
+export const resolveSensitiveInputs = async ({
+  approved, environment, policy, repositoryRoot,
+}) => {
+  const resolved = await resolveRuntimeInputs({
+    approved,
+    environment,
+    environmentFiles: declaredEnvironmentFiles(policy),
+    repositoryRoot,
+  });
+  const redactor = createRedactor({
+    secrets: resolved.inputs,
+    environmentFiles: resolved.files,
+  });
+
+  return {
+    runtimeInputs: resolved.inputs,
+    redactor,
+    redaction: {
+      armed: redactor.secrets.map(({ name, source }) => ({ name, source })),
+      unresolved: redactor.unresolved.map(({ name, source }) => ({ name, source })),
+      environmentFiles: redactor.environmentFiles,
+    },
+  };
+};
+
+/**
  * Open the clone-local Evidence store the Activation receipt already
  * identifies — and, because this is the one path both runners reach with the
  * receipt, the configuration, and the repository in hand, resolve the approved
@@ -931,16 +970,11 @@ export const openStore = async ({
       ?? { id: 'change-evaluation-gate', version: null, protocolVersion: PROTOCOL_VERSION },
     repository: { identity: repositoryIdentity(activation.gitCommonDirectory) },
   };
-  const runtimeInputs = await resolveRuntimeInputs({
+  const { runtimeInputs, redactor, redaction } = await resolveSensitiveInputs({
     approved: approvedRuntimeInputs(activation.receipt),
     environment,
-    environmentFiles: declaredEnvironmentFiles(configuration.policy),
+    policy: configuration.policy,
     repositoryRoot: repository.root,
-  });
-
-  const redactor = createRedactor({
-    secrets: runtimeInputs.inputs,
-    environmentFiles: runtimeInputs.files,
   });
 
   try {
@@ -955,15 +989,11 @@ export const openStore = async ({
     return {
       ok: true,
       store,
-      runtimeInputs: runtimeInputs.inputs,
+      runtimeInputs,
       // What the redactor was armed with, by name and source only — the same
       // summary an envelope records (`TB-045`, `TB-059`) — for a caller that
       // reports an evaluation without appending one (`TB-061`). No value.
-      redaction: {
-        armed: redactor.secrets.map(({ name, source }) => ({ name, source })),
-        unresolved: redactor.unresolved.map(({ name, source }) => ({ name, source })),
-        environmentFiles: redactor.environmentFiles,
-      },
+      redaction,
     };
   } catch (error) {
     return {

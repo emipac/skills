@@ -138,9 +138,9 @@ that executable is on the path, or run this installed skill's own
 `scripts/gate.mjs` with Node. Resolve that script beside the `SKILL.md` you are
 reading rather than assuming a path: an installed skill sits wherever the client
 placed it, so the same literal path does not hold across projects. The command
-is `activate`, `status`, `check`, `locks`, `prune`, `repair`, `update`,
-`deactivate`, `uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the
-same document a person is shown.
+is `activate`, `status`, `check`, `doctor`, `locks`, `prune`, `repair`,
+`update`, `deactivate`, `uninstall`, `cleanup`, `bypass`, or `sync`. Add
+`--json` for the same document a person is shown.
 
 `git gate status` reconciles every control surface the receipt pinned — the
 configuration included, through the same observation the commit runner makes —
@@ -171,6 +171,22 @@ unverified, `2` could not run. It is a preview of a hook's answer, not a
 decision: it authorizes nothing, spends no bypass grant or client loop budget,
 and the commit is still graded by its hook. A passing check records nothing; one
 that did not pass appends its decision and prints where.
+
+To learn, before activating, whether this machine can run the configured Gate —
+on a fresh clone, or on a machine other than the one that configured it — run
+`gate doctor`. It asks activation's own questions without activating: which
+configured runners resolve and the executable each would be pinned to (an
+unresolved one named with its descriptor), whether each declared dependency
+root would be cloned, byte-copied, or linked here, whether each declared
+Sensitive input is found and in which source (never its value), each declared
+environment file's status, and whether the existing hook chain would be
+accepted. It ends with one `verdict:` line from activation's own preview —
+proceed, or the first step and reason code that would stop it — and lists the
+steps only activation answers (consent, trust, self-test, receipt, Git
+enablement). Report what it names; it installs, fixes, and suggests nothing,
+writes nothing under the clone, prints no token, and its only footprint is a
+probe directory under the temporary directory that it removes. Exit status is
+`0` activation would proceed, `1` it would stop, `2` could not run.
 
 **Every other command previews and writes nothing.** To perform one, run it again
 naming the token the preview printed: `gate repair --confirm <token>`,

@@ -838,15 +838,16 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
   assert.equal(CONFIRMED_COMMANDS.activate, undefined);
   assert.deepEqual(
     [...COMMANDS],
-    ['activate', 'status', 'check', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup', 'bypass', 'sync'],
+    ['activate', 'status', 'check', 'doctor', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup', 'bypass', 'sync'],
   );
 
-  // Exactly two commands have no confirmed form: `status`, which must go on
-  // recording nothing at all, and `check`, which mutates nothing under the
-  // clone and so has nothing to confirm (`TB-061`).
+  // Exactly three commands have no confirmed form: `status`, which must go on
+  // recording nothing at all, `check`, which mutates nothing under the clone
+  // and so has nothing to confirm (`TB-061`), and `doctor`, which writes
+  // nothing under the clone at all (`TB-063`).
   assert.deepEqual(
     COMMANDS.filter((command) => !(command in CONFIRMABLE_COMMANDS)),
-    ['status', 'check'],
+    ['status', 'check', 'doctor'],
   );
 
   // Every refusal above ran against a real activated clone and left it alone.

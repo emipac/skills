@@ -64,7 +64,7 @@ import {
   validateCommandDescriptor,
 } from './lib/command-descriptor.mjs';
 import { evaluate } from './lib/evaluate.mjs';
-import { captureSnapshot, verifySnapshot } from './lib/snapshot.mjs';
+import { captureSnapshot, probeDependencyProvisioning, verifySnapshot } from './lib/snapshot.mjs';
 import { createExecutionRoot, releaseExecutionRoot } from './lib/hook-runner.mjs';
 import { PROTOCOL_VERSION } from './lib/evaluation-contract.mjs';
 import { openEvidenceStore, resolveGitCommonDirectory } from './lib/evidence-store.mjs';
@@ -1044,6 +1044,62 @@ const dependencyProvisioningFixture = async () => {
     findings.push('one of the two strategies produced no observation at all.');
   }
 
+  // What `gate doctor` tells a maintainer before anything is activated is
+  // asked of the same probe, volume rule, and `link` provisioner, in a probe
+  // directory under the same temporary directory (`TB-063`, `NFR-PORT-002`).
+  // Its copy prediction must be the `copy` rule applied to its own probe
+  // result. It is not compared with the capture's mechanism above: each clone
+  // probe is its own measurement of free space, and concurrent disk activity
+  // can make either under-report a clone. Both are recorded in the manifest.
+  // The rule itself is proved against a capture with the same probe input —
+  // no copy program, which measures nothing — where the two must agree.
+  const probeRoot = await temporaryDirectory('gate portability doctor probe-');
+  const predicted = await probeDependencyProvisioning({
+    repositoryRoot: source,
+    dependencyRoots: [declared, unmapped],
+    provisioning: { [declared]: 'copy' },
+    probeRoot,
+  });
+  const predictedCopyRoot = predicted.roots.find((entry) => entry.root === declared) ?? null;
+  const predictedCopy = predictedCopyRoot?.mechanism ?? null;
+  const predictedLink = predicted.roots.find((entry) => entry.root === unmapped)?.mechanism ?? null;
+  const ruleCopy = predicted.clone !== null && predictedCopyRoot?.sharesVolume === true ? 'clone' : 'byte-copy';
+
+  if (predictedCopy !== ruleCopy) {
+    findings.push(`gate doctor's probe predicted ${JSON.stringify(predictedCopy)} for the copied root, where its own probe result gives ${ruleCopy}.`);
+  }
+
+  const withoutProgramProbe = await temporaryDirectory('gate portability doctor probe no program-');
+  const withoutProgramRoot = await temporaryDirectory('gate portability provisioning no program-');
+  const predictedWithoutProgram = await probeDependencyProvisioning({
+    repositoryRoot: source,
+    dependencyRoots: [declared],
+    provisioning: 'copy',
+    probeRoot: withoutProgramProbe,
+    copyProgram: null,
+  });
+  const capturedWithoutProgram = await captureSnapshot({
+    repositoryRoot: source,
+    kind: 'git-index',
+    executionRoot: withoutProgramRoot,
+    runGit: (repositoryRoot, args) => runGitForRepository(repositoryRoot, args),
+    dependencyRoots: [declared],
+    dependencyProvisioning: 'copy',
+    copyProgram: null,
+  });
+  const capturedWithoutProgramMechanism = capturedWithoutProgram.captured
+    ? capturedWithoutProgram.dependencies.mechanisms?.[declared]?.mechanism ?? null
+    : null;
+
+  if (predictedWithoutProgram.roots[0]?.mechanism !== capturedWithoutProgramMechanism
+    || capturedWithoutProgramMechanism !== 'byte-copy') {
+    findings.push(`with no copy program, gate doctor's probe predicted ${JSON.stringify(predictedWithoutProgram.roots[0]?.mechanism)} and the capture performed ${JSON.stringify(capturedWithoutProgramMechanism)}.`);
+  }
+
+  if (observed.link && (predicted.directoryLink.created !== true || predictedLink !== 'link')) {
+    findings.push(`gate doctor's probe reported that no directory link can be created (${predicted.directoryLink.code}), and the capture linked one.`);
+  }
+
   // The mixed declaration: one root mapped `copy`, the other left to `link`.
   const mixedRoot = await temporaryDirectory('gate portability provisioning mixed-');
   const mixed = await captureSnapshot({
@@ -1127,6 +1183,11 @@ const dependencyProvisioningFixture = async () => {
       copyMechanism: observed.copy?.mechanism ?? null,
       copyConsumedBytes: observed.copy?.consumedBytes ?? null,
       copyTreeBytes: PROVISIONED_PAYLOAD_BYTES,
+      // What `gate doctor` predicted on this environment from its own probe,
+      // beside what the capture did; under concurrent disk activity a probe
+      // can under-report a clone, so the two may differ (`TB-063`).
+      doctorPredictedCopyMechanism: predictedCopy,
+      doctorDirectoryLink: predicted.directoryLink.created,
       mixed: mixed.captured ? mixed.dependencies.provisioning : null,
     },
   };

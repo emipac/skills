@@ -32,6 +32,12 @@
  *    evaluated by the registered hook, which records its own decision; a
  *    failing check is followed by a commit the hook really blocks
  *    (FR-EVAL-001, AC-EVAL-001, SG-EVAL-001, RISK-010, TB-061).
+ *    `doctor-then-activate` — the packaged `gate doctor` on a real
+ *    configured clone reports the runners the packaged activation then pins,
+ *    and on a clone whose PHP runner cannot resolve names it while the
+ *    confirmed activation refuses at the same step for the same reason; no
+ *    doctor run changes a byte of either clone (AC-PORT-001, AC-LIFE-008,
+ *    FR-LIFE-004, SG-LIFE-001, TB-063).
  * 4. `command-driven-activation-failure` — the same command against a clone
  *    whose `pre-commit` the gate can neither own nor compose into refuses at
  *    `hook-chain-validation`, writes no receipt, registers no shortcut, changes
@@ -103,7 +109,10 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import {
+  lstat, mkdtemp, mkdir, readdir, readFile, readlink, realpath, rm, stat, symlink, utimes, writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -595,11 +604,11 @@ const PACKAGED_COMMAND = path.join(
   'gate.mjs',
 );
 
-const runPackagedCommand = async (root, args) => {
+const runPackagedCommand = async (root, args, environment = {}) => {
   try {
     const { stdout, stderr } = await runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
       cwd: root,
-      env: gitEnvironment(),
+      env: { ...gitEnvironment(), ...environment },
     });
 
     return { exitCode: 0, stdout, stderr };
@@ -865,6 +874,147 @@ const checkThenCommit = async () => {
   );
 
   return { name: 'check-then-commit', ok: findings.length === 0, findings };
+};
+
+/**
+ * Every byte under one clone, `.git` and its Evidence store included, as one
+ * digest per path: what `gate doctor` must leave exactly as it found it.
+ */
+const treeDigest = async (root) => {
+  const entries = {};
+  const walk = async (directory) => {
+    for (const name of (await readdir(directory)).sort()) {
+      const absolute = path.join(directory, name);
+      // eslint-disable-next-line no-await-in-loop
+      const entry = await lstat(absolute);
+
+      if (entry.isSymbolicLink()) {
+        // eslint-disable-next-line no-await-in-loop
+        entries[path.relative(root, absolute)] = `link:${await readlink(absolute)}`;
+      } else if (entry.isDirectory()) {
+        entries[path.relative(root, absolute)] = 'directory';
+        // eslint-disable-next-line no-await-in-loop
+        await walk(absolute);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        entries[path.relative(root, absolute)] = createHash('sha256').update(await readFile(absolute)).digest('hex');
+      }
+    }
+  };
+
+  await walk(root);
+
+  return JSON.stringify(entries);
+};
+
+/** A PHP-runner configuration, for a machine on which no `php` can be found. */
+const PHP_MIGRATION_MAPPINGS = {
+  profiles: { backend: 'express-typescript' },
+  commands: {
+    'verification.commands.test.both[0]': {
+      runner: 'php-script',
+      args: ['artisan', 'test'],
+      timeout_seconds: 60,
+      allowed_environment: ['PATH'],
+    },
+  },
+};
+
+/**
+ * TB-063 — `gate doctor` says, before activation, what activation then does.
+ *
+ * On a real configured clone the packaged `gate doctor` reports the runners
+ * the packaged activation then pins, and changes nothing. On a clone whose
+ * configured PHP runner cannot resolve on this search path, doctor names it,
+ * and the confirmed packaged activation refuses at the step, for the reason,
+ * doctor named. Agreement between the two is only observable across both, on
+ * a real clone (`AC-PORT-001`, `AC-LIFE-008`, `FR-LIFE-004`, `SG-LIFE-001`).
+ */
+const doctorThenActivate = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const before = await treeDigest(root);
+  const doctorRun = await runPackagedCommand(root, ['doctor', '--json']);
+  const doctor = JSON.parse(doctorRun.stdout || '{}');
+
+  check(findings, doctorRun.exitCode === 0, `gate doctor exited ${doctorRun.exitCode} on a runnable clone: ${doctorRun.stdout}${doctorRun.stderr}`);
+  check(findings, await treeDigest(root) === before, 'gate doctor changed the configured clone.');
+  check(
+    findings,
+    doctor.observation?.verdict?.proceeds === true && doctor.observation?.dependencies?.probe?.removed === true,
+    `gate doctor did not report a proceeding activation and a removed probe: ${JSON.stringify(doctor.observation?.verdict)}.`,
+  );
+
+  const preview = JSON.parse((await runPackagedCommand(root, ['activate', '--json'])).stdout || '{}');
+  const confirmed = JSON.parse((await runPackagedCommand(root, [
+    'activate', '--confirm', preview.observation?.confirmationToken ?? '', '--json',
+  ])).stdout || '{}');
+
+  check(findings, confirmed.mutation?.performed === true, `The activation doctor cleared did not activate: ${JSON.stringify(confirmed.mutation)}.`);
+  check(
+    findings,
+    !doctorRun.stdout.includes(preview.observation?.confirmationToken ?? 'no-token'),
+    'gate doctor printed the token that confirms an activation.',
+  );
+
+  const receipt = JSON.parse(await readFile(
+    path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
+    'utf8',
+  ).catch(() => '{}'));
+  const pinned = (receipt.runtime?.runners ?? []).map((entry) => [entry.check_id, entry.executable, entry.interpreter]);
+  const reported = (doctor.observation?.runners?.resolved ?? []).map((entry) => [entry.checkId, entry.executable, entry.interpreter]);
+
+  check(
+    findings,
+    pinned.length > 0 && JSON.stringify(pinned) === JSON.stringify(reported),
+    `gate doctor reported ${JSON.stringify(reported)}, and activation pinned ${JSON.stringify(pinned)}.`,
+  );
+  check(
+    findings,
+    receipt.repository?.identity === doctor.observation?.identities?.repository
+      && receipt.configuration?.identity === doctor.observation?.identities?.configuration,
+    'gate doctor reported identities the receipt does not pin.',
+  );
+
+  // A search path with Git on it and no PHP: the PHP runner cannot resolve here.
+  const unresolvable = await fixtureRepository({ mappings: PHP_MIGRATION_MAPPINGS });
+  const bin = await temporaryDirectory('gate-activation-smoke-git-only-');
+  const gitProgram = (await runFile('sh', ['-c', 'command -v git'])).stdout.trim();
+
+  await assertThrowawayRepository(unresolvable);
+  await symlink(gitProgram, path.join(bin, 'git'));
+
+  const narrowed = { PATH: bin };
+  const beforeUnresolvable = await treeDigest(unresolvable);
+  const namedRun = await runPackagedCommand(unresolvable, ['doctor'], narrowed);
+  const named = JSON.parse((await runPackagedCommand(unresolvable, ['doctor', '--json'], narrowed)).stdout || '{}');
+
+  check(findings, await treeDigest(unresolvable) === beforeUnresolvable, 'gate doctor changed the clone whose runner cannot resolve.');
+  check(findings, namedRun.exitCode === 1, `gate doctor exited ${namedRun.exitCode} for an unresolvable runner.`);
+  check(
+    findings,
+    /configuration\.broad-tests\.test \(evaluate\): php-script artisan test — unresolved \(runner-unresolved\)/.test(namedRun.stdout),
+    `gate doctor did not name the unresolved runner and its descriptor: ${namedRun.stdout}`,
+  );
+
+  const refusedPreview = JSON.parse((await runPackagedCommand(unresolvable, ['activate', '--json'], narrowed)).stdout || '{}');
+  const refused = JSON.parse((await runPackagedCommand(unresolvable, [
+    'activate', '--confirm', refusedPreview.observation?.confirmationToken ?? '', '--json',
+  ], narrowed)).stdout || '{}');
+
+  check(
+    findings,
+    refused.mutation?.performed === false
+      && refused.mutation?.step === named.observation?.verdict?.stop?.step
+      && refused.mutation?.reasonCode === named.observation?.verdict?.stop?.reasonCode
+      && refused.mutation?.step === 'runner-resolution',
+    `Activation refused at ${refused.mutation?.step} (${refused.mutation?.reasonCode}); doctor named ${JSON.stringify(named.observation?.verdict?.stop)}.`,
+  );
+
+  return { name: 'doctor-then-activate', ok: findings.length === 0, findings };
 };
 
 /**
@@ -3198,6 +3348,7 @@ const main = async () => {
         },
       await commandDrivenActivation(),
       await checkThenCommit(),
+      await doctorThenActivate(),
       await commandDrivenDesktopActivation(),
       await printedInstructionStillBindsTheClone(),
       await commandDrivenActivationFailure(),
