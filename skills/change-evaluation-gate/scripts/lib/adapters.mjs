@@ -813,6 +813,18 @@ const presentCheck = (check) => ({
   summary: check.summary,
 });
 
+/** One decision diagnostic, as every surface is handed it. */
+const presentDiagnostic = (diagnostic) => ({
+  reasonCode: diagnostic?.reasonCode ?? null,
+  detail: diagnostic?.detail ?? null,
+});
+
+/** One changed Grader surface: what kind of surface, and which path. */
+const presentGraderSurface = (surface) => ({
+  kind: surface?.kind ?? null,
+  path: surface?.path ?? null,
+});
+
 /**
  * Present one returned decision on one adapter's surface.
  *
@@ -845,8 +857,124 @@ export const presentDecision = ({ adapterId, decision }) => {
       outcome: decision.outcome,
       authorization,
       checks: (decision.checks ?? []).map(presentCheck),
+      // What the decision states as a reason beyond its checks, carried so a
+      // surface renders the decision rather than a fragment of it
+      // (`NFR-OPER-001`, `FR-EVAL-009`, `TB-064`).
+      diagnostics: (decision.diagnostics ?? []).map(presentDiagnostic),
+      changedGraderSurfaces: (decision.integrity?.changedGraderSurfaces ?? []).map(presentGraderSurface),
     },
   };
+};
+
+/**
+ * How much one feedback message may carry.
+ *
+ * A declared channel is one string an agent reads as its next prompt, so it is
+ * bounded. At most `checks` failing-check summaries and `diagnostics`
+ * diagnostics other than control-surface drift are listed, each cut to
+ * `entryCharacters` with a visible `…`. Whatever is not listed is counted and
+ * named by reason code on a final line that points at the evaluation recording
+ * every entry, so no reason code on the decision is ever silently lost
+ * (`NFR-OPER-001`).
+ *
+ * Two things are never capped, because they change what a reader should do
+ * next: an `integrity-drift` diagnostic, which the Gate raises about its own
+ * pinned surfaces, and a changed Grader surface. Neither grows with the size of
+ * a change: drift names surfaces activation pinned, and a Grader surface is
+ * recorded only for a path the configuration declares (`AC-SEC-001`,
+ * `FR-EVAL-009`, `TB-064`).
+ */
+export const FEEDBACK_LIMITS = Object.freeze({
+  checks: 8,
+  diagnostics: 8,
+  entryCharacters: 400,
+});
+
+const PREFLIGHT_LEAD = 'Preflight (not a commit decision)';
+
+const DRIFT_REASON = 'integrity-drift';
+
+const cut = (text) => (text.length <= FEEDBACK_LIMITS.entryCharacters
+  ? text
+  : `${text.slice(0, FEEDBACK_LIMITS.entryCharacters - 1)}…`);
+
+/** `reason ×n` for every reason code in `reasons`, in first-seen order. */
+const tally = (reasons) => {
+  const counts = new Map();
+
+  for (const reason of reasons) {
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+
+  return [...counts].map(([reason, count]) => `${reason} ×${count}`).join(', ');
+};
+
+const plural = (count, noun) => `${count} more ${noun}${count === 1 ? '' : 's'}`;
+
+/**
+ * The lines one presented decision is rendered as, in a stated order: the
+ * outcome; each failing check's own summary, because those are what a
+ * maintainer can act on directly; every control-surface drift; the other
+ * diagnostics with their reason codes; every changed Grader surface, stated as
+ * observation; and, when anything was left out, what was left out.
+ */
+const decisionLines = (view) => {
+  const presentation = view?.presentation ?? {};
+  const failing = (presentation.checks ?? []).filter(
+    (check) => check?.outcome !== 'passed' && check?.outcome !== 'not-applicable',
+  );
+  const diagnostics = presentation.diagnostics ?? [];
+  const drift = diagnostics.filter((diagnostic) => diagnostic?.reasonCode === DRIFT_REASON);
+  const other = diagnostics.filter((diagnostic) => diagnostic?.reasonCode !== DRIFT_REASON);
+  const surfaces = presentation.changedGraderSurfaces ?? [];
+  const listedChecks = failing.slice(0, FEEDBACK_LIMITS.checks);
+  const listedOther = other.slice(0, FEEDBACK_LIMITS.diagnostics);
+  const omittedChecks = failing.slice(listedChecks.length);
+  const omittedOther = other.slice(listedOther.length);
+  const describe = (diagnostic) => `${diagnostic?.reasonCode}: ${diagnostic?.detail ?? 'no detail recorded'}`;
+  const lines = [`${PREFLIGHT_LEAD}: ${view?.outcome ?? 'unverified'}.`];
+
+  // Each failing check's own summary, so this channel says the same thing the
+  // decision says. A check that never ran names what it did not get, because
+  // this is the channel that told a maintainer's agent to go and change the
+  // project (`NFR-OPER-001`, `TB-044`).
+  if (listedChecks.length > 0) {
+    lines.push('Failing checks:', ...listedChecks.map(
+      (check) => `- ${cut(check.summary ?? `${check.id} ${check.outcome}`)}`,
+    ));
+  }
+
+  if (drift.length + listedOther.length > 0) {
+    lines.push(
+      'Diagnostics:',
+      ...drift.map((diagnostic) => `- ${describe(diagnostic)}`),
+      ...listedOther.map((diagnostic) => `- ${cut(describe(diagnostic))}`),
+    );
+  }
+
+  // Visibility, never a classification: editing what grades a change is often
+  // exactly the work (`SG-CFG-001`).
+  if (surfaces.length > 0) {
+    lines.push(
+      'Changed Grader surfaces (this change edits what grades it; stated for visibility):',
+      ...surfaces.map((surface) => `- ${surface?.kind} ${surface?.path}`),
+    );
+  }
+
+  const omitted = [
+    ...(omittedChecks.length > 0
+      ? [`${plural(omittedChecks.length, 'failing check')} (${tally(omittedChecks.map((check) => check?.reasonCode ?? check?.outcome))})`]
+      : []),
+    ...(omittedOther.length > 0
+      ? [`${plural(omittedOther.length, 'diagnostic')} (${tally(omittedOther.map((diagnostic) => diagnostic?.reasonCode))})`]
+      : []),
+  ];
+
+  if (omitted.length > 0) {
+    lines.push(`Not listed: ${omitted.join(' and ')}; evaluation ${presentation.evaluationId ?? 'unrecorded'} records every one.`);
+  }
+
+  return lines;
 };
 
 /**
@@ -854,10 +982,12 @@ export const presentDecision = ({ adapterId, decision }) => {
  *
  * The runner never learns a client field name: it asks this function, and this
  * function reads the field from the declaration (FR-ADAPT-004, SG-OWNER-001).
- * A passing preflight returns the declared silence form so a clean turn is not
+ * A genuinely clean preflight — `passed`, with no diagnostic and no changed
+ * Grader surface — returns the declared silence form so a clean turn is not
  * interrupted. Every other outcome — a failed required check, unverified
- * coverage, or a harness fault — occupies the declared field. An adapter that
- * declares no channel returns none.
+ * coverage, drift, a changed Grader surface, or a harness fault — occupies the
+ * declared field as one message rendered from the decision (`TB-064`). An
+ * adapter that declares no channel returns none.
  */
 export const formatFeedback = ({ adapterId, view } = {}) => {
   const adapter = describeAdapter(adapterId);
@@ -867,7 +997,10 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
     return typeof feedback?.none === 'string' ? feedback.none : '';
   }
 
-  const silent = view?.outcome === 'passed' && view?.failure == null;
+  const silent = view?.outcome === 'passed'
+    && view?.failure == null
+    && (view?.presentation?.diagnostics ?? []).length === 0
+    && (view?.presentation?.changedGraderSurfaces ?? []).length === 0;
 
   if (silent) {
     return typeof feedback.none === 'string' ? feedback.none : '';
@@ -877,22 +1010,11 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
     return typeof feedback.none === 'string' ? feedback.none : '';
   }
 
-  const failing = (view?.presentation?.checks ?? []).filter(
-    (check) => check?.outcome !== 'passed' && check?.outcome !== 'not-applicable',
-  );
-  let message;
-
-  if (view?.failure) {
-    message = `Preflight (not a commit decision): unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`;
-  } else if (failing.length > 0) {
-    // Each failing check's own summary, so this channel says the same thing
-    // the decision says. A check that never ran names what it did not get,
-    // because this is the channel that told a maintainer's agent to go and
-    // change the project (`NFR-OPER-001`, `TB-044`).
-    message = `Preflight (not a commit decision): ${failing.map((check) => check.summary ?? `${check.id} ${check.outcome}`).join('; ')}.`;
-  } else {
-    message = `Preflight (not a commit decision): ${view?.outcome ?? 'unverified'}.`;
-  }
+  // A harness fault has no decision to render, and keeps the one sentence it
+  // has always had (`FR-ADAPT-005`).
+  const message = view?.failure
+    ? `${PREFLIGHT_LEAD}: unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`
+    : decisionLines(view).join('\n');
 
   return `${JSON.stringify({ [feedback.field]: message })}\n`;
 };

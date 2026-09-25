@@ -1506,10 +1506,8 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           link, follows it to a directory, and fails:
         </p>
         <pre><code>Preflight (not a commit decision): unverified.
-
-  snapshot-mismatch
-  The exact snapshot could not be materialized:
-  EISDIR: illegal operation on a directory, read</code></pre>
+Diagnostics:
+- snapshot-mismatch: The exact snapshot could not be materialized: EISDIR: illegal operation on a directory, read</code></pre>
         <p>
           The capture is all-or-nothing, so one such link makes <strong>every</strong> preflight
           <span class="pill p-unver">unverified</span> — no checks run, and the message names no
@@ -2218,6 +2216,28 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
         Desktop do not currently send a follow-up — they have no declared channel to answer
         through — so silence from those clients is not a pass.
       </p>
+      <p>
+        The follow-up carries the whole decision, not just its failing checks: the outcome, each
+        failing check's own summary, every diagnostic by reason code, and every Grader surface the
+        work edited. A clone whose checks all pass but whose Gate has drifted says so:
+      </p>
+      <pre><code>Preflight (not a commit decision): unverified.
+Diagnostics:
+- integrity-drift: The Gate control surface drifted independently of this change (trusted-configuration); nothing here is proved. …
+- dependency-root-unavailable: The declared dependency root "vendor" could not be provided to this evaluation; …
+Changed Grader surfaces (this change edits what grades it; stated for visibility):
+- gate-configuration .agent-framework.yaml</code></pre>
+      <p>
+        Read <code>integrity-drift</code> and <code>dependency-root-unavailable</code> as messages
+        about the clone and its environment, not about your code: <code>gate status</code> names the
+        remedy for drift, a missing dependency root is cleared by installing it, and editing code
+        clears neither. A changed Grader surface is stated
+        even on a turn that passed, because editing what grades a change is worth a second pair of
+        eyes; it is an observation, never an accusation. The message lists at most eight failing
+        checks and eight other diagnostics, cuts any entry past 400 characters with
+        <code>…</code>, and says what it left out by count and reason code. Drift and changed
+        Grader surfaces are never left out.
+      </p>
 
       <h3>The snapshot is not your terminal</h3>
       <p>
@@ -2283,7 +2303,7 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
         <div><dt>Re-pin</dt><dd><code>git gate sync</code>, so the receipt pins the configuration as it now reads, under the adapters it already has. The only way a policy change takes effect.</dd></div>
         <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
         <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, and left in place by deactivation.</dd></div>
-        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure may return as a follow-up; a clean turn stays quiet.</dd></div>
+        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure, a diagnostic such as drift, or an edited Grader surface returns as a follow-up; a clean turn stays quiet.</dd></div>
       </dl>
     </section>
 

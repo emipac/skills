@@ -1,14 +1,14 @@
 # TB-064 — Say why, in the channel that asks for the change
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 64-say-why-in-the-channel-that-asks-for-the-change
 Draft key: TB-064
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -214,24 +214,38 @@ renders what is already there.
 
 ## Acceptance Criteria
 
-- [ ] `NFR-OPER-001`: a decision carrying diagnostics renders each one's reason
+- [x] `NFR-OPER-001`: a decision carrying diagnostics renders each one's reason
   code in the channel message, proved for `integrity-drift`,
   `dependency-root-unavailable`, and `configuration-invalid`.
-- [ ] `FR-EVAL-009`, `SG-CFG-001`: a decision whose `changedGraderSurfaces` is
+- [x] `FR-EVAL-009`, `SG-CFG-001`: a decision whose `changedGraderSurfaces` is
   non-empty names each changed surface in the message, with no word implying
-  intent — proved including the case where every check passed.
-- [ ] `AC-SEC-001`, `NFR-SEC-004`: an evaluation whose checks all pass and whose
+  intent — proved including the case where every check passed. (Proved for a
+  `passed` outcome too: a turn is silent only when it passed with no
+  diagnostic and no changed Grader surface.)
+- [x] `AC-SEC-001`, `NFR-SEC-004`: an evaluation whose checks all pass and whose
   control surface drifted produces a message naming the drift and the drifted
   surface, and never a message that reads as passing.
-- [ ] Failing checks keep their own summaries, and a message carrying both a
-  failing check and a diagnostic carries both.
-- [ ] The message is bounded by a stated cap; truncation is explicit and never
-  drops a control-surface drift or a changed Grader surface.
-- [ ] `FR-ADAPT-005`, `AC-ADAPT-002`: every existing adapter conformance
+- [x] Failing checks keep their own summaries, and a message carrying both a
+  failing check and a diagnostic carries both. (Order: outcome, failing
+  checks, drift, other diagnostics, changed Grader surfaces, then what was
+  left out.)
+- [x] The message is bounded by a stated cap; truncation is explicit and never
+  drops a control-surface drift or a changed Grader surface. (`FEEDBACK_LIMITS`:
+  8 failing checks, 8 non-drift diagnostics, 400 characters per entry; omitted
+  entries are counted and named by reason code with the evaluation id. Drift
+  and Grader surfaces are uncapped, so the bound on them is structural: a
+  surface is recorded only for a declared path. A caller declaring test globs
+  to `evaluate` could record more; neither runner does.)
+- [x] `FR-ADAPT-005`, `AC-ADAPT-002`: every existing adapter conformance
   expectation holds unchanged, including the declared silence of a clean turn.
-- [ ] `SG-OWNER-001`: no client, tool, or framework name added to
+  (Both conformance scripts pass unchanged. One unit fixture, "a passing Cursor
+  stop payload produces no follow-up", had left `.agent-framework.yaml` and
+  its check script uncommitted, so its turn carried two changed Grader
+  surfaces; it now commits them and grades an ordinary passing edit. Its
+  expectation, silence, is unchanged.)
+- [x] `SG-OWNER-001`: no client, tool, or framework name added to
   `scripts/lib/`.
-- [ ] The evidence record and the channel message name the same reason codes for
+- [x] The evidence record and the channel message name the same reason codes for
   one evaluation.
 
 ## Verification Matrix

@@ -227,7 +227,14 @@ before it may be called supported are defined by the
 Activation registers each desktop surface against the packaged
 `gate-preflight.mjs` program. That program evaluates the working tree as
 preflight, presents `not-authoritative`, and answers through the adapter's
-declared feedback channel — never through its exit status.
+declared feedback channel — never through its exit status. The channel carries
+the decision, not a summary of its checks: the outcome, each failing check's
+summary, every diagnostic by reason code (control-surface drift, an unprovided
+dependency root, an invalid configuration), and every changed Grader surface,
+bounded and with any truncation stated. A turn is silent only when it passed
+with no diagnostic and no changed Grader surface. When the channel reports
+drift or an environment reason, report it to the maintainer; do not edit the
+project to make it go away.
 
 Only authoritative Git authorizes a change. A desktop surface presents the same
 decision as structured `not-authoritative` preflight feedback and blocks

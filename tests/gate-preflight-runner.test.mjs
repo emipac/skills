@@ -309,7 +309,18 @@ test('AC-ADAPT-001: a passing Cursor stop payload produces no follow-up, so a cl
   const root = await throwawayRepository(t);
 
   await configureClone(root);
+  // TB-064: an uncommitted configuration and check script are changed Grader
+  // surfaces, which the channel always states. A clean turn is one whose change
+  // passes and edits nothing that grades it, so the Gate's own files are
+  // committed and the turn's change is an ordinary passing edit.
+  await runFile('git', ['add', '--all'], { cwd: root, env: isolatedGitEnvironment() });
+  await runFile('git', [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Preflight Runner',
+    'commit', '--quiet', '--message', 'configured',
+  ], { cwd: root, env: isolatedGitEnvironment() });
   await publishReceipt(root);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nrepaired\n', 'utf8');
 
   const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
 
@@ -1014,4 +1025,56 @@ test('TB-039 NFR-REL-001: the authoritative runner asks no question before it ca
     /listChangedPaths|evaluateWithoutSubject/,
     'on a commit the snapshot is what the checks run against, so that runner always captures.',
   );
+});
+
+/**
+ * TB-064 — the incident's shape, on a real clone through the real packaged
+ * program: every check passes, the clone's configuration moved away from what
+ * it was activated with, and a declared dependency root is absent. The channel
+ * used to say `unverified.` and nothing else.
+ */
+test('TB-064 AC-SEC-001 / NFR-OPER-001 / FR-EVAL-009: a drifted clone whose checks all pass is told the drift, the missing root, and the changed Grader surface — the same reason codes its evidence records', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  // Pinned above; changed below, and never re-pinned. `vendor` is declared and
+  // does not exist, exactly as the incident's three roots did not.
+  await configureClone(root, { dependencyRoots: ['vendor'] });
+
+  const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+  const message = JSON.parse(result.stdout).followup_message;
+
+  assert.equal(result.exitCode, 0, `a preflight never blocks: ${result.stderr}`);
+  assert.match(message, /^Preflight \(not a commit decision\): unverified\./);
+  assert.doesNotMatch(message, /configuration\.broad-tests\.test/, `every check passed, so none is listed: ${message}`);
+  assert.match(message, /integrity-drift/, message);
+  assert.match(message, /trusted-configuration/, `the drifted surface is named: ${message}`);
+  assert.match(message, /dependency-root-unavailable/, message);
+  assert.match(message, /"vendor"/, message);
+  assert.match(message, /gate-configuration \.agent-framework\.yaml/, `the changed Grader surface is named: ${message}`);
+
+  const [entry] = (await readFile(evidenceLogPath(root), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const envelope = JSON.parse(await readFile(
+    path.join(root, '.git/change-evaluation-gate/evidence', entry.envelopePath),
+    'utf8',
+  ));
+  const recorded = envelope.decision.diagnostics.map((diagnostic) => diagnostic.reasonCode);
+
+  assert.deepEqual(
+    [...new Set(recorded)].sort(),
+    ['dependency-root-unavailable', 'integrity-drift'],
+    'the evidence records the reasons the incident\'s decision carried.',
+  );
+
+  for (const reasonCode of recorded) {
+    assert.match(message, new RegExp(reasonCode), `the channel and the evidence disagree about ${reasonCode}: ${message}`);
+  }
+
+  for (const surface of envelope.decision.integrity.changedGraderSurfaces) {
+    assert.ok(message.includes(`${surface.kind} ${surface.path}`), `the evidence records ${surface.path} and the channel does not: ${message}`);
+  }
 });
