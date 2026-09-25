@@ -455,14 +455,17 @@
   <div class="masthead-inner">
     <p class="eyebrow">
       <span>AI Skills Framework</span>
-      <span class="ver">Release 0.9.0 · first Gate-capable</span>
+      <span class="ver">Release 0.8.0 · Gate-capable</span>
     </p>
     <h1>Setting up the framework, and switching on the Change Evaluation Gate</h1>
     <p class="standfirst">
       A step-by-step guide for developers who have never used this framework before.
       It covers what the framework is for, how to install and configure it, the daily
       working loop, and how the optional commit gate is installed, configured, and
-      activated — three things that sound the same and are not.
+      activated — three things that sound the same and are not. Sections 10 to 13 are
+      the ones you come back to: the commands you run day to day, what to do after you
+      change policy, and why a check can behave differently under the Gate than it does
+      in your own terminal.
     </p>
   </div>
 </header>
@@ -475,12 +478,15 @@
       <li><a href="#model">The mental model</a></li>
       <li><a href="#install">Installing it</a></li>
       <li><a href="#configure">Configuring a project</a></li>
+      <li><a href="#config-reference">The configuration file, in full</a></li>
       <li><a href="#loop">The daily working loop</a></li>
       <li><a href="#gate">The Change Evaluation Gate</a></li>
       <li><a href="#gate-states">Installed, configured, activated</a></li>
       <li><a href="#gate-setup">Turning the Gate on</a></li>
       <li><a href="#gate-commit">What happens at a commit</a></li>
-      <li><a href="#gate-off">Status, repair, turning it off</a></li>
+      <li><a href="#gate-commands">Everyday commands</a></li>
+      <li><a href="#gate-policy-change">Changing policy after activation</a></li>
+      <li><a href="#gate-trouble">When the Gate disagrees with your terminal</a></li>
       <li><a href="#limits">Limits you should know</a></li>
       <li><a href="#glossary">Glossary</a></li>
     </ol>
@@ -668,21 +674,20 @@
 
       <h3>What ends up in the file</h3>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Key</th><th>Meaning</th></tr>
-          </thead>
-          <tbody>
-            <tr><td><code>schema_version</code></td><td>3 or 4. Version 4 is required for the Gate.</td></tr>
-            <tr><td><code>backend</code> / <code>frontend</code></td><td>Which profiles are active. <code>none</code> means proved absent; <code>unknown</code> means not yet determined.</td></tr>
-            <tr><td><code>source_scopes</code></td><td>Which directories belong to backend, frontend, or both.</td></tr>
-            <tr><td><code>verification.commands</code></td><td>The exact commands that prove a change: format, static analysis, test, smoke, build, e2e.</td></tr>
-            <tr><td><code>tracker</code></td><td>Where tickets live — for example <code>local-markdown</code>.</td></tr>
-            <tr><td><code>protected_files</code></td><td>Files the agent must never modify, such as <code>AGENTS.md</code>.</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <p>
+        Ten top-level keys, one of them optional. In short: which profiles are active
+        (<code>backend</code>, <code>frontend</code>), where their code lives
+        (<code>source_scopes</code>), the exact commands that prove a change
+        (<code>verification.commands</code>), where tickets and documents live
+        (<code>tracker</code>, <code>artifacts</code>, <code>history</code>), which files an agent
+        must never touch (<code>protected_files</code>), and — once you configure the Gate — the
+        <code>evaluation_gate</code> policy.
+      </p>
+
+      <p>
+        <strong>Section 05 is the full reference</strong>, with every key, every legal value, and
+        who decides it. Read it before you hand-edit this file, which you will end up doing.
+      </p>
 
       <div class="note note-caution">
         <span class="note-tag">The unknown / none distinction</span>
@@ -695,9 +700,267 @@
       </div>
     </section>
 
-    <section id="loop">
+    <section id="config-reference">
       <div class="sec-head">
         <span class="sec-num">Section 05</span>
+        <h2>The configuration file, in full</h2>
+      </div>
+
+      <p>
+        <code>.agent-framework.yaml</code> has two readers. The lifecycle skills read it to know
+        your project; the Gate reads it to know what to enforce. <code>framework-setup</code>
+        writes it, but every project ends up editing it by hand — to add a dependency root, raise a
+        timeout, declare a secret — so this is the reference for doing that safely.
+      </p>
+
+      <p>
+        The authoritative shape is
+        <code>skills/framework-setup/references/agent-framework.schema.json</code>, a JSON Schema
+        you can validate against. Both schema v3 and v4 are legal; <strong>v4 is required for the
+        Gate</strong> and is what this section documents.
+      </p>
+
+      <h3>A complete file</h3>
+
+      <p>A Laravel and Livewire project, migrated to v4, with the Gate configured:</p>
+
+      <pre><code>schema_version: 4
+backend: laravel                 # laravel | express-typescript | none | unknown
+frontend: livewire               # livewire | react-typescript | svelte-typescript | none | unknown
+tracker: local-markdown          # local-markdown | github | jira | linear
+artifacts:
+  srs: docs/specifications/srs.md
+  glossary: null                 # null means "not established", never "none"
+  adrs: docs/adr
+guidelines:
+  - AGENTS.md
+source_scopes:
+  backend:  [app, bootstrap, config, database, routes, tests]
+  frontend: [resources/js]
+  shared:   []
+verification:
+  profile: laravel-livewire
+  capabilities:
+    - laravel-format
+    - laravel-static-analysis
+    - laravel-tests
+    - frontend-build
+  commands:
+    format:
+      backend:
+        - {"runner":"composer-bin","args":["pint","--dirty","--format","agent"],
+           "working_directory":".","timeout_seconds":60,"allowed_environment":[],
+           "evidence_category":"format","source_scope":"backend"}
+      frontend: []
+      both: []
+    static_analysis:
+      backend:
+        - {"runner":"composer-bin","args":["phpstan","analyse","--memory-limit=512M"],
+           "working_directory":".","timeout_seconds":120,"allowed_environment":[],
+           "evidence_category":"static_analysis","source_scope":"backend"}
+      frontend: []
+      both: []
+    test:
+      backend:
+        - {"runner":"php-script","args":["artisan","test","--compact"],
+           "working_directory":".","timeout_seconds":800,"allowed_environment":[],
+           "evidence_category":"test","source_scope":"backend"}
+      frontend: []
+      both: []
+    smoke: {backend: [], frontend: [], both: []}
+    build:
+      backend: []
+      frontend:
+        - {"runner":"package-script","args":["build"],
+           "working_directory":".","timeout_seconds":120,"allowed_environment":[],
+           "evidence_category":"build","source_scope":"frontend"}
+      both: []
+    e2e: {backend: [], frontend: [], both: []}
+evaluation_gate:
+  checks:    {"required":["configuration.format.formatter",
+                          "configuration.static-analysis.static-analysis",
+                          "configuration.broad-tests.test"],
+              "advisory":["configuration.build.build"]}
+  budget:    {"total_seconds":1400}
+  bypass:    {"enabled":false,"marker":null}
+  execution: {"budget_skippable":[],
+              "dependency_roots":["node_modules","vendor"],
+              "dependency_provisioning":{"vendor":"copy"}}
+  evidence:  {"sensitive_inputs":["APP_KEY"],"environment_files":[".env"]}
+history:
+  path: docs/history
+  required: true
+protected_files:
+  - AGENTS.md</code></pre>
+
+      <div class="note">
+        <span class="note-tag">Why the inline JSON</span>
+        <p>
+          The Gate block is written as one line of JSON per subcontract. That is valid YAML, it is
+          what <code>--configure-gate</code> emits, and it keeps each subcontract a single unit you
+          replace whole rather than a block you can half-edit. You may reformat it as ordinary YAML
+          if you prefer; only the parsed value matters, and any edit needs a re-pin either way
+          (Section 12).
+        </p>
+      </div>
+
+      <h3>The top-level keys</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Legal values</th><th>Who decides</th></tr></thead>
+          <tbody>
+            <tr><td><code>schema_version</code></td><td><code>3</code> or <code>4</code>. v3 stays readable throughout <code>0.x</code>; the Gate needs v4.</td><td><span class="who w-auto">tool-derived</span></td></tr>
+            <tr><td><code>backend</code></td><td><code>laravel</code>, <code>express-typescript</code>, <code>none</code>, <code>unknown</code>. <code>none</code> is v4 only.</td><td><span class="who w-auto">tool-derived</span> — you confirm</td></tr>
+            <tr><td><code>frontend</code></td><td><code>livewire</code>, <code>react-typescript</code>, <code>svelte-typescript</code>, <code>none</code>, <code>unknown</code>.</td><td><span class="who w-auto">tool-derived</span> — you confirm</td></tr>
+            <tr><td><code>tracker</code></td><td><code>local-markdown</code>, <code>github</code>, <code>jira</code>, <code>linear</code>.</td><td><span class="who w-you">your decision</span></td></tr>
+            <tr><td><code>artifacts</code></td><td>Exactly three keys — <code>srs</code>, <code>glossary</code>, <code>adrs</code> — each a path or <code>null</code>.</td><td><span class="who w-you">your decision</span></td></tr>
+            <tr><td><code>guidelines</code></td><td>Unique strings. The instruction files that apply — <code>AGENTS.md</code>, <code>CLAUDE.md</code>.</td><td><span class="who w-auto">tool-derived</span></td></tr>
+            <tr><td><code>source_scopes</code></td><td>Exactly three lists — <code>backend</code>, <code>frontend</code>, <code>shared</code>.</td><td><span class="who w-auto">tool-derived</span> — you confirm</td></tr>
+            <tr><td><code>verification</code></td><td><code>profile</code>, <code>capabilities</code>, <code>commands</code>. All three required.</td><td>mixed — see below</td></tr>
+            <tr><td><code>evaluation_gate</code></td><td><strong>Optional.</strong> Absent means unconfigured; present means configured but still inactive.</td><td><span class="who w-you">your decision</span></td></tr>
+            <tr><td><code>history</code></td><td><code>path</code> (string or <code>null</code>) and <code>required</code> (boolean).</td><td><span class="who w-you">your decision</span></td></tr>
+            <tr><td><code>protected_files</code></td><td>Unique strings. Files setup and agents must preserve byte-for-byte.</td><td><span class="who w-you">your decision</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        No other top-level key is legal — the schema sets <code>additionalProperties: false</code>,
+        so a typo is a validation error rather than a silently ignored setting.
+      </p>
+
+      <div class="note note-caution">
+        <span class="note-tag"><code>unknown</code> is not <code>none</code>, and <code>null</code> is neither</span>
+        <p>
+          <code>none</code> means "we checked; there is no frontend." <code>unknown</code> means
+          "nobody has established this yet" — it stays <em>active and conservative</em>, so its
+          checks still run. A <code>null</code> path, or an empty list, is an explicit unresolved
+          value: a skill that needs it must ask rather than invent one. Nothing in the framework
+          silently converts between these, because each conversion changes which checks run.
+        </p>
+      </div>
+
+      <h3>The four legal v4 combinations</h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Shape</th><th><code>backend</code></th><th><code>frontend</code></th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>Backend-only</td><td>configured</td><td><code>none</code></td><td>Frontend scopes and frontend commands must be empty.</td></tr>
+            <tr><td>Frontend-only</td><td><code>none</code></td><td>configured</td><td>Backend scopes and backend commands must be empty.</td></tr>
+            <tr><td>Full-stack</td><td>configured</td><td>configured</td><td>The ordinary case.</td></tr>
+            <tr><td>Tooling-only</td><td><code>none</code></td><td><code>none</code></td><td>Requires <code>verification.profile: tooling</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        The schema enforces the emptiness rules: declaring <code>frontend: none</code> and leaving a
+        frontend command behind is rejected, not ignored.
+      </p>
+
+      <h3><code>verification.commands</code> — the Command descriptor</h3>
+
+      <p>
+        Commands are grouped by <strong>category</strong> (<code>format</code>,
+        <code>static_analysis</code>, <code>test</code>, <code>smoke</code>, <code>build</code>,
+        <code>e2e</code>), then by <strong>scope</strong> (<code>backend</code>,
+        <code>frontend</code>, <code>both</code> — all three keys always present, empty lists
+        allowed). In v4 each entry is an OS-independent descriptor with exactly these seven fields,
+        all required:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Legal values</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>runner</code></td><td><code>composer-bin</code>, <code>php-script</code>, <code>package-script</code>, <code>repository-script</code></td><td>Logical, never a path. This is what makes the file portable across machines and operating systems.</td></tr>
+            <tr><td><code>args</code></td><td>Array of strings, at least one</td><td>Already split — no shell quoting, no shell. <code>args[0]</code> names the tool for <code>composer-bin</code> and <code>package-script</code>.</td></tr>
+            <tr><td><code>working_directory</code></td><td>Repository-relative string</td><td><code>.</code> for the root. Absolute paths, drive letters, and <code>..</code> are rejected by pattern.</td></tr>
+            <tr><td><code>timeout_seconds</code></td><td>Integer ≥ 1</td><td>No default exists anywhere. Exceeding it is <span class="pill p-unver">unverified</span>, which blocks.</td></tr>
+            <tr><td><code>allowed_environment</code></td><td>Unique environment variable <em>names</em></td><td>The only variables this command receives. Your shell is not inherited. Gate-approved sensitive inputs are handed over regardless of this list.</td></tr>
+            <tr><td><code>evidence_category</code></td><td>Lowercase slug</td><td>Which ladder rung the evidence files under.</td></tr>
+            <tr><td><code>source_scope</code></td><td><code>backend</code>, <code>frontend</code>, <code>both</code></td><td>Must match the list the descriptor sits in; the schema enforces it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Adding a flag to a tool — a memory limit, an extra path — is an edit to <code>args</code>
+        here, and nowhere else. There is exactly one place a command is defined, which is why Gate
+        policy names check identities rather than commands.
+      </p>
+
+      <h3><code>evaluation_gate</code> — the five subcontracts</h3>
+
+      <p>
+        All five are mandatory once the key exists. Here is the part that surprises people:
+        <strong>the schema constrains only <code>checks</code> and <code>budget</code></strong>. The
+        other three are open maps — any key except a banned name, any JSON value — and the Gate,
+        not the schema, decides what it reads out of them. So a misspelled key in
+        <code>execution</code> or <code>evidence</code> validates cleanly and does nothing.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Subcontract</th><th>Key</th><th>Value</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="2"><code>checks</code></td><td><code>required</code></td><td>Unique check identities. A failure or <span class="pill p-unver">unverified</span> here blocks.</td><td>—</td></tr>
+            <tr><td><code>advisory</code></td><td>Unique check identities. Never blocks, never compensates.</td><td>—</td></tr>
+            <tr><td><code>budget</code></td><td><code>total_seconds</code></td><td>Integer ≥ 1. The whole evaluation. <strong>Only key allowed</strong> — anything else fails with a message about the integer.</td><td>—</td></tr>
+            <tr><td rowspan="3"><code>bypass</code></td><td><code>enabled</code></td><td>Boolean. Must be stated explicitly; you cannot omit the subcontract.</td><td>—</td></tr>
+            <tr><td><code>marker</code></td><td>Non-empty string or <code>null</code>. The commit-visible marker. An enabled bypass without one is refused.</td><td><code>null</code></td></tr>
+            <tr><td><code>require_reference</code></td><td>Boolean. Demands <code>--reference</code> on every grant.</td><td><code>false</code></td></tr>
+            <tr><td rowspan="3"><code>execution</code></td><td><code>budget_skippable</code></td><td>Advisory identities droppable when time runs short. May never name a required one.</td><td><code>[]</code></td></tr>
+            <tr><td><code>dependency_roots</code></td><td>Repository-relative directories your checks need that Git does not track. Provided beside the snapshot, never graded.</td><td><code>[]</code></td></tr>
+            <tr><td><code>dependency_provisioning</code></td><td><code>"link"</code>, <code>"copy"</code>, or a per-root map such as <code>{"vendor":"copy"}</code>. A map key not in <code>dependency_roots</code> is refused by name.</td><td><code>"link"</code></td></tr>
+            <tr><td rowspan="5"><code>evidence</code></td><td><code>sensitive_inputs</code></td><td>Environment variable <strong>names</strong> to redact everywhere and hand to every check. A value here is refused.</td><td><code>[]</code></td></tr>
+            <tr><td><code>environment_files</code></td><td>Repository-relative, git-ignored <code>NAME=value</code> files a declared name may be resolved from. A tracked file is refused.</td><td><code>[]</code></td></tr>
+            <tr><td><code>inline_bytes</code></td><td>Inline redacted output kept per attempt. Lower only.</td><td>32 KiB</td></tr>
+            <tr><td><code>blob_bytes</code></td><td>Per retained output blob. Lower only.</td><td>4 MiB</td></tr>
+            <tr><td><code>evaluation_blob_bytes</code></td><td>Output blobs per evaluation. Lower only.</td><td>32 MiB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        A configured limit above a ceiling never takes effect and is <em>reported</em> rather than
+        silently ignored. Truncation keeps the beginning and end of the output and states inside the
+        excerpt how many bytes were dropped.
+      </p>
+
+      <div class="note note-critical">
+        <span class="note-tag">Names the Gate block may never use, at any depth</span>
+        <p>
+          <code>activation</code>, <code>activated</code>, <code>allowed_environment</code>,
+          <code>args</code>, <code>capabilities</code>, <code>client</code>, <code>command</code>,
+          <code>commands</code>, <code>evidence_category</code>, <code>executable</code>,
+          <code>hook</code>, <code>profile</code>, <code>profiles</code>, <code>receipt</code>,
+          <code>runner</code>, <code>source_scope</code>, <code>trust</code>, <code>version</code>,
+          <code>working_directory</code>.
+        </p>
+        <p>
+          That is command ownership enforced structurally: Gate policy cannot grow a second place
+          where a command lives. An innocent <code>"version": 1</code> inside your evidence policy
+          is rejected for the same reason as a deliberate <code>"commands"</code>. Section 09 has
+          the rest of the hand-editing refusals.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">Every edit in this section needs a re-pin</span>
+        <p>
+          On an activated clone, changing any of this has no effect until you deactivate and
+          activate again — and until you do, commits are denied with <code>integrity-drift</code>
+          while <code>git gate status</code> still reports healthy. Section 12.
+        </p>
+      </div>
+    </section>
+
+    <section id="loop">
+      <div class="sec-head">
+        <span class="sec-num">Section 06</span>
         <h2>The daily working loop</h2>
       </div>
 
@@ -766,7 +1029,7 @@
 
     <section id="gate">
       <div class="sec-head">
-        <span class="sec-num">Section 06</span>
+        <span class="sec-num">Section 07</span>
         <h2>The Change Evaluation Gate</h2>
       </div>
 
@@ -817,7 +1080,7 @@
 
     <section id="gate-states">
       <div class="sec-head">
-        <span class="sec-num">Section 07</span>
+        <span class="sec-num">Section 08</span>
         <h2>Installed, configured, activated</h2>
       </div>
 
@@ -860,7 +1123,7 @@
 
     <section id="gate-setup">
       <div class="sec-head">
-        <span class="sec-num">Section 08</span>
+        <span class="sec-num">Section 09</span>
         <h2>Turning the Gate on</h2>
       </div>
 
@@ -1171,7 +1434,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
             </tr>
             <tr>
               <td><code>execution.dependency_provisioning</code></td>
-              <td>How those directories are provided: <code>link</code> (the default — a symbolic link to your own installation, provided instantly) or <code>copy</code> (a real directory). Declare <code>copy</code> when your tooling resolves a path to its realpath. It is never detected for you.</td>
+              <td>How those directories are provided: <code>link</code> (the default — a symbolic link to your own installation, provided instantly) or <code>copy</code> (a real directory beside the snapshot). Declare <code>copy</code> only for the roots whose tooling resolves a path to its realpath. Write one word to apply it to every root, or a map to choose per root — <code>{"vendor": "copy"}</code> — where anything the map does not name stays <code>link</code>. It is never detected for you.</td>
             </tr>
             <tr>
               <td><code>evidence</code></td>
@@ -1192,11 +1455,77 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
       <div class="note note-caution">
         <span class="note-tag">Untracked does not mean unnecessary</span>
         <p>
-          A snapshot holds what Git tracks, and nothing your <code>.gitignore</code> excludes. So a
-          tool that reads an installed dependency, or an import path some build step generates,
-          finds nothing there unless you name its directory in
-          <code>execution.dependency_roots</code>. This is the single most likely reason a check
-          that passes in your terminal does not pass in the Gate.
+          A snapshot holds source files, not installed ones. Whatever your
+          <code>.gitignore</code> excludes is never in it — so a tool that reads an installed
+          dependency, or an import path some build step generates, finds nothing there unless you
+          name its directory in <code>execution.dependency_roots</code>. This is the single most
+          likely reason a check that passes in your terminal does not pass in the Gate.
+        </p>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">The two snapshots hold different things</span>
+        <p>
+          "The snapshot" is two slightly different trees, and the difference matters more than it
+          sounds:
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Taken at</th><th>Holds</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>git commit</code></td>
+                <td>Exactly the tracked content you are committing — the index, written out with
+                <code>git checkout-index</code>. Nothing untracked, ever.</td>
+              </tr>
+              <tr>
+                <td>A desktop preflight</td>
+                <td>What a person looking at the clone would see: tracked files <strong>plus every
+                untracked file your <code>.gitignore</code> does not exclude</strong>, minus
+                deletions.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          So an untracked file you never think about is inside the preflight capture. Usually that
+          is what you want — it is how a file the agent has just written gets graded before it is
+          staged. It also means <strong>anything untracked and un-ignored is the Gate's problem
+          too</strong>.
+        </p>
+      </div>
+
+      <div class="note note-critical">
+        <span class="note-tag">Gitignore your installed skills — 0.8.0 defect</span>
+        <p>
+          Several installers place agent skills in your project as <strong>symbolic links to
+          directories</strong> — <code>.claude/skills/&lt;skill&gt;</code> pointing at a shared
+          checkout is the common shape. Those links are untracked, and unless you ignore them they
+          are enumerated into the preflight capture by the rule above. Materialising one reads the
+          link, follows it to a directory, and fails:
+        </p>
+        <pre><code>Preflight (not a commit decision): unverified.
+
+  snapshot-mismatch
+  The exact snapshot could not be materialized:
+  EISDIR: illegal operation on a directory, read</code></pre>
+        <p>
+          The capture is all-or-nothing, so one such link makes <strong>every</strong> preflight
+          <span class="pill p-unver">unverified</span> — no checks run, and the message names no
+          path. Commits are unaffected, because the commit snapshot is tracked-only. A clone in
+          this state looks activated, healthy and quiet, and is silently telling you nothing.
+        </p>
+        <p class="cmd-label">Ignore the install directories your agents use</p>
+        <pre><code>printf '/.claude\n/.agents\n/.cursor\n' &gt;&gt; .gitignore</code></pre>
+        <p>
+          Ignore only the ones your project actually has, and check first whether any of them holds
+          something you meant to commit. If you would rather not change a shared file, the same
+          lines in <code>.git/info/exclude</code> are clone-local and work identically. No re-pin is
+          needed — ignore rules are not pinned by the receipt.
+        </p>
+        <p>
+          This is a defect, not a design: a snapshot has no stated policy for a symlink, and the
+          capture should not die on one. Until it has one, ignoring the directories is the fix.
         </p>
       </div>
 
@@ -1210,10 +1539,30 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           runner derives the wrong project root; a TypeScript import resolver does it, so your own
           aliased imports are classified as external and an import-order rule fails code that is
           correct. If your formatter, static analysis, or tests fail only under the Gate and pass
-          by hand, set <code>execution.dependency_provisioning</code> to <code>copy</code>. It
-          costs real time and real disk on every commit — a tree of thirty-four thousand files
-          measured at about ten seconds to provide, two to clean up, and 373 MiB — which is why
-          it is yours to declare rather than ours to assume.
+          by hand, declare <code>copy</code> for that root.
+        </p>
+        <p>
+          Declare it <strong>per root</strong>, not for everything. A scalar
+          <code>"dependency_provisioning": "copy"</code> copies every declared root; a map copies
+          only the ones you name:
+        </p>
+        <pre><code>execution: {"dependency_roots": ["node_modules", "vendor", "resources/js/actions"],
+            "dependency_provisioning": {"vendor": "copy", "resources/js/actions": "copy"}}</code></pre>
+        <p>
+          A key naming a directory that is not in <code>dependency_roots</code> is refused by name,
+          never ignored. A <code>copy</code> that cannot be performed is reported
+          <code>dependency-root-unavailable</code> and never quietly served as a link.
+        </p>
+        <p>
+          <strong>What it costs depends on your filesystem, and the Gate finds out by measuring
+          rather than by asking which system you are on.</strong> Each capture that copies anything
+          writes one 8 MiB probe, asks the platform's own copy program to clone it, and reads the
+          volume's free space before and after. Where the clone really happened — APFS, Btrfs, XFS
+          with reflinks, ReFS — the roots are shared rather than duplicated and cost close to
+          nothing in disk. Where it did not, the bytes are written and a tree of thirty-four
+          thousand files costs roughly ten seconds to provide, two to reclaim, and 373 MiB per
+          evaluation. Copying only the roots that need it is what keeps that bill small on the
+          machines that have to pay it.
         </p>
       </div>
 
@@ -1412,15 +1761,70 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         change and writes nothing; the second performs that exact preview:
       </p>
 
+      <p class="cmd-label">1 — Preview, and read it</p>
       <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code></pre>
 
+      <p class="cmd-label">2 — Confirm that exact preview</p>
+      <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate --confirm PASTE_THE_TOKEN_HERE</code></pre>
+
       <p>
-        Read the preview, then run it again naming the token it printed —
-        <code>gate activate --confirm PASTE_THE_TOKEN_HERE</code>. If the executable is on your path
-        it is simply <code>change-evaluation-gate activate</code>. The path form is
-        installation-specific: the script sits wherever your client placed the skill, so resolve it
-        beside the skill's own <code>SKILL.md</code> rather than copying a path from here.
+        If the executable is on your path it is simply
+        <code>change-evaluation-gate activate</code>. The path form is installation-specific: the
+        script sits wherever your client placed the skill, so resolve it beside the skill's own
+        <code>SKILL.md</code> rather than copying a path from here. <strong>Once this succeeds you
+        never need either form again</strong> — activation writes a
+        <code>git gate</code> shortcut into this clone's own <code>.git/config</code>, and every
+        later command in this guide is <code>git gate …</code> from anywhere in the repository.
       </p>
+
+      <div class="note note-caution">
+        <span class="note-tag">Activating a desktop client? Its hooks file must already exist</span>
+        <p>
+          Plain <code>git</code> is the default and needs nothing. A desktop client is a separate,
+          later invocation — <code>gate activate --client cursor</code> — and it registers the Gate
+          by merging <em>one entry</em> into a file that client owns. <strong>The Gate never creates
+          that file.</strong> It cannot know a format it has not read, including whether the format
+          carries its own version, so a missing file is reported rather than invented:
+        </p>
+        <pre><code>adapter-registration-unverified
+The declared registration file .cursor/hooks.json is not on disk.</code></pre>
+        <p>
+          Activation still succeeds — that client is simply left unregistered and sends you no
+          preflight. Create the file yourself first, then activate:
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Client</th><th><code>--client</code></th><th>File it must find</th></tr></thead>
+            <tbody>
+              <tr><td>Git</td><td><code>git</code> (default)</td><td>— this clone's own hook chain</td></tr>
+              <tr><td>Cursor</td><td><code>cursor</code></td><td><code>.cursor/hooks.json</code>, carrying <code>"version": 1</code></td></tr>
+              <tr><td>Codex Desktop</td><td><code>codex-desktop</code></td><td><code>.codex/hooks.json</code></td></tr>
+              <tr><td>Claude Code Desktop</td><td><code>claude-code-desktop</code></td><td><code>.claude/settings.local.json</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="cmd-label">A minimum Cursor file, if you have none</p>
+        <pre><code>mkdir -p .cursor
+printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></pre>
+        <p>
+          Everything else in that file is written back exactly as its owner wrote it — other hooks,
+          other events, the <code>permissions</code> block beside one client's hooks. If something
+          other than the expected container already sits where the entry belongs, the Gate reports
+          <code>surface-shape-incompatible</code> and leaves the file untouched rather than
+          repairing it.
+        </p>
+      </div>
+
+      <div class="note">
+        <span class="note-tag">A desktop client can pause the transaction</span>
+        <p>
+          Trust is granted by the client, never by the Gate on your behalf. A desktop client that
+          has not granted it pauses activation, leaves no integration active, and prints the exact
+          command that resumes it —
+          <code>gate activate --resume &lt;transaction-id&gt; --confirm &lt;token&gt;</code>. Grant
+          trust in the client, then run that.
+        </p>
+      </div>
 
       <div class="note">
         <span class="note-tag">The token binds the confirmation to that exact preview</span>
@@ -1455,7 +1859,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
 
     <section id="gate-commit">
       <div class="sec-head">
-        <span class="sec-num">Section 09</span>
+        <span class="sec-num">Section 10</span>
         <h2>What happens at a commit</h2>
       </div>
 
@@ -1511,20 +1915,36 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
       </div>
     </section>
 
-    <section id="gate-off">
+    <section id="gate-commands">
       <div class="sec-head">
-        <span class="sec-num">Section 10</span>
-        <h2>Status, repair, turning it off</h2>
+        <span class="sec-num">Section 11</span>
+        <h2>Everyday commands</h2>
       </div>
 
       <p>
-        All of these are subcommands of the same command Step 4 used, and all follow the same rule:
-        <strong>every one previews and writes nothing</strong> until you run it again naming the
-        token the preview printed. No flag previews and performs in one invocation, and there is no
-        <code>--yes</code> or <code>--force</code>. An activated clone also carries
-        <code>git gate</code> — a shortcut activation wrote into that clone's own
-        <code>.git/config</code> and nowhere else, so <code>git gate status</code> works from any
-        subdirectory and never follows the repository to anyone else.
+        On an activated clone every one of these is <code>git gate …</code>. That shortcut is a
+        clone-local Git alias activation wrote into this clone's own <code>.git/config</code> and
+        nowhere else — it works from any subdirectory, it is never committed, and it never follows
+        the repository to anybody else. It disappears when you deactivate.
+      </p>
+
+      <p class="cmd-label">The one you will run most</p>
+      <pre><code>git gate status</code></pre>
+
+      <p>
+        Every command follows one rule: <strong>it previews and writes nothing</strong> until you
+        run it again naming the token the preview printed. No flag previews and performs in one
+        invocation, and there is no <code>--yes</code> or <code>--force</code>.
+      </p>
+
+      <pre><code>git gate repair                          # prints a preview and a token
+git gate repair --confirm &lt;token&gt;        # performs exactly that preview</code></pre>
+
+      <p>
+        Add <code>--json</code> to any of them for the same document in machine-readable form.
+        Exit status is <code>0</code> when nothing is wrong or the confirmation was performed,
+        <code>1</code> when the clone needs attention — including a confirmation this clone
+        refused — and <code>2</code> when the command could not run.
       </p>
 
       <div class="table-wrap">
@@ -1532,8 +1952,9 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>. Repairs nothing and writes nothing — observation never mutates.</td></tr>
-            <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned registrations, only after you confirm a preview.</td></tr>
-            <tr><td><strong>update</strong></td><td>Switches to a newer Gate release atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately.</td></tr>
+            <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12.</td></tr>
+            <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
+            <tr><td><strong>bypass</strong></td><td>Grants one one-shot bypass of the exact staged snapshot, where policy enables it. Section 10 covers what it demands.</td></tr>
             <tr><td><strong>deactivate</strong></td><td>Removes the hook and receipt. Keeps your configuration and all historical evidence.</td></tr>
             <tr><td><strong>uninstall</strong></td><td>Removes project-installed assets. Requires deactivation first.</td></tr>
             <tr><td><strong>cleanup</strong></td><td>Removes only Gate keys from <code>.agent-framework.yaml</code>. Never deletes the file.</td></tr>
@@ -1548,15 +1969,176 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         whole operation rather than half-doing it. Anything that drifted is reported and left exactly
         where it is.
       </p>
+
+      <div class="note">
+        <span class="note-tag">Two things this command is not</span>
+        <p>
+          <code>gate fix</code> is a separate contract and is refused here by name — an evaluation
+          never rewrites your code, so applying a formatter's rewrite is its own explicit
+          operation. And there is no subcommand that evaluates the tree on demand: to find out
+          what the Gate thinks of your work right now, commit, or read the preflight your desktop
+          client sends.
+        </p>
+      </div>
+    </section>
+
+    <section id="gate-policy-change">
+      <div class="sec-head">
+        <span class="sec-num">Section 12</span>
+        <h2>Changing policy after activation</h2>
+      </div>
+
+      <p>
+        This is the part that surprises people, so it gets its own section. Editing
+        <code>.agent-framework.yaml</code> on an activated clone <strong>does not change what the
+        Gate enforces</strong>. Activation pinned an identity of that file into the receipt, and
+        the next commit compares the file against that pin.
+      </p>
+
+      <div class="note note-critical">
+        <span class="note-tag">What actually happens after you edit the file</span>
+        <p>
+          The next commit is denied. Not with a verdict about your code — the control surface no
+          longer matches what the receipt pinned, so the evaluation is
+          <span class="pill p-unver">unverified</span> with <code>integrity-drift</code>. The clone
+          cannot say what it is enforcing, and nothing that cannot be said is proved.
+        </p>
+        <p>
+          <code>git gate status</code> in release 0.8.0 does <strong>not</strong> notice this. It
+          reconciles the client registrations and reports <code>healthy</code>, because the status
+          command does not yet pass the configuration observation the commit runners make. So
+          "status says healthy, commits are denied" is a known gap, not a broken clone. Trust the
+          commit, not the status, on this one question.
+        </p>
+      </div>
+
+      <p class="cmd-label">Re-pin the changed policy — edit, then all four</p>
+      <pre><code>git gate deactivate
+git gate deactivate --confirm &lt;token&gt;
+git gate activate
+git gate activate --confirm &lt;token&gt;</code></pre>
+
+      <p>
+        Deactivation removes the hook, the receipt and the <code>git gate</code> alias, and keeps
+        your configuration and every historical evidence record. Activation then pins the file as
+        it now reads. Because the alias goes with the receipt, the two activate invocations use the
+        path form again:
+        <code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code>.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>You changed…</th><th>Then</th></tr></thead>
+          <tbody>
+            <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: deactivate, activate.</td></tr>
+            <tr><td>A <code>verification.commands</code> entry the Gate binds</td><td>Re-pin: the identities and the pinned runners both come from it.</td></tr>
+            <tr><td><code>evidence.sensitive_inputs</code> or <code>environment_files</code></td><td>Re-pin.</td></tr>
+            <tr><td><code>execution.dependency_roots</code> or <code>dependency_provisioning</code></td><td>Re-pin.</td></tr>
+            <tr><td>The installed Gate release</td><td><code>git gate update</code> — that one is not a re-pin.</td></tr>
+            <tr><td>A Git hook someone else's tool moved</td><td><code>git gate repair</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">Save the file before you preview</span>
+        <p>
+          The preview identifies the bytes on disk, not the buffer in your editor. An unsaved change
+          produces an activation that pins the old policy and a preview whose identity looks
+          unchanged — which reads exactly like the tool ignoring you. If the identity does not move
+          after an edit you believe you made, the edit is not on disk.
+        </p>
+      </div>
+
+      <p>
+        Configuration itself is one-shot: running <code>--configure-gate</code> a second time fails
+        with <code>The Gate is already configured</code>. After the first time you edit the
+        <code>evaluation_gate</code> block in <code>.agent-framework.yaml</code> directly, or remove
+        it with <code>git gate cleanup</code> and configure again.
+      </p>
+    </section>
+
+    <section id="gate-trouble">
+      <div class="sec-head">
+        <span class="sec-num">Section 13</span>
+        <h2>When the Gate disagrees with your terminal</h2>
+      </div>
+
+      <p>
+        A check passes when you run it by hand and fails or reports
+        <span class="pill p-unver">unverified</span> under the Gate. Almost always this is the
+        evaluation environment, not your code. Work down this list in order — it is ordered by how
+        often each one turns out to be the answer.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>What you see</th><th>Usually</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Tool reports "not found", or a dependency is missing</td>
+              <td>The snapshot holds only what Git tracks. <code>vendor</code>, <code>node_modules</code> and generated directories are not in it.</td>
+              <td>Name the directory in <code>execution.dependency_roots</code>, then re-pin.</td>
+            </tr>
+            <tr>
+              <td>The check runs but reports nonsense — wrong project root, your own imports flagged as external, a test suite that finds no tests</td>
+              <td>A tool resolved a path to its realpath, followed the link out of the snapshot, and is now describing <em>your clone</em> instead of the tree it is grading.</td>
+              <td>Declare <code>copy</code> for that one root in <code>execution.dependency_provisioning</code>, then re-pin.</td>
+            </tr>
+            <tr>
+              <td>Tests fail on a missing key, token, or connection string that works in your shell</td>
+              <td>The evaluation does not inherit your shell. A check receives only its <code>allowed_environment</code>, plus any name you approved.</td>
+              <td>Name it in <code>evidence.sensitive_inputs</code>, and name the file it lives in — usually <code>.env</code> — in <code>evidence.environment_files</code>. Then re-pin.</td>
+            </tr>
+            <tr>
+              <td><span class="pill p-unver">unverified</span>, no output, right around the time limit</td>
+              <td>The per-check timeout, or the total budget, ran out. A cold run inside a fresh snapshot is slower than a warm one in your terminal.</td>
+              <td>Raise <code>timeout_seconds</code> for that command and <code>budget.total_seconds</code>, then re-pin.</td>
+            </tr>
+            <tr>
+              <td>Every preflight is <span class="pill p-unver">unverified</span> with no checks listed, while commits work normally</td>
+              <td>The preflight capture died. Almost always an untracked symlinked directory — installed agent skills under <code>.claude/</code> or <code>.agents/</code> — which the capture enumerates and cannot read.</td>
+              <td>Ignore those directories (Section 09). Nothing re-pins.</td>
+            </tr>
+            <tr>
+              <td>Every commit is denied with <code>integrity-drift</code></td>
+              <td>The configuration moved after activation.</td>
+              <td>Section 12.</td>
+            </tr>
+            <tr>
+              <td>A required check never seems to run at all</td>
+              <td>A check identity in policy that nothing binds. Identities are not validated — any non-empty string is accepted.</td>
+              <td>Re-derive with <code>--draft-policy</code> and compare. This is why hand-writing policy is discouraged.</td>
+            </tr>
+            <tr>
+              <td>Your desktop client is silent</td>
+              <td>Either it was never activated, or its registration file was missing at activation, or it has no feedback channel at all.</td>
+              <td>Check Step 4's prerequisite box. Silence from Claude Code Desktop or Codex Desktop is never a pass.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="note-tag">Read the decision, not the scrollback</span>
+        <p>
+          Every denial is written to the clone-local evidence record before the commit is refused,
+          with the reason code and the unmet requirement named. It is still there after the terminal
+          has scrolled. When the Gate cannot supply something a check declared it needs, it says so
+          by name and never dresses that up as a verdict about your code — so treat
+          <span class="pill p-unver">unverified</span> as a message about the environment until you
+          have ruled the environment out.
+        </p>
+      </div>
     </section>
 
     <section id="limits">
       <div class="sec-head">
-        <span class="sec-num">Section 11</span>
+        <span class="sec-num">Section 14</span>
         <h2>Limits you should know</h2>
       </div>
 
-      <p>These are real constraints in 0.9.0, not disclaimers. Plan around them.</p>
+      <p>These are real constraints in 0.8.0, not disclaimers. Plan around them.</p>
 
       <h3>It is not tamper-proof</h3>
       <div class="note note-critical">
@@ -1600,7 +2182,8 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
       <p>
         Checks run against a materialized copy in a temporary directory, not your working tree. That
         copy has no <code>.git</code>, holds nothing your <code>.gitignore</code> excludes, and gets
-        only the dependency roots you declared. A command that expects any of those finds them
+        only the dependency roots you declared. A commit's copy holds the tracked content being
+        committed; a preflight's also holds every untracked file you have not ignored (Section 09). A command that expects any of those finds them
         missing. When a check declares what it needs and the snapshot cannot supply it, the Gate
         reports <span class="pill p-unver">unverified</span> naming the unmet requirement — never a
         verdict about your code. Treat that as a message about the evaluation environment, and do
@@ -1616,6 +2199,20 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         evidence snapshot, never a permanent allowlist.
       </p>
 
+      <h3>Some things you have to find out by doing them</h3>
+      <p>
+        There is no command that reports what this machine can do before you commit to anything, and
+        no command that evaluates the tree on demand. You learn that a runner does not resolve here
+        when an activation preview refuses, and that a check fails when a commit is denied. Two more
+        specific gaps, both known and both slated:
+      </p>
+      <ul>
+        <li><strong>Status does not see configuration drift.</strong> Section 12. It reports
+        <code>healthy</code> over a policy the commit runners will deny.</li>
+        <li><strong>Status does not tell you what to do next.</strong> A finding names what is
+        wrong, not the command that puts it right.</li>
+      </ul>
+
       <h3>Two risks stay open</h3>
       <ul>
         <li><strong>Slow checks encourage bypass.</strong> If your required checks are slow, people
@@ -1628,7 +2225,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
 
     <section id="glossary">
       <div class="sec-head">
-        <span class="sec-num">Section 12</span>
+        <span class="sec-num">Section 15</span>
         <h2>Glossary</h2>
       </div>
 
@@ -1641,7 +2238,10 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
         <div><dt>Evidence ladder</dt><dd>The eight ordered check stages, cheapest and most specific first.</dd></div>
         <div><dt>Snapshot</dt><dd>An isolated copy of exactly the content being committed, so results cannot be confused with unstaged edits.</dd></div>
         <div><dt>unverified</dt><dd>The check could not be trusted to have run correctly. Treated as blocking, never as a pass.</dd></div>
-        <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned.</dd></div>
+        <div><dt>Receipt</dt><dd>The clone-local record proving what was activated and what it pinned — including an identity of <code>.agent-framework.yaml</code>, which is why a later edit needs a re-pin.</dd></div>
+        <div><dt>Re-pin</dt><dd>Deactivate, then activate, so the receipt pins the configuration as it now reads. The only way a policy change takes effect.</dd></div>
+        <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
+        <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, gone when you deactivate.</dd></div>
         <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure may return as a follow-up; a clean turn stays quiet.</dd></div>
       </dl>
     </section>
@@ -1650,7 +2250,7 @@ node .agents/skills/framework-setup/scripts/configure.mjs --migrate-v4 --mapping
 </div>
 
 <footer class="footer">
-  AI Skills Framework 0.9.0 · 29 released skills · Gate module optional and dormant by default ·
+  AI Skills Framework 0.8.0 · 29 released skills · Gate module optional and dormant by default ·
   Derived from Matt Pocock's skills, with concepts from OpenSPDD
 </footer>
 </body>
