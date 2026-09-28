@@ -32,6 +32,7 @@ import {
   REASON_OUTCOMES,
   validateEvaluationRequest,
 } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
+import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 
 const runFile = promisify(execFile);
 
@@ -1578,6 +1579,7 @@ const channelDecision = ({
   checks = [],
   diagnostics = [],
   changedGraderSurfaces = [],
+  unversionedGraderSurfaces = [],
 } = {}) => ({
   evaluationId: 'sha256:tb-064-evaluation',
   outcome,
@@ -1587,6 +1589,7 @@ const channelDecision = ({
   integrity: {
     changedGraderSurfaces,
     controlSurfaceChanged: changedGraderSurfaces.some((surface) => surface.kind === 'gate-configuration'),
+    unversionedGraderSurfaces,
   },
 });
 
@@ -1799,5 +1802,98 @@ test('TB-064: the presentation carries the decision\'s diagnostics and changed G
 
     assert.deepEqual(presentation.diagnostics, [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }]);
     assert.deepEqual(presentation.changedGraderSurfaces, [{ kind: 'gate-configuration', path: '.agent-framework.yaml' }]);
+  }
+});
+
+/**
+ * TB-066 — say a Gate configuration is unversioned, once.
+ *
+ * An untracked declared surface is unversioned, not changed. The presentation
+ * carries it every time; the channel states it with its remedy unless the
+ * runner says this clone was already told about exactly this set, and that
+ * answer withholds the unversioned statement and nothing else.
+ */
+const UNVERSIONED = Object.freeze([
+  { kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: 'sha256:a' },
+  { kind: 'verification-script', path: 'tools/check.mjs', checkId: 'configuration.broad-tests.test', role: 'evaluate', identity: 'sha256:b' },
+]);
+
+const INTENT = /tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i;
+
+test('TB-066 NFR-OPER-001 / AC-SEC-001: a passing turn over unversioned surfaces states each one and the maintainer\'s remedy, as a fact and never as a change or an accusation', () => {
+  const decision = channelDecision({
+    outcome: 'passed',
+    checks: [passedCheck('configuration.broad-tests.test')],
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+
+    assert.match(message, /^Preflight \(not a commit decision\): passed\./);
+    assert.doesNotMatch(message, /Changed Grader surfaces/, message);
+    assert.match(message, /Unversioned Grader surfaces/, message);
+
+    for (const surface of UNVERSIONED) {
+      assert.ok(message.includes(`- ${surface.kind} ${surface.path}`), `${adapterId} did not name ${surface.path}: ${message}`);
+    }
+
+    // The remedy is named through the one table, and it is the maintainer's.
+    assert.ok(
+      message.includes(remedyInstruction(REMEDIES['grader-surface-unversioned'])),
+      `${adapterId} did not name the remedy: ${message}`,
+    );
+    assert.match(message, /the maintainer's and not this agent's/, message);
+    assert.match(message, /never stages or commits/, message);
+    assert.doesNotMatch(message, INTENT, `${adapterId} implied intent: ${message}`);
+  }
+});
+
+test('TB-066: a set already stated is withheld, so an otherwise clean turn is silent again', () => {
+  const decision = channelDecision({
+    outcome: 'passed',
+    checks: [passedCheck('configuration.broad-tests.test')],
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const view = presentDecision({ adapterId, decision });
+
+    assert.deepEqual(
+      view.presentation.unversionedGraderSurfaces,
+      UNVERSIONED.map(({ kind, path: relative }) => ({ kind, path: relative })),
+      'the presentation carries what the decision records, whatever the channel says.',
+    );
+    assert.equal(
+      formatFeedback({ adapterId, view, unversionedAlreadyStated: true }),
+      describeAdapter(adapterId).capabilities.feedback.none,
+      `${adapterId} repeated an unversioned set it had already stated.`,
+    );
+  }
+});
+
+test('TB-066 RISK-008 / SG-CFG-001: withholding a stated unversioned set never withholds a changed Grader surface, a failing check, or a diagnostic', () => {
+  const changed = [{ kind: 'gate-configuration', path: 'config/gate.yaml', checkId: null, role: null, identity: 'sha256:c' }];
+  const decision = channelDecision({
+    outcome: 'failed',
+    checks: [failedCheck('configuration.broad-tests.test')],
+    diagnostics: [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+    changedGraderSurfaces: changed,
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const field = describeAdapter(adapterId).capabilities.feedback.field;
+    const message = JSON.parse(formatFeedback({
+      adapterId,
+      view: presentDecision({ adapterId, decision }),
+      unversionedAlreadyStated: true,
+    }))[field];
+
+    assert.match(message, /Changed Grader surfaces/, message);
+    assert.ok(message.includes('- gate-configuration config/gate.yaml'), message);
+    assert.match(message, /configuration\.broad-tests\.test: failed/, message);
+    assert.match(message, /integrity-drift/, message);
+    assert.doesNotMatch(message, /Unversioned Grader surfaces/, message);
   }
 });

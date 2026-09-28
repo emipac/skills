@@ -22,6 +22,7 @@ import {
   validateDecision,
 } from './evaluation-contract.mjs';
 import { authorizationFor } from './policy.mjs';
+import { REMEDIES, remedyInstruction } from './remedies.mjs';
 
 /**
  * The capability categories every adapter declares for itself.
@@ -962,6 +963,9 @@ export const presentDecision = ({ adapterId, decision }) => {
       // (`NFR-OPER-001`, `FR-EVAL-009`, `TB-064`).
       diagnostics: (decision.diagnostics ?? []).map(presentDiagnostic),
       changedGraderSurfaces: (decision.integrity?.changedGraderSurfaces ?? []).map(presentGraderSurface),
+      // Carried every time, as the decision records it; whether the channel
+      // says it again is the channel's own rule (`TB-066`).
+      unversionedGraderSurfaces: (decision.integrity?.unversionedGraderSurfaces ?? []).map(presentGraderSurface),
     },
   };
 };
@@ -1016,9 +1020,11 @@ const plural = (count, noun) => `${count} more ${noun}${count === 1 ? '' : 's'}`
  * outcome; each failing check's own summary, because those are what a
  * maintainer can act on directly; every control-surface drift; the other
  * diagnostics with their reason codes; every changed Grader surface, stated as
- * observation; and, when anything was left out, what was left out.
+ * observation; every unversioned Grader surface with its remedy, unless this
+ * clone was already told about exactly that set; and, when anything was left
+ * out, what was left out.
  */
-const decisionLines = (view) => {
+const decisionLines = (view, { unversionedAlreadyStated = false } = {}) => {
   const presentation = view?.presentation ?? {};
   const failing = (presentation.checks ?? []).filter(
     (check) => check?.outcome !== 'passed' && check?.outcome !== 'not-applicable',
@@ -1027,6 +1033,7 @@ const decisionLines = (view) => {
   const drift = diagnostics.filter((diagnostic) => diagnostic?.reasonCode === DRIFT_REASON);
   const other = diagnostics.filter((diagnostic) => diagnostic?.reasonCode !== DRIFT_REASON);
   const surfaces = presentation.changedGraderSurfaces ?? [];
+  const unversioned = unversionedAlreadyStated ? [] : presentation.unversionedGraderSurfaces ?? [];
   const listedChecks = failing.slice(0, FEEDBACK_LIMITS.checks);
   const listedOther = other.slice(0, FEEDBACK_LIMITS.diagnostics);
   const omittedChecks = failing.slice(listedChecks.length);
@@ -1061,6 +1068,17 @@ const decisionLines = (view) => {
     );
   }
 
+  // A standing fact about the clone, not about this change, and nobody's
+  // fault: stated plainly, once, with the remedy named as the maintainer's.
+  // The agent is told what it is not asked to do (`FR-LIFE-009`, `TB-066`).
+  if (unversioned.length > 0) {
+    lines.push(
+      'Unversioned Grader surfaces (Git does not track these, so they have no history to review or diff; not a change and not a fault; said once, and again only when this set changes):',
+      ...unversioned.map((surface) => `- ${surface?.kind} ${surface?.path}`),
+      `Remedy, the maintainer's and not this agent's: ${remedyInstruction(REMEDIES['grader-surface-unversioned'])}.`,
+    );
+  }
+
   const omitted = [
     ...(omittedChecks.length > 0
       ? [`${plural(omittedChecks.length, 'failing check')} (${tally(omittedChecks.map((check) => check?.reasonCode ?? check?.outcome))})`]
@@ -1082,14 +1100,20 @@ const decisionLines = (view) => {
  *
  * The runner never learns a client field name: it asks this function, and this
  * function reads the field from the declaration (FR-ADAPT-004, SG-OWNER-001).
- * A genuinely clean preflight — `passed`, with no diagnostic and no changed
- * Grader surface — returns the declared silence form so a clean turn is not
- * interrupted. Every other outcome — a failed required check, unverified
- * coverage, drift, a changed Grader surface, or a harness fault — occupies the
- * declared field as one message rendered from the decision (`TB-064`). An
- * adapter that declares no channel returns none.
+ * A genuinely clean preflight — `passed`, with no diagnostic, no changed
+ * Grader surface, and no unversioned surface still to state — returns the
+ * declared silence form so a clean turn is not interrupted. Every other
+ * outcome — a failed required check, unverified coverage, drift, a changed
+ * Grader surface, an unversioned surface not yet stated, or a harness fault —
+ * occupies the declared field as one message rendered from the decision
+ * (`TB-064`). An adapter that declares no channel returns none.
+ *
+ * `unversionedAlreadyStated` is the runner's answer to whether this clone was
+ * already told about exactly this set of unversioned surfaces (`TB-066`). It
+ * withholds that one statement and nothing else: a changed Grader surface is
+ * never rate-limited by it.
  */
-export const formatFeedback = ({ adapterId, view } = {}) => {
+export const formatFeedback = ({ adapterId, view, unversionedAlreadyStated = false } = {}) => {
   const adapter = describeAdapter(adapterId);
   const feedback = adapter?.capabilities?.feedback ?? null;
 
@@ -1100,7 +1124,8 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
   const silent = view?.outcome === 'passed'
     && view?.failure == null
     && (view?.presentation?.diagnostics ?? []).length === 0
-    && (view?.presentation?.changedGraderSurfaces ?? []).length === 0;
+    && (view?.presentation?.changedGraderSurfaces ?? []).length === 0
+    && (unversionedAlreadyStated || (view?.presentation?.unversionedGraderSurfaces ?? []).length === 0);
 
   if (silent) {
     return typeof feedback.none === 'string' ? feedback.none : '';
@@ -1114,7 +1139,7 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
   // has always had (`FR-ADAPT-005`).
   const message = view?.failure
     ? `${PREFLIGHT_LEAD}: unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`
-    : decisionLines(view).join('\n');
+    : decisionLines(view, { unversionedAlreadyStated }).join('\n');
 
   return `${JSON.stringify({ [feedback.field]: message })}\n`;
 };

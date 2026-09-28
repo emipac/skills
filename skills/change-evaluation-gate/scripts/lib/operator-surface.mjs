@@ -106,6 +106,7 @@ import {
   openEvidenceStore,
   resolveGitCommonDirectory,
 } from './evidence-store.mjs';
+import { unversionedGraderSurfaces } from './grader-surface.mjs';
 import {
   createExecutionRoot,
   observeControlSurface,
@@ -118,7 +119,7 @@ import {
   resolveSensitiveInputs,
 } from './hook-runner.mjs';
 import { evaluateActivatedTree } from './preflight-runner.mjs';
-import { captureSnapshot, probeDependencyProvisioning } from './snapshot.mjs';
+import { captureSnapshot, listPathChanges, probeDependencyProvisioning } from './snapshot.mjs';
 import {
   SHARED_CONFIGURATION_FILE,
   confirmConfigurationCleanup,
@@ -1351,8 +1352,25 @@ const observeStatusControlSurface = async ({ repositoryRoot, receipt }) => {
     resolved: runners.ok ? runners.resolved : new Map(),
   });
 
-  return { ...surface, configuration };
+  return { ...surface, configuration, checks };
 };
+
+/**
+ * The declared Grader surfaces of this clone that Git does not track, asked of
+ * the same status parse and the same classification every evaluation uses, so
+ * status and the next decision cannot disagree about which surfaces are
+ * unversioned (`TB-066`). Git is asked without optional locks, so not even its
+ * opportunistic index refresh writes anything: status goes on recording
+ * nothing at all.
+ */
+const observeUnversionedSurfaces = async ({ repositoryRoot, checks }) => unversionedGraderSurfaces({
+  untrackedPaths: (await listPathChanges(
+    repositoryRoot,
+    'worktree',
+    (root, args) => runGit(root, ['--no-optional-locks', ...args]),
+  )).untracked,
+  checks,
+});
 
 /**
  * Say which file moved when the trusted configuration drifted.
@@ -1416,6 +1434,9 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
     repositoryRoot,
     adapters: clone.receipt === null ? null : observedAdapters(clone.receipt),
     controlSurface: surface?.observed ?? null,
+    unversionedGraderSurfaces: surface === null
+      ? null
+      : await observeUnversionedSurfaces({ repositoryRoot, checks: surface.checks }),
   });
   const findings = surface === null
     ? status.findings

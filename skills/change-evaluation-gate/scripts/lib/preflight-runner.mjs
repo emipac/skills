@@ -39,7 +39,7 @@ import {
   sweepOrphanedExecutionRoots,
 } from './hook-runner.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
-import { listChangedPaths } from './snapshot.mjs';
+import { listPathChanges } from './snapshot.mjs';
 
 const adapterIdFromArgv = (argv) => {
   const index = argv.indexOf('--adapter');
@@ -65,9 +65,9 @@ const parseNative = (stdin) => {
   }
 };
 
-const answer = ({ adapterId, view }) => ({
+const answer = ({ adapterId, view, unversionedAlreadyStated = false }) => ({
   exitCode: 0,
-  stdout: formatFeedback({ adapterId, view }),
+  stdout: formatFeedback({ adapterId, view, unversionedAlreadyStated }),
   stderr: '',
   view,
 });
@@ -125,6 +125,61 @@ const timesAlreadyRecorded = async (store, evaluationId) => {
       .length;
   } catch {
     return 0;
+  }
+};
+
+/** One unversioned surface set, compared as a set. */
+const surfaceSet = (surfaces) => JSON.stringify(
+  (surfaces ?? []).map((surface) => `${surface?.kind}\x00${surface?.path}`).sort(),
+);
+
+/**
+ * Whether this clone was already told about exactly this set of unversioned
+ * Grader surfaces — the channel's once-only rule (`TB-066`).
+ *
+ * The rule: the set is stated unless the decision this clone's Evidence store
+ * recorded immediately before this evaluation's own append recorded the same
+ * set. So an untouched, untracked configuration is stated on the first
+ * recorded evaluation that observes it and on none after, across turns,
+ * sessions, and clients alike; it is stated again only when the set changes —
+ * a surface is committed, removed, or newly left untracked — and a recorded
+ * decision with a different set in between resets it. Like the loop guard
+ * beside it, it reads the Gate's own append-only record rather than a client
+ * counter, and it remembers nothing of its own.
+ *
+ * It fails toward saying: an empty or unreadable store, a record from before
+ * this rule existed, or an envelope that cannot be read all mean the set is
+ * stated. Only the statement is withheld; the decision and its envelope record
+ * the set every time, and a changed Grader surface is never withheld.
+ */
+const unversionedStatedBefore = async (store, decision) => {
+  const unversioned = decision?.integrity?.unversionedGraderSurfaces ?? [];
+
+  if (unversioned.length === 0 || store === null
+    || typeof store.readLog !== 'function' || typeof store.readEnvelope !== 'function') {
+    return false;
+  }
+
+  try {
+    const log = await store.readLog();
+    const ownEvidenceId = decision?.evidence?.persisted === true
+      ? decision.evidence.reference?.evidenceId ?? null
+      : null;
+    const own = ownEvidenceId === null
+      ? -1
+      : log.findLastIndex((entry) => entry?.evidenceId === ownEvidenceId);
+    const earlier = own === -1 ? log : log.slice(0, own);
+    const previous = earlier.at(-1) ?? null;
+
+    if (previous === null || typeof previous.evidenceId !== 'string') {
+      return false;
+    }
+
+    const recorded = (await store.readEnvelope(previous.evidenceId))?.decision?.integrity?.unversionedGraderSurfaces;
+
+    return Array.isArray(recorded) && surfaceSet(recorded) === surfaceSet(unversioned);
+  } catch {
+    return false;
   }
 };
 
@@ -247,8 +302,17 @@ export const evaluateActivatedTree = async (request, {
   // `NFR-PERF-001`). Asked fresh every turn: nothing is remembered from the
   // last one, and this narrows only when this runner does the work, never
   // what it decides.
-  if ((await listChangedPaths(request.repository.root, request.change.kind)).length === 0) {
-    return judged(await evaluateWithoutSubject(request, gateInputs));
+  //
+  // The same parse names the untracked paths, which the no-subject decision
+  // still records as unversioned where a declared surface is among them
+  // (`TB-066`).
+  const pathChanges = await listPathChanges(request.repository.root, request.change.kind);
+
+  if (pathChanges.changed.length === 0) {
+    return judged(await evaluateWithoutSubject(request, {
+      ...gateInputs,
+      untrackedPaths: pathChanges.untracked,
+    }));
   }
 
   // The same reclamation the authoritative runner performs, from the same
@@ -381,6 +445,10 @@ export const runPreflight = async ({
   // what the gate has already recorded rather than by a client counter.
   let openedStore = null;
 
+  // The decision itself, kept so the once-only rule can find this evaluation's
+  // own append in the record it reads (`TB-066`).
+  let evaluatedDecision = null;
+
   // How many contract findings the returned decision produced, or `null` when
   // the contract accepted it. Only the count is kept: what the preflight
   // presents is submitted to an agent as its next user message, so a full dump
@@ -409,6 +477,7 @@ export const runPreflight = async ({
     }
 
     openedStore = evaluated.store;
+    evaluatedDecision = evaluated.decision;
 
     if (evaluated.findings.length > 0) {
       rejectedFindingCount = evaluated.findings.length;
@@ -463,5 +532,9 @@ export const runPreflight = async ({
     });
   }
 
-  return answer({ adapterId: adapter.id, view });
+  return answer({
+    adapterId: adapter.id,
+    view,
+    unversionedAlreadyStated: await unversionedStatedBefore(openedStore, evaluatedDecision),
+  });
 };

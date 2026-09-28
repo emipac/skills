@@ -158,6 +158,15 @@ table, so follow the command a denial names: `gate repair` is named only for a
 gate-owned hook registration, and a changed configuration, descriptor, or runner
 pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
 historical Evidence.
+
+A declared Grader surface Git does not track — typically an
+`.agent-framework.yaml` nobody committed — is **unversioned**, not changed. Every
+decision records it in `integrity.unversionedGraderSurfaces`, never in
+`changedGraderSurfaces`, and it never sets `controlSurfaceChanged`. `git gate
+status` states it as an informational finding that moves no health, and its
+`next:` line names the remedy, which is the maintainer's: commit it. Never
+stage or commit it on the maintainer's behalf; the Gate does neither, and a
+clone may run this way indefinitely.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
@@ -266,10 +275,12 @@ declared feedback channel — never through its exit status. The channel carries
 the decision, not a summary of its checks: the outcome, each failing check's
 summary, every diagnostic by reason code (control-surface drift, an unprovided
 dependency root, an invalid configuration), and every changed Grader surface,
-bounded and with any truncation stated. A turn is silent only when it passed
-with no diagnostic and no changed Grader surface. When the channel reports
-drift or an environment reason, report it to the maintainer; do not edit the
-project to make it go away.
+bounded and with any truncation stated. Unversioned Grader surfaces are named
+once, with the maintainer's remedy, and not again until that set changes. A turn
+is silent only when it passed with no diagnostic, no changed Grader surface,
+and no unversioned surface still to state. When the channel reports drift, an
+environment reason, or an unversioned surface, report it to the maintainer; do
+not edit, stage, or commit anything to make it go away.
 
 Only authoritative Git authorizes a change. A desktop surface presents the same
 decision as structured `not-authoritative` preflight feedback and blocks

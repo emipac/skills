@@ -49,6 +49,14 @@
  *    authoritative runner agree about the index the same way; and a passing
  *    check appends no Evidence (AC-EVAL-001, AC-EVAL-006, NFR-REL-001,
  *    SG-EVAL-001, RISK-010, TB-061).
+ * 9. `unversioned-channel` — a real activated clone whose configuration and
+ *    check script were never committed, driven through the real packaged
+ *    preflight program over consecutive turns: the first names each as an
+ *    unversioned Grader surface with the maintainer's remedy, no turn calls
+ *    either a changed Grader surface, an unchanged turn and a turn that edits
+ *    ordinary work are both silent, and once the maintainer commits the
+ *    configuration an edit to it is reported as changed on the next
+ *    evaluation (AC-SEC-001, RISK-008, FR-EVAL-009, NFR-OPER-001, TB-066).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime — in particular no hook manager and no desktop client
@@ -1315,6 +1323,117 @@ const operatorCheck = async () => {
   return { name: 'operator-check', ok: findings.length === 0, findings };
 };
 
+/**
+ * TB-066 — an untracked configuration is unversioned, and is said once.
+ *
+ * A real project's `.agent-framework.yaml` is untracked until somebody commits
+ * it, and `git status` reports it on every turn. The channel used to call it a
+ * changed Grader surface on every one of them, so the line was identical on the
+ * turn somebody did edit it. Repetition is only observable across real
+ * consecutive runs, so this drives the packaged program turn after turn.
+ */
+const unversionedChannel = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-hook-conformance-unversioned-');
+  const temporaryRoot = await temporaryDirectory('gate-hook-conformance-unversioned-tmp-');
+  const { field, none } = describeAdapter('cursor').capabilities.feedback;
+  const messageOf = (result) => {
+    try {
+      return result.stdout === none ? null : JSON.parse(result.stdout)[field];
+    } catch (error) {
+      check(findings, false, `A turn was not answered through the declared channel (${error.message}): ${result.stdout}${result.stderr}`);
+
+      return null;
+    }
+  };
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+  // Written and never committed, exactly as `framework-setup` leaves them.
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), settledConfiguration(), 'utf8');
+  await publishReceipt(root);
+
+  const first = await runPackagedPreflight({ root, temporaryRoot });
+  const unchanged = await runPackagedPreflight({ root, temporaryRoot });
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nordinary work\n', 'utf8');
+
+  const ordinary = await runPackagedPreflight({ root, temporaryRoot });
+  const said = messageOf(first);
+
+  check(findings, typeof said === 'string', `The first turn did not state the unversioned surfaces: ${first.stdout}${first.stderr}`);
+
+  if (typeof said === 'string') {
+    for (const [pattern, detail] of [
+      [/^Preflight \(not a commit decision\): passed\./, 'the passed outcome'],
+      [/Unversioned Grader surfaces/, 'that the surfaces are unversioned'],
+      [/- gate-configuration \.agent-framework\.yaml/, 'the unversioned configuration'],
+      [/- verification-script tools\/check\.mjs/, 'the unversioned check script'],
+      [/the maintainer's and not this agent's/, 'whose remedy it is'],
+      [/never stages or commits anything/, 'that the Gate commits nothing'],
+    ]) {
+      check(findings, pattern.test(said), `The first turn did not state ${detail}: ${said}`);
+    }
+
+    check(
+      findings,
+      !/tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i.test(said),
+      `The unversioned statement implied intent: ${said}`,
+    );
+  }
+
+  for (const [label, result] of [['first', first], ['unchanged', unchanged], ['ordinary', ordinary]]) {
+    check(findings, result.exitCode === 0, `The ${label} turn exited ${result.exitCode}.`);
+    check(findings, !result.stdout.includes('Changed Grader surfaces'), `The ${label} turn called an untouched, untracked file changed: ${result.stdout}`);
+  }
+
+  check(findings, unchanged.stdout === none, `An unchanged turn repeated the unversioned statement: ${unchanged.stdout}`);
+  check(findings, ordinary.stdout === none, `A turn that edited ordinary work repeated the unversioned statement: ${ordinary.stdout}`);
+
+  const recorded = await lastRecordedDecision(root);
+
+  check(
+    findings,
+    recorded?.integrity?.controlSurfaceChanged === false
+      && (recorded?.integrity?.changedGraderSurfaces ?? []).length === 0
+      && JSON.stringify((recorded?.integrity?.unversionedGraderSurfaces ?? []).map((surface) => surface.path))
+        === JSON.stringify(['.agent-framework.yaml', 'tools/check.mjs']),
+    `The silent turn's decision did not record the unversioned surfaces as the fact they are: ${JSON.stringify(recorded?.integrity)}`,
+  );
+
+  // The maintainer commits the configuration; an edit to it is now a change.
+  await git(root, ['add', '.agent-framework.yaml', 'tools/check.mjs', SOURCE]);
+  await commit(root, 'versioned');
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    `# edited after it was versioned\n${settledConfiguration()}`,
+    'utf8',
+  );
+
+  const edited = await runPackagedPreflight({ root, temporaryRoot });
+  const changed = messageOf(edited);
+
+  check(
+    findings,
+    typeof changed === 'string' && /Changed Grader surfaces[^\n]*\n- gate-configuration \.agent-framework\.yaml/.test(changed),
+    `An edit to the committed configuration was not reported as changed: ${edited.stdout}${edited.stderr}`,
+  );
+  check(findings, !edited.stdout.includes('Unversioned'), `A committed configuration was still called unversioned: ${edited.stdout}`);
+  check(
+    findings,
+    (await lastRecordedDecision(root))?.integrity?.controlSurfaceChanged === true,
+    'A tracked control surface moved and the decision did not say so.',
+  );
+
+  return { name: 'unversioned-channel', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1329,6 +1448,7 @@ const main = async () => {
       await settledTurn(),
       await driftedChannel(),
       await operatorCheck(),
+      await unversionedChannel(),
     ];
   } finally {
     for (const root of temporaryRoots) {

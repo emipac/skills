@@ -162,6 +162,7 @@ const DECISION_SECTION_FIELDS = Object.freeze({
     'snapshotId',
     'changedGraderSurfaces',
     'controlSurfaceChanged',
+    'unversionedGraderSurfaces',
     'runtimeBinding',
   ],
   evidence: ['id', 'format', 'persisted', 'reference'],
@@ -734,6 +735,7 @@ export const validateDecision = (decision) => {
     || !isPlainObject(decision.integrity?.providerVersions)
     || !Array.isArray(decision.integrity?.changedGraderSurfaces)
     || typeof decision.integrity?.controlSurfaceChanged !== 'boolean'
+    || !Array.isArray(decision.integrity?.unversionedGraderSurfaces)
     || decision.integrity?.configurationId !== decision.configurationId
     || decision.integrity?.snapshotId !== decision.snapshot?.id
     || decision.integrity?.environmentId !== decision.environment?.id) {
@@ -769,19 +771,35 @@ export const validateDecision = (decision) => {
     });
   }
 
-  for (const [index, surface] of members(decision.integrity?.changedGraderSurfaces).entries()) {
-    if (!isPlainObject(surface)
-      || !GRADER_SURFACE_KINDS.includes(surface.kind)
-      || !isNonEmptyString(surface.path)
-      || !(surface.checkId === null || isNonEmptyString(surface.checkId))
-      || !(surface.role === null || isNonEmptyString(surface.role))
-      || !(surface.identity === null || isIdentityDigest(surface.identity))) {
-      errors.push({
-        code: 'grader-surface-invalid',
-        path: `decision.integrity.changedGraderSurfaces[${index}]`,
-        message: 'Every reported Grader surface must name its kind, repository-relative path, owning check or null, role or null, and evaluated content identity or null.',
-      });
+  // A changed and an unversioned surface have one shape, and no path is both:
+  // Git either tracks a file or it does not (`TB-066`).
+  for (const list of ['changedGraderSurfaces', 'unversionedGraderSurfaces']) {
+    for (const [index, surface] of members(decision.integrity?.[list]).entries()) {
+      if (!isPlainObject(surface)
+        || !GRADER_SURFACE_KINDS.includes(surface.kind)
+        || !isNonEmptyString(surface.path)
+        || !(surface.checkId === null || isNonEmptyString(surface.checkId))
+        || !(surface.role === null || isNonEmptyString(surface.role))
+        || !(surface.identity === null || isIdentityDigest(surface.identity))) {
+        errors.push({
+          code: 'grader-surface-invalid',
+          path: `decision.integrity.${list}[${index}]`,
+          message: 'Every reported Grader surface must name its kind, repository-relative path, owning check or null, role or null, and evaluated content identity or null.',
+        });
+      }
     }
+  }
+
+  const unversionedPaths = new Set(
+    members(decision.integrity?.unversionedGraderSurfaces).map((surface) => surface?.path),
+  );
+
+  if (members(decision.integrity?.changedGraderSurfaces).some((surface) => unversionedPaths.has(surface?.path))) {
+    errors.push({
+      code: 'grader-surface-invalid',
+      path: 'decision.integrity.changedGraderSurfaces',
+      message: 'A Grader surface Git does not track is unversioned, never changed; no path may be reported as both.',
+    });
   }
 
   if (!isIdentityDigest(decision.evidence?.id)

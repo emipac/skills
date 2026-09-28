@@ -571,3 +571,98 @@ test('AC-EVAL-008: the runtime-binding smoke capability is registered and machin
     ],
   );
 });
+
+/**
+ * TB-066 — an untracked declared Grader surface is unversioned, not changed.
+ * Every fixture above commits its surfaces before it edits them; a real project
+ * starts with them untracked, and Git reports an untracked file on every
+ * worktree snapshot whether or not anybody touched it.
+ */
+test('TB-066 FR-EVAL-009 / AC-SEC-001: an untracked declared surface of every kind is recorded as unversioned, never as changed, and an undeclared untracked file is neither', async () => {
+  const root = await createRepository({ 'src/order.txt': 'original\n' });
+
+  for (const [relative, contents] of Object.entries({
+    '.agent-framework.yaml': 'schema_version: 4\n',
+    'scripts/smoke.mjs': 'process.exit(0);\n',
+    'gate/providers/node-package.mjs': 'export const provider = {};\n',
+    'tests/order.test.mjs': 'test("order", () => {});\n',
+    'phpstan.neon': 'parameters:\n  level: 5\n',
+  })) {
+    await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await writeFile(path.join(root, relative), contents, 'utf8');
+  }
+
+  const decision = await evaluate(request({ root }), {
+    checks: [descriptor({
+      id: 'node-package.broad-tests.script',
+      evaluate: command(['scripts/smoke.mjs', '--json'], { runner: 'repository-script' }),
+      evidence: { claims: ['test:script'], success_exit_codes: [0], report: null },
+    })],
+    executionRoot: await temporaryDirectory('gate-scope-exec-'),
+    profile: 'node-package',
+    runnerVersion: 'gate-runner/1.0.0',
+    providerVersions: { 'node-package': '1.0.0' },
+    graderSurfaces: {
+      providers: { 'node-package': 'gate/providers/node-package.mjs' },
+      tests: ['tests/**'],
+    },
+    execute: async () => passingAttempt(),
+  });
+
+  assert.deepEqual(validateDecision(decision), []);
+  assert.deepEqual(decision.integrity.changedGraderSurfaces, []);
+  assert.equal(decision.integrity.controlSurfaceChanged, false, 'no tracked control surface moved.');
+  assert.deepEqual(
+    decision.integrity.unversionedGraderSurfaces.map(({ kind, path: surfacePath }) => [kind, surfacePath]),
+    [
+      ['gate-configuration', '.agent-framework.yaml'],
+      ['provider', 'gate/providers/node-package.mjs'],
+      ['test', 'tests/order.test.mjs'],
+      ['verification-script', 'scripts/smoke.mjs'],
+    ],
+  );
+
+  // Bound to the content this evaluation materialized, exactly as a changed
+  // surface is, so the decision records what was graded under it.
+  for (const surface of decision.integrity.unversionedGraderSurfaces) {
+    assert.match(surface.identity, /^sha256:[0-9a-f]{64}$/);
+  }
+
+  // Unversioned is a condition, not a verdict: nothing about it changes the
+  // outcome or names an intent.
+  assert.equal(decision.outcome, 'passed');
+  assert.doesNotMatch(JSON.stringify(decision.integrity), /malicious|suspicious|tamper|hostile|attack/i);
+});
+
+test('TB-066: the contract requires the unversioned list and refuses a path reported as both changed and unversioned', async () => {
+  const root = await createRepository({ 'src/order.txt': 'original\n' });
+
+  await writeFile(path.join(root, 'src/order.txt'), 'changed\n', 'utf8');
+
+  const decision = await evaluate(request({ root }), {
+    checks: [descriptor()],
+    executionRoot: await temporaryDirectory('gate-scope-exec-'),
+    execute: async () => passingAttempt(),
+  });
+
+  assert.deepEqual(validateDecision(decision), []);
+
+  const surface = { kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: null };
+  const both = {
+    ...decision,
+    integrity: { ...decision.integrity, changedGraderSurfaces: [surface], unversionedGraderSurfaces: [surface] },
+  };
+
+  assert.ok(
+    validateDecision(both).some((error) => error.code === 'grader-surface-invalid'),
+    'a path Git does not track cannot also have changed.',
+  );
+
+  const { unversionedGraderSurfaces: _omitted, ...withoutList } = decision.integrity;
+
+  assert.ok(
+    validateDecision({ ...decision, integrity: withoutList })
+      .some((error) => error.path === 'decision.integrity.unversionedGraderSurfaces'),
+    'a decision always states its unversioned surfaces, even when there are none.',
+  );
+});

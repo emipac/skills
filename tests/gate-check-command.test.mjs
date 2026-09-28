@@ -582,3 +582,31 @@ test('TB-061 FR-EVAL-001: a commit after a passing check still runs the hook, an
   assert.equal(committed.authorization, 'allow');
   assert.equal(committed.snapshot.id, passing.document.observation.snapshot.id);
 });
+
+/**
+ * TB-066. `gate check` calls the preflight's own evaluation, so a configuration
+ * Git does not track stops being a changed Grader surface here too, and the
+ * decision it records states it as unversioned instead.
+ */
+test('TB-066 FR-EVAL-009: gate check does not call an untracked, untouched configuration a changed Grader surface, and its recorded decision says unversioned', async (t) => {
+  const root = await activatedClone(t);
+
+  await git(root, ['rm', '--cached', '--quiet', '.agent-framework.yaml']);
+  await git(root, ['-c', 'user.email=gate@example.test', '-c', 'user.name=Gate Check', 'commit', '--quiet', '--message', 'unversion']);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nBROKEN\n', 'utf8');
+
+  const result = await check(root);
+
+  assert.equal(result.document.failure, null, result.stderr);
+  assert.deepEqual(result.document.observation.graderSurfaces, []);
+  assert.match(result.stdout, /^grader surfaces: 0$/m);
+
+  const recorded = await lastRecordedDecision(root);
+
+  assert.deepEqual(recorded.integrity.changedGraderSurfaces, []);
+  assert.equal(recorded.integrity.controlSurfaceChanged, false);
+  assert.deepEqual(
+    recorded.integrity.unversionedGraderSurfaces.map((surface) => [surface.kind, surface.path]),
+    [['gate-configuration', '.agent-framework.yaml']],
+  );
+});

@@ -72,18 +72,13 @@ const order = (left, right) => {
 };
 
 /**
- * Report every declared Grader surface this change modified.
- *
- * @param {object} input changed paths, resolved checks, declarations, snapshot
- * @returns {Promise<Array<{kind: string, path: string, checkId: string|null, role: string|null, identity: string|null}>>}
+ * Every declared Grader surface among `paths`, sorted by kind then path, each
+ * bound to the content it was evaluated under. One classification serves both
+ * words, so `changed` and `unversioned` can never disagree about what a
+ * surface is — only about which paths are asked about.
  */
-export const changedGraderSurfaces = async ({
-  changedPaths = [],
-  checks = [],
-  declarations = {},
-  executionRoot = null,
-} = {}) => {
-  const changed = new Set(changedPaths);
+const declaredSurfacesAmong = async (paths, { checks, declarations, executionRoot }) => {
+  const among = new Set(paths);
   const configurationPaths = declarations.configuration ?? DEFAULT_GATE_CONFIGURATION_PATHS;
   const providerSources = declarations.providers ?? {};
   const testGlobs = declarations.tests ?? [];
@@ -98,25 +93,25 @@ export const changedGraderSurfaces = async ({
   };
 
   for (const relative of configurationPaths) {
-    if (changed.has(relative)) {
+    if (among.has(relative)) {
       record('gate-configuration', relative);
     }
   }
 
   for (const [provider, relative] of Object.entries(providerSources)) {
-    if (changed.has(relative)) {
+    if (among.has(relative)) {
       record('provider', relative, provider);
     }
   }
 
-  for (const relative of changed) {
+  for (const relative of among) {
     if (testGlobs.length > 0 && matchesAny(relative, testGlobs)) {
       record('test', relative);
     }
   }
 
   for (const surface of declaredScriptSurfaces(checks)) {
-    if (changed.has(surface.path)) {
+    if (among.has(surface.path)) {
       record('verification-script', surface.path, surface.check_id, surface.role);
     }
   }
@@ -131,9 +126,60 @@ export const changedGraderSurfaces = async ({
 };
 
 /**
+ * Report every declared Grader surface this change modified.
+ *
+ * A path Git does not track is never one of them. An untracked file is in a
+ * worktree change's path set because it is new work an applicability rule must
+ * see, but a declared surface Git does not track has no version for this
+ * change to have moved it from: it is unversioned, reported by
+ * `unversionedGraderSurfaces`, and a path is never both (`TB-066`).
+ *
+ * @param {object} input changed paths, untracked paths, resolved checks, declarations, snapshot
+ * @returns {Promise<Array<{kind: string, path: string, checkId: string|null, role: string|null, identity: string|null}>>}
+ */
+export const changedGraderSurfaces = async ({
+  changedPaths = [],
+  untrackedPaths = [],
+  checks = [],
+  declarations = {},
+  executionRoot = null,
+} = {}) => {
+  const untracked = new Set(untrackedPaths);
+
+  return declaredSurfacesAmong(
+    changedPaths.filter((relative) => !untracked.has(relative)),
+    { checks, declarations, executionRoot },
+  );
+};
+
+/**
+ * Report every declared Grader surface Git does not track.
+ *
+ * Unversioned is a standing fact about the clone, not something this change
+ * did: such a surface has no history, no review, and nothing to diff an edit
+ * against. It is reported in the same shape as a changed surface, of every
+ * declared kind — a test matched by a declared glob included, because an
+ * untracked test is the same fact about the same class of file — and, like a
+ * changed one, it classifies no intent and never changes an outcome
+ * (`FR-EVAL-009`, `AC-SEC-001`, `SG-TRUST-001`). Only declared surfaces are
+ * reported: an untracked file nothing declares is ordinary new work.
+ *
+ * @param {object} input untracked paths, resolved checks, declarations, snapshot
+ * @returns {Promise<Array<{kind: string, path: string, checkId: string|null, role: string|null, identity: string|null}>>}
+ */
+export const unversionedGraderSurfaces = async ({
+  untrackedPaths = [],
+  checks = [],
+  declarations = {},
+  executionRoot = null,
+} = {}) => declaredSurfacesAmong(untrackedPaths, { checks, declarations, executionRoot });
+
+/**
  * Whether this change touched the Gate control surface. The full dual-policy
  * transition that a control-surface change requires is owned elsewhere; here it
- * is made visible so it can never pass unnoticed (SG-CFG-001).
+ * is made visible so it can never pass unnoticed (SG-CFG-001). It is asked of
+ * changed surfaces only, so it is true only when a tracked control surface
+ * moved; an unversioned one never sets it (`TB-066`).
  */
 export const touchesControlSurface = (surfaces) => surfaces.some(
   (surface) => CONTROL_SURFACE_KINDS.includes(surface.kind),

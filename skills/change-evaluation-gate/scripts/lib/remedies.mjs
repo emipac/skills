@@ -70,6 +70,11 @@ export const REMEDIES = Object.freeze({
   // silently substitutes one program for another (`NFR-REL-003`).
   'runner-unpinned': 'sync',
   'runner-pin-drift': 'sync',
+  // A declared Grader surface Git does not track. Not a fault and never a
+  // refusal — a clone may run this way indefinitely — so the remedy is the
+  // maintainer's own act, and the Gate performs none of it (`FR-LIFE-009`,
+  // `SG-TRUST-001`, `TB-066`).
+  'grader-surface-unversioned': 'version-control',
 });
 
 /** The order remedies are performed in when a clone needs more than one. */
@@ -80,6 +85,7 @@ const REMEDY_ORDER = Object.freeze([
   'sync',
   'activation-transaction',
   'activate',
+  'version-control',
 ]);
 
 /** What every recovery that writes on this clone leaves exactly as it found. */
@@ -102,6 +108,7 @@ export const remedyInstruction = (remedy, command = 'gate') => ({
   sync: `${command} sync — a new Activation transaction that re-pins the configuration and the commands it resolves to under the adapters this clone already has; it previews first, writes only the receipt, and ${KEPT}`,
   'activation-transaction': `${command} deactivate, then ${command} activate — a new Activation transaction that pins what this clone declares now; each previews first and prints the token that confirms it, and each ${KEPT}`,
   activate: `${command} activate`,
+  'version-control': 'commit each unversioned Grader surface to version control, when you choose to, so it has history and review — the Gate never stages or commits anything, and running unversioned stays allowed',
 })[remedy] ?? null;
 
 /** The remedy recorded for one finding or reason code, or `null` when none is. */

@@ -1966,6 +1966,14 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
         configuration and all historical evidence survive it.
       </p>
 
+      <p>
+        If you never committed <code>.agent-framework.yaml</code> — or a script a check runs — status
+        lists it as <code>grader-surface-unversioned</code>, for information only: health does not
+        move, and its <code>next:</code> line says to commit it when you choose to. Until you do, that
+        file has no history and nothing to diff an edit against. The Gate never stages or commits it
+        for you, and running this way is allowed indefinitely.
+      </p>
+
       <p class="cmd-label">Does it pass right now?</p>
       <pre><code>git gate check                           # the working tree, as your desktop client's preflight sees it
 git gate check --staged                  # what the next commit would grade</code></pre>
@@ -2284,6 +2292,19 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
         <code>…</code>, and says what it left out by count and reason code. Drift and changed
         Grader surfaces are never left out.
       </p>
+      <p>
+        A file Git does not track is not a file the work changed. If your configuration was never
+        committed, the follow-up says so once, as a fact about the clone rather than the change:
+      </p>
+      <pre><code>Unversioned Grader surfaces (Git does not track these, so they have no history to review or diff; …):
+- gate-configuration .agent-framework.yaml
+Remedy, the maintainer's and not this agent's: commit each unversioned Grader surface to version control, …</code></pre>
+      <p>
+        It is not repeated on later turns — whether or not they change anything else — until the
+        set of unversioned files changes, and a turn with nothing else to report stays quiet again.
+        Once you commit the file, an edit to it is reported as a changed Grader surface on every
+        evaluation, as above.
+      </p>
 
       <h3>The snapshot is not your terminal</h3>
       <p>
@@ -2346,7 +2367,7 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
         <div><dt>Re-pin</dt><dd><code>git gate sync</code>, so the receipt pins the configuration as it now reads, under the adapters it already has. The only way a policy change takes effect.</dd></div>
         <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
         <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, and left in place by deactivation.</dd></div>
-        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure, a diagnostic such as drift, or an edited Grader surface returns as a follow-up; a clean turn stays quiet.</dd></div>
+        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure, a diagnostic such as drift, or an edited Grader surface returns as a follow-up, and an uncommitted configuration is mentioned once; a clean turn stays quiet.</dd></div>
       </dl>
     </section>
 

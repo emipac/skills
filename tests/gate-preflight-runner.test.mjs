@@ -1112,6 +1112,9 @@ test('TB-064 AC-SEC-001 / NFR-OPER-001 / FR-EVAL-009: a drifted clone whose chec
   const root = await throwawayRepository(t);
 
   await configureClone(root);
+  // TB-066: committed, so the edit below is a change to a tracked Grader
+  // surface. Left untracked it would be unversioned, which is a different fact.
+  await commitWorktree(root, 'configured');
   await publishReceipt(root);
   // Pinned above; changed below, and never re-pinned. `vendor` is declared and
   // does not exist, exactly as the incident's three roots did not.
@@ -1153,7 +1156,246 @@ test('TB-064 AC-SEC-001 / NFR-OPER-001 / FR-EVAL-009: a drifted clone whose chec
     assert.match(message, new RegExp(reasonCode), `the channel and the evidence disagree about ${reasonCode}: ${message}`);
   }
 
+  assert.ok(envelope.decision.integrity.changedGraderSurfaces.length > 0, 'the edited configuration is recorded as changed.');
+
   for (const surface of envelope.decision.integrity.changedGraderSurfaces) {
     assert.ok(message.includes(`${surface.kind} ${surface.path}`), `the evidence records ${surface.path} and the channel does not: ${message}`);
   }
+});
+
+/**
+ * TB-066 — say a Gate configuration is unversioned, once.
+ *
+ * Every Grader surface fixture above commits its configuration before it edits
+ * it. A real project starts, and usually stays, with `.agent-framework.yaml`
+ * untracked: `framework-setup` never commits it. On such a clone `git status`
+ * reports the file untracked on every turn, and the channel used to call it a
+ * changed Grader surface on every one of them, though nobody edited it.
+ */
+
+/** Every file under `root` but `.git`, with its content digest, in path order. */
+const worktreeDigest = async (root) => {
+  const entries = [];
+  const walk = async (directory) => {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort(
+      (left, right) => (left.name < right.name ? -1 : 1),
+    )) {
+      const absolute = path.join(directory, entry.name);
+
+      if (entry.isDirectory()) {
+        if (absolute !== path.join(root, '.git')) {
+          await walk(absolute);
+        }
+
+        continue;
+      }
+
+      entries.push({ path: path.relative(root, absolute), contentDigest: (await readFile(absolute)).toString('base64') });
+    }
+  };
+
+  await walk(root);
+
+  return contentIdentity(entries);
+};
+
+/** Every decision this clone's Evidence store recorded, in log order. */
+const recordedDecisions = async (root) => {
+  const log = (await readFile(evidenceLogPath(root), 'utf8').catch(() => ''))
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line));
+
+  return Promise.all(log.map(async (entry) => JSON.parse(await readFile(
+    path.join(root, '.git/change-evaluation-gate/evidence', entry.envelopePath),
+    'utf8',
+  )).decision));
+};
+
+const git = (root, args) => runFile('git', args, { cwd: root, env: isolatedGitEnvironment() });
+
+const followupOf = (result) => (result.stdout === '' ? null : JSON.parse(result.stdout).followup_message);
+
+/** A clone whose configuration and check script were written and never committed. */
+const unversionedClone = async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+
+  const untracked = (await git(root, ['status', '--porcelain', '--untracked-files=all'])).stdout;
+
+  assert.match(untracked, /^\?\? \.agent-framework\.yaml$/m, 'the fixture must leave the configuration untracked.');
+  assert.match(untracked, /^\?\? tools\/check\.mjs$/m, 'the fixture must leave the check script untracked.');
+
+  return root;
+};
+
+test('TB-066 FR-EVAL-009: two consecutive preflights over an untracked, untouched configuration report no changed Grader surface, and only the first says it is unversioned', async (t) => {
+  const root = await unversionedClone(t);
+  const before = await worktreeDigest(root);
+
+  const first = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+  const second = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  assert.equal(first.exitCode, 0, first.stderr);
+  assert.equal(second.exitCode, 0, second.stderr);
+
+  const message = followupOf(first);
+
+  assert.ok(message !== null, 'the first turn states the unversioned surfaces once.');
+  assert.match(message, /^Preflight \(not a commit decision\): passed\./);
+  assert.doesNotMatch(message, /Changed Grader surfaces/, `nobody edited anything that grades this change: ${message}`);
+  assert.match(message, /Unversioned Grader surfaces/, message);
+  // NFR-OPER-001: each surface is named, and so is the remedy, which is the
+  // maintainer's to perform.
+  assert.match(message, /- gate-configuration \.agent-framework\.yaml/, message);
+  assert.match(message, /- verification-script tools\/check\.mjs/, message);
+  assert.match(message, /maintainer/i, message);
+  assert.match(message, /commit/i, message);
+  // AC-SEC-001: a fact about the clone, implying nothing about anybody.
+  assert.doesNotMatch(message, /tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i, message);
+  assert.equal(
+    second.stdout,
+    describeAdapter('cursor').capabilities.feedback.none,
+    `an unchanged passing turn does not repeat the statement, and so does not re-prompt: ${second.stdout}`,
+  );
+
+  // The decision and its evidence record the fact every time, whatever the
+  // channel said (FR-EVAL-009).
+  const decisions = await recordedDecisions(root);
+
+  assert.equal(decisions.length, 2, 'both turns are recorded.');
+
+  for (const decision of decisions) {
+    assert.deepEqual(decision.integrity.changedGraderSurfaces, []);
+    assert.equal(decision.integrity.controlSurfaceChanged, false);
+    assert.deepEqual(
+      decision.integrity.unversionedGraderSurfaces.map((surface) => [surface.kind, surface.path]),
+      [['gate-configuration', '.agent-framework.yaml'], ['verification-script', 'tools/check.mjs']],
+    );
+  }
+
+  // FR-LIFE-009: nothing was staged, committed, or written to the worktree.
+  assert.equal(await worktreeDigest(root), before);
+  assert.match((await git(root, ['status', '--porcelain', '--untracked-files=all'])).stdout, /^\?\? \.agent-framework\.yaml$/m);
+  assert.equal((await git(root, ['rev-list', '--count', 'HEAD'])).stdout.trim(), '1');
+});
+
+test('TB-066 RISK-008 / SG-CFG-001: a tracked configuration edited by the change is reported as changed on every evaluation, with no once-only rule', async (t) => {
+  const root = await settledClone(t);
+
+  // A comment moves the file's content and not the policy it pins, so the
+  // edit is visible as a change without also drifting the control surface.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    `# edited by this change\n${await readFile(path.join(root, '.agent-framework.yaml'), 'utf8')}`,
+    'utf8',
+  );
+
+  const { maxIterations } = describeAdapter('cursor').capabilities.feedback;
+  const messages = [];
+
+  for (let attempt = 0; attempt < maxIterations; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    messages.push(followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) })));
+  }
+
+  for (const message of messages) {
+    assert.ok(message !== null, `every evaluation within the loop bound states the change: ${JSON.stringify(messages)}`);
+    assert.match(message, /Changed Grader surfaces[^\n]*\n- gate-configuration \.agent-framework\.yaml/, message);
+    assert.doesNotMatch(message, /Unversioned/, message);
+  }
+
+  for (const decision of await recordedDecisions(root)) {
+    assert.deepEqual(
+      decision.integrity.changedGraderSurfaces.map((surface) => [surface.kind, surface.path]),
+      [['gate-configuration', '.agent-framework.yaml']],
+    );
+    assert.equal(decision.integrity.controlSurfaceChanged, true, 'a tracked control surface moved.');
+    assert.deepEqual(decision.integrity.unversionedGraderSurfaces, []);
+  }
+});
+
+test('TB-066: committing an unversioned configuration and then editing it reports a change on the next evaluation', async (t) => {
+  const root = await unversionedClone(t);
+
+  assert.match(followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) })), /Unversioned Grader surfaces/);
+
+  await commitWorktree(root, 'versioned by the maintainer');
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    `# edited after it was versioned\n${await readFile(path.join(root, '.agent-framework.yaml'), 'utf8')}`,
+    'utf8',
+  );
+
+  const message = followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) }));
+
+  assert.ok(message !== null);
+  assert.match(message, /Changed Grader surfaces[^\n]*\n- gate-configuration \.agent-framework\.yaml/, message);
+  assert.doesNotMatch(message, /Unversioned/, message);
+
+  const decisions = await recordedDecisions(root);
+
+  assert.equal(decisions.at(-1).integrity.controlSurfaceChanged, true);
+  assert.deepEqual(decisions.at(-1).integrity.unversionedGraderSurfaces, []);
+});
+
+test('TB-066: the statement is not repeated on a turn that changes other work, and is made again when the unversioned set changes', async (t) => {
+  const root = await unversionedClone(t);
+
+  assert.match(followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) })), /Unversioned Grader surfaces/);
+
+  // The agent's next turn edits ordinary work: a new evaluation, the same
+  // unversioned set, and so nothing to say about it.
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nsecond turn\n', 'utf8');
+  assert.equal(followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) })), null);
+
+  // The maintainer versions the check script and leaves the configuration, and
+  // the agent's next turn edits ordinary work again.
+  await git(root, ['add', 'tools/check.mjs']);
+  await git(root, ['-c', 'user.email=gate@example.test', '-c', 'user.name=Gate Preflight Runner', 'commit', '--quiet', '--message', 'script']);
+  await writeFile(path.join(root, 'app/Order.php'), 'baseline\nthird turn\n', 'utf8');
+
+  const message = followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) }));
+
+  assert.ok(message !== null, 'a different set is a different fact, and it is stated.');
+  assert.match(message, /- gate-configuration \.agent-framework\.yaml/, message);
+  assert.doesNotMatch(message, /tools\/check\.mjs/, message);
+  assert.equal(followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) })), null);
+});
+
+test('TB-066: an untracked file that is not a declared Grader surface is reported by neither word', async (t) => {
+  const root = await settledClone(t);
+
+  // The observed project's shape: a tool's own configuration a check may read,
+  // untracked and declared as nothing.
+  await writeFile(path.join(root, 'phpstan.neon'), 'parameters:\n  level: 5\n', 'utf8');
+
+  const result = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  assert.equal(result.stdout, describeAdapter('cursor').capabilities.feedback.none, result.stdout);
+
+  const [decision] = await recordedDecisions(root);
+
+  assert.deepEqual(decision.integrity.changedGraderSurfaces, []);
+  assert.deepEqual(decision.integrity.unversionedGraderSurfaces, []);
+  assert.equal(decision.integrity.controlSurfaceChanged, false);
+});
+
+test('TB-066 SG-CFG-001: a configuration staged for the first time is tracked, and is reported as changed', async (t) => {
+  const root = await unversionedClone(t);
+
+  await git(root, ['add', '.agent-framework.yaml']);
+
+  const message = followupOf(await runPackaged({ cwd: root, payload: cursorStopPayload(root) }));
+
+  assert.ok(message !== null);
+  assert.match(message, /Changed Grader surfaces[^\n]*\n- gate-configuration \.agent-framework\.yaml/, message);
+  assert.match(message, /Unversioned Grader surfaces[^\n]*\n- verification-script tools\/check\.mjs\n/, message);
+
+  const [decision] = await recordedDecisions(root);
+
+  assert.equal(decision.integrity.controlSurfaceChanged, true);
+  assert.deepEqual(decision.integrity.unversionedGraderSurfaces.map((surface) => surface.path), ['tools/check.mjs']);
 });

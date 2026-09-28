@@ -196,6 +196,20 @@ pinned program is started and nothing is written. A trusted-configuration
 finding names `.agent-framework.yaml` as its `path`; the receipt pins an
 identity, not a document, so which key moved is not reported.
 
+**Unversioned Grader surfaces** (`TB-066`). On an activated clone `gate
+status` also states every declared Grader surface Git does not track — the
+configuration file and each `repository-script` a configured check invokes —
+as one `grader-surface-unversioned` finding per surface, `area:
+grader-surface`, `severity: informational`, with the relative `path`. It asks
+the same single `git status` parse (`listPathChanges`) and the same
+classification (`unversionedGraderSurfaces`) every evaluation uses, so status
+and the next decision name the same surfaces; Git is asked with
+`--no-optional-locks`, so status still writes nothing. An informational finding
+moves no grade: a clone may run with an unversioned configuration indefinitely,
+and nothing about it is a fault or an accusation (`SG-TRUST-001`,
+`AC-SEC-001`). This is where that standing fact is stated; the preflight channel
+says it once, and every decision records it (`FR-EVAL-009`).
+
 A supporting adapter the installed gate no longer declares is therefore both an
 `adapter-lost` finding (still `supporting`) and drift of the pinned `adapters`
 surface, which the runners deny every commit for — so that clone is `broken`,
@@ -224,6 +238,7 @@ the Gate tells a maintainer what to run renders through it (`TB-065`, below):
 | `activation-absent` | `gate activate` |
 | `gate-policy-invalid`, `configuration-unreadable` | correct `.agent-framework.yaml` |
 | `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
+| `grader-surface-unversioned` (`TB-066`) | the maintainer commits it to version control, when they choose to — the Gate never stages or commits anything, and running unversioned stays allowed; named last, after any recovery |
 
 A finding with no entry fails the unit suite, which enumerates every code
 `statusGate` can emit from its source. Deactivation leaves the `git gate` alias

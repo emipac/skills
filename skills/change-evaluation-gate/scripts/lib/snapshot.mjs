@@ -441,15 +441,28 @@ const readStatus = async (repositoryRoot, runGit) => {
   return records;
 };
 
-/** Changed paths for applicability resolution. */
-export const listChangedPaths = async (repositoryRoot, kind, runGit = defaultRunGit) => {
+/**
+ * Changed paths for applicability resolution, and beside them the untracked
+ * paths, from the same one parse.
+ *
+ * `untracked` is every path Git reports untracked, whatever the kind: it is a
+ * fact about the clone rather than about the change, and it is what lets a
+ * declared Grader surface Git does not track be called unversioned instead of
+ * changed (`FR-EVAL-009`, `TB-066`). It is carried out of here rather than
+ * asked for again, so there is one enumeration of Git status and not two that
+ * could disagree (`SG-EVAL-001`).
+ */
+export const listPathChanges = async (repositoryRoot, kind, runGit = defaultRunGit) => {
   const changed = new Set();
+  const untracked = new Set();
 
   for (const { indexStatus, worktreeStatus, relative, source } of await readStatus(
     repositoryRoot,
     runGit,
   )) {
     if (indexStatus === '?') {
+      untracked.add(relative);
+
       // An untracked path is nothing to the index, so it is not part of a
       // `git-index` change. For a worktree change it is the most common shape
       // the change takes — a file the agent just created — and reporting it as
@@ -478,8 +491,13 @@ export const listChangedPaths = async (repositoryRoot, kind, runGit = defaultRun
     }
   }
 
-  return [...changed].sort();
+  return { changed: [...changed].sort(), untracked: [...untracked].sort() };
 };
+
+/** Changed paths for applicability resolution. */
+export const listChangedPaths = async (repositoryRoot, kind, runGit = defaultRunGit) => (
+  await listPathChanges(repositoryRoot, kind, runGit)
+).changed;
 
 /**
  * The content set of a worktree snapshot: what a maintainer looking at the
@@ -920,7 +938,11 @@ export const captureSnapshot = async ({
     // over the tracked paths alone, so what a project installed can never move
     // the identity of what it wrote (NFR-REL-001).
     const id = await identifyExecutionRoot(executionRoot, paths);
-    const changedPaths = await listChangedPaths(repositoryRoot, kind, runGit);
+    const { changed: changedPaths, untracked: untrackedPaths } = await listPathChanges(
+      repositoryRoot,
+      kind,
+      runGit,
+    );
     const dependencies = await provideDependencyRoots({
       repositoryRoot,
       executionRoot,
@@ -939,6 +961,7 @@ export const captureSnapshot = async ({
         paths,
       },
       changedPaths,
+      untrackedPaths,
       dependencies,
     };
   } catch (error) {

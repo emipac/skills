@@ -123,9 +123,10 @@ took to `supported`.
 
 A declared channel carries the decision, not a summary of its checks (`TB-064`,
 `NFR-OPER-001`). `presentDecision` hands every surface the decision's
-`diagnostics` (`reasonCode`, `detail`) and `integrity.changedGraderSurfaces`
-(`kind`, `path`) beside its checks, and `formatFeedback` renders them as one
-message, one line per entry, in this order:
+`diagnostics` (`reasonCode`, `detail`), `integrity.changedGraderSurfaces`
+and `integrity.unversionedGraderSurfaces` (`kind`, `path`) beside its checks,
+and `formatFeedback` renders them as one message, one line per entry, in this
+order:
 
 1. `Preflight (not a commit decision): <outcome>.` The outcome is always
    stated, so an `unverified` decision never reads as a shrinking list of
@@ -138,7 +139,11 @@ message, one line per entry, in this order:
 4. `Changed Grader surfaces (this change edits what grades it; stated for
    visibility):` each as `<kind> <path>`. It is observation, never a
    classification of intent (`SG-CFG-001`).
-5. `Not listed:` only when something was left out, below.
+5. `Unversioned Grader surfaces (…):` each as `<kind> <path>`, then one
+   `Remedy, the maintainer's and not this agent's:` line rendered from the
+   one remedy table — only when the once-only rule below says this set has
+   not already been stated (`TB-066`).
+6. `Not listed:` only when something was left out, below.
 
 The message is bounded by `FEEDBACK_LIMITS` in `scripts/lib/adapters.mjs`: at
 most 8 failing-check summaries and 8 diagnostics other than drift, each cut to
@@ -152,13 +157,31 @@ that declares test globs to `evaluate` is the one way to record more Grader
 surfaces than the configuration names, and neither runner does.
 
 A turn is silent — the declared `none` form, byte for byte — only when it is
-genuinely clean: `passed`, no adapter failure, no diagnostic, and no changed
-Grader surface. A changed Grader surface is stated even on a passing turn,
+genuinely clean: `passed`, no adapter failure, no diagnostic, no changed
+Grader surface, and no unversioned surface still to state. A changed Grader
+surface is stated even on a passing turn,
 because it is the one fact whose purpose is to be seen by someone other than the
 change's author. An adapter failure (`FR-ADAPT-005`) keeps its one sentence,
 `Preflight (not a commit decision): unverified — <detail>.`, because there is no
 decision to render. The Evidence envelope and this message are rendered from the
 same decision, so they name the same reason codes.
+
+An unversioned surface is a standing fact about the clone, so the channel says
+it once rather than on every turn (`TB-066`). The rule, owned by the preflight
+runner beside the loop guard and read from the same append-only Evidence log:
+the set is stated unless the decision the store recorded immediately before
+this evaluation's own append recorded exactly the same set of `kind` and
+`path`. So it is stated on the first recorded evaluation that observes it, and
+not on a later turn — unchanged or not, in the same session or another, from
+any client. What resets it is a recorded decision whose set differs: the
+maintainer commits a surface, removes one, or leaves a new declared surface
+untracked. It fails toward saying — an empty or unreadable store, a record from
+before this rule, or an unreadable envelope all mean the set is stated. The
+decision and its envelope record the set every time regardless; only the
+statement is withheld, and a changed Grader surface is never withheld by it.
+The loop guard still bounds the whole message as before, so on a surface that
+re-prompts (`cursor`) an unversioned configuration costs at most one follow-up
+until its set changes, instead of one on every passing turn.
 
 ## 3a. Trust models
 
