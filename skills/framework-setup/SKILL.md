@@ -55,8 +55,10 @@ Present detected values and ask only about unresolved or consequential choices:
 5. **Command scopes:** confirm every discovered command as backend, frontend,
    or both. A package-manager command is not inherently a frontend command.
    Discovery accepts safe qualified checks such as `test:unit`,
-   `test:integration`, `format:check`, `types:check`, and `smoke:<name>`, uses
-   referenced source roots as scope evidence, and excludes watch, fix, development,
+   `test:integration`, `format:check`, and `smoke:<name>`, treats the type-check
+   spellings `typecheck`, `type-check`, and `types` alike (so `typecheck:check`,
+   `type-check:check`, and `types:check` are all accepted), uses referenced
+   source roots as scope evidence, and excludes watch, fix, development,
    coverage, and write variants unless explicitly selected. Prefer a
    non-mutating `format:check` when both it and `format` exist. Record any
    intentionally excluded scripts and preserve the same exclusion list on

@@ -1533,3 +1533,162 @@ test('composer scripts are outside the package-script resolver', async (context)
 
   assert.deepEqual(discovery.verification.unclassifiedScripts, []);
 });
+
+const typeCheckSpellings = ['typecheck', 'type-check', 'types'];
+
+const placementsOf = (verification, script) => Object.entries(verification.commands)
+  .flatMap(([category, scopes]) => Object.entries(scopes)
+    .filter(([, commands]) => commands.includes(`npm run ${script}`))
+    .map(([scope]) => ({ category, scope })));
+
+test('classifies every type-check spelling with a check qualifier identically', async (context) => {
+  const projectRoot = await createScriptClassificationFixture(Object.fromEntries(
+    typeCheckSpellings.map((spelling) => [
+      `${spelling}:check`,
+      'svelte-check --tsconfig ./tsconfig.json',
+    ]),
+  ));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const { verification } = await discoverProject(projectRoot);
+
+  assert.deepEqual(
+    typeCheckSpellings.map((spelling) => placementsOf(verification, `${spelling}:check`)),
+    typeCheckSpellings.map(() => [{ category: 'static_analysis', scope: 'frontend' }]),
+  );
+  assert.deepEqual(verification.unclassifiedScripts, []);
+
+  const verificationPerSpelling = [];
+
+  for (const spelling of typeCheckSpellings) {
+    const spellingRoot = await createScriptClassificationFixture({
+      [`${spelling}:check`]: 'svelte-check --tsconfig ./tsconfig.json',
+    });
+    context.after(() => rm(spellingRoot, { recursive: true, force: true }));
+
+    const discovery = await discoverProject(spellingRoot);
+
+    verificationPerSpelling.push(
+      JSON.stringify(discovery.verification).replaceAll(`${spelling}:check`, '<type-check>'),
+    );
+  }
+
+  assert.equal(new Set(verificationPerSpelling).size, 1);
+});
+
+test('reports the TypeScript capability rather than a lint one for every type-check spelling', async (context) => {
+  for (const script of typeCheckSpellings.flatMap((spelling) => [spelling, `${spelling}:check`])) {
+    const projectRoot = await createScriptClassificationFixture({
+      [script]: 'svelte-check --tsconfig ./tsconfig.json',
+    });
+    context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+    const discovery = await discoverProject(projectRoot);
+
+    assert.deepEqual(discovery.verification.capabilities, ['typescript'], script);
+  }
+});
+
+test('still declines an unsafe qualifier on every type-check spelling', async (context) => {
+  const unsafeScripts = Object.fromEntries(typeCheckSpellings.flatMap((spelling) => [
+    [`${spelling}:fix`, 'svelte-check --fix'],
+    [`${spelling}:watch`, 'svelte-check --watch'],
+    [`${spelling}:write`, 'svelte-check --write'],
+  ]));
+  const projectRoot = await createScriptClassificationFixture(unsafeScripts);
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const discovery = await discoverProject(projectRoot);
+
+  assert.deepEqual(discovery.verification.commands.static_analysis, {
+    backend: [],
+    frontend: [],
+    both: [],
+  });
+  assert.deepEqual(
+    discovery.verification.unclassifiedScripts,
+    Object.entries(unsafeScripts)
+      .map(([script, command]) => ({
+        script,
+        command,
+        reason: `unsafe-qualifier: ${script.split(':')[1]}`,
+      }))
+      .sort((first, second) => (first.script < second.script ? -1 : 1)),
+  );
+});
+
+test('leaves the accepted qualifiers of every other base name unchanged', async (context) => {
+  const projectRoot = await createScriptClassificationFixture({
+    'format:check': 'prettier --check .',
+    'lint:check': 'eslint .',
+    'lint:client': 'eslint resources/js',
+    'test:unit': 'vitest run',
+    'test:check': 'vitest run',
+    'smoke:checkout': 'node smoke.mjs',
+    'build:client': 'vite build',
+    'build:check': 'vite build',
+    'e2e:check': 'playwright test',
+    'e2e:frontend': 'playwright test',
+  });
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+
+  const { verification } = await discoverProject(projectRoot);
+
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(verification.commands).map(
+      ([category, scopes]) => [category, scopes.frontend],
+    )),
+    {
+      format: ['npm run format:check'],
+      static_analysis: ['npm run lint:check', 'npm run lint:client'],
+      test: ['npm run test:unit'],
+      smoke: ['npm run smoke:checkout'],
+      build: ['npm run build:client'],
+      e2e: ['npm run e2e:frontend'],
+    },
+  );
+  assert.deepEqual(
+    verification.unclassifiedScripts.map((entry) => [entry.script, entry.reason]),
+    [
+      ['build:check', 'unsupported-qualifier: check'],
+      ['e2e:check', 'unsupported-qualifier: check'],
+      ['test:check', 'unsupported-qualifier: check'],
+    ],
+  );
+});
+
+test('repeats discovery and configuration byte-identically for every type-check spelling', async (context) => {
+  const projectRoot = await createScriptClassificationFixture(Object.fromEntries(
+    typeCheckSpellings.map((spelling) => [
+      `${spelling}:check`,
+      'svelte-check --tsconfig ./tsconfig.json',
+    ]),
+  ));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await writeFile(path.join(projectRoot, 'AGENTS.md'), '# Project guidance\n');
+  const agentsBefore = await readFile(path.join(projectRoot, 'AGENTS.md'));
+  const selections = { tracker: 'local-markdown' };
+
+  assert.equal(
+    JSON.stringify(await discoverProject(projectRoot)),
+    JSON.stringify(await discoverProject(projectRoot)),
+  );
+
+  const firstResult = await configureProject({ projectRoot, selections });
+  const firstConfiguration = await readFile(
+    path.join(projectRoot, '.agent-framework.yaml'),
+    'utf8',
+  );
+  const secondResult = await configureProject({ projectRoot, selections });
+
+  assert.deepEqual(secondResult, firstResult);
+  assert.equal(
+    await readFile(path.join(projectRoot, '.agent-framework.yaml'), 'utf8'),
+    firstConfiguration,
+  );
+  assert.deepEqual(await readFile(path.join(projectRoot, 'AGENTS.md')), agentsBefore);
+
+  for (const spelling of typeCheckSpellings) {
+    assert.ok(firstConfiguration.includes(`npm run ${spelling}:check`), spelling);
+  }
+});
