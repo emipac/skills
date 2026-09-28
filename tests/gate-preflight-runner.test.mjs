@@ -754,6 +754,81 @@ test('TB-037 AC-EVAL-002: the preflight judges completeness with the contract, a
  * fails and says so, and a run that never tries is silent.
  */
 
+/**
+ * TB-048 — `FR-ADAPT-005`, `SG-SUPPORT-001`.
+ *
+ * A preflight surface whose feedback channel has not been observed is never
+ * registered, but a hook written before that rule, or by hand, can still start
+ * this runner. It does no work it could not report: no execution root is
+ * materialized, no check is spawned, the Evidence store is never opened, and
+ * nothing it would have said is assumed. The reason reaches the person on
+ * stderr. The same clone, the same change, answered for a surface WITH a
+ * channel, is evaluated exactly as before.
+ */
+test('TB-048 FR-ADAPT-005: a preflight surface that cannot answer does no work — no snapshot, no check, no Evidence — and says why', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await configureClone(root);
+  await publishReceipt(root);
+  // A change whose required check fails: a surface that evaluated it would
+  // have spawned the check and appended the decision.
+  await writeFile(path.join(root, 'app/Order.php'), 'BROKEN\n', 'utf8');
+
+  for (const adapterId of ['claude-code-desktop', 'codex-desktop']) {
+    assert.equal(describeAdapter(adapterId).capabilities.feedback.absence, 'not-observed');
+
+    const payload = { hook_event_name: 'Stop', session_id: 'preflight-session', cwd: root };
+    const seams = [];
+    const result = await runPreflight({
+      cwd: root,
+      stdin: `${JSON.stringify(payload)}\n`,
+      argv: ['--adapter', adapterId],
+      environment: isolatedGitEnvironment(),
+      evaluate: async () => {
+        seams.push('evaluate');
+
+        throw new Error('nothing may be evaluated for a surface that cannot answer');
+      },
+      openEvidenceStore: async () => {
+        seams.push('openEvidenceStore');
+
+        throw new Error('no Evidence store may be opened for a surface that cannot answer');
+      },
+    });
+
+    assert.deepEqual(seams, [], `${adapterId} reached an evaluation seam.`);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.view, null);
+    assert.match(result.stderr, new RegExp(`${adapterId} declares no feedback channel`));
+    assert.match(result.stderr, /not been observed/);
+    assert.match(result.stderr, /Nothing was evaluated/);
+
+    // The packaged program, as a client would start it, under a temporary
+    // directory nothing can be materialized in.
+    const temporaryRoot = await unwritableTemporaryRoot(t);
+    const packaged = await runPackaged({
+      cwd: root,
+      payload,
+      args: ['--adapter', adapterId],
+      environment: { TMPDIR: temporaryRoot },
+    });
+
+    assert.equal(packaged.exitCode, 0);
+    assert.equal(packaged.stdout, '');
+    assert.match(packaged.stderr, /declares no feedback channel/);
+    assert.deepEqual(await rootsUnder(temporaryRoot), []);
+    assert.equal((await readFile(evidenceLogPath(root), 'utf8').catch(() => '')).trim(), '');
+  }
+
+  // A surface with a channel is unchanged: the same change is evaluated and
+  // answered through its declared field.
+  const answered = await runPackaged({ cwd: root, payload: cursorStopPayload(root) });
+
+  assert.match(JSON.parse(answered.stdout).followup_message, /failed/i);
+  assert.notEqual((await readFile(evidenceLogPath(root), 'utf8')).trim(), '');
+});
+
 const commitWorktree = async (root, message) => {
   await runFile('git', ['add', '--all'], { cwd: root, env: isolatedGitEnvironment() });
   await runFile('git', [

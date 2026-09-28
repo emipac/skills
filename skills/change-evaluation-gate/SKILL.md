@@ -203,8 +203,12 @@ what the transaction would change and writes nothing; `gate activate --confirm
 not authoritative Git; a desktop client that has not granted trust pauses the
 transaction, leaves no integration active, and prints the
 `gate activate --resume <transaction-id> --confirm <token>` that resumes it.
-A configured clone is a prerequisite: activation never configures one on the way
-past. `--actor <name>` is carried into the receipt as **self-declared** and
+A desktop client whose feedback channel has not been observed — today
+`claude-code-desktop` and `codex-desktop` — is refused with
+`feedback-channel-unobserved` before anything is previewed or written: a
+preflight that cannot answer would evaluate every turn and say nothing. Do not
+work around the refusal. A configured clone is a prerequisite: activation never
+configures one on the way past. `--actor <name>` is carried into the receipt as **self-declared** and
 never as proven — this command cannot see who ran it, and its receipt does not
 pretend otherwise.
 
@@ -287,6 +291,11 @@ offline baseline, but none has been driven end to end by a real client
 invocation, and a baseline whose fixtures came from the declaration under test
 cannot establish support. Report those three as declared, never as supported.
 Git's tier reflects baseline provenance only; it is authoritative regardless.
+The two desktop surfaces also declare no feedback channel, because how either
+takes an answer back has not been observed (`absence: not-observed`), so neither
+is registered; Git declares none because it needs none (`absence: not-needed`):
+it answers by blocking. A runner started for a surface that cannot answer
+evaluates nothing.
 
 A tier is always derived from the evidence beside it, never declared. Read the
 current tiers from `npm run gate-runtime-portability` rather than from prose —

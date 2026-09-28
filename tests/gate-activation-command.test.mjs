@@ -306,9 +306,12 @@ test('a single invocation that would preview and activate together is refused, a
  * contract defined and no surface could issue, and the client-side review it
  * named could only ever have happened AFTER the registration the trust step was
  * blocking.
+ *
+ * Since `TB-048` only a desktop surface that can answer is activated: the two
+ * whose feedback channel has not been observed are refused, below.
  */
 test('a desktop client activates on a configured clone and registers exactly its declared surface', async (t) => {
-  for (const clientId of ['cursor', 'claude-code-desktop', 'codex-desktop']) {
+  for (const clientId of ['cursor']) {
     const declaration = describeAdapter(clientId);
     const surface = declaration.registration.file;
     // The Gate never CREATES a client's configuration file, so the clone that
@@ -354,6 +357,59 @@ test('a desktop client activates on a configured clone and registers exactly its
     assert.equal(entries.length, 1);
     assert.deepEqual(await hookDirectory(root), ['pre-commit']);
   }
+});
+
+/**
+ * THE FIRST RED TEST OF `TB-048`.
+ *
+ * `AC-ADAPT-003`, `SG-HOOK-001`, `AC-LIFE-009`. A preflight surface whose
+ * feedback channel has not been observed is refused, and says what is missing
+ * and why, instead of registering and then evaluating every turn into silence.
+ * The preview offers no token for it, and the clone — the client's own file
+ * included — is left exactly as it was.
+ */
+test('TB-048: activating a preflight surface whose feedback channel has not been observed is refused, names what is missing, and registers nothing', async (t) => {
+  for (const clientId of ['claude-code-desktop', 'codex-desktop']) {
+    const declaration = describeAdapter(clientId);
+    const surface = declaration.registration.file;
+    const owned = `${JSON.stringify({ hooks: {} }, null, 2)}\n`;
+    const root = await configuredClone(t, { files: { [surface]: { contents: owned } } });
+    const beforeConfiguration = await cloneConfiguration(root);
+
+    assert.equal(declaration.capabilities.feedback.channel, null);
+    assert.equal(declaration.capabilities.feedback.absence, 'not-observed');
+
+    const preview = await gate(root, ['activate', '--client', clientId]);
+
+    assert.equal(preview.exitCode, EXIT_UNRUNNABLE, `${clientId} previewed as activatable.`);
+    assert.equal(preview.document.failure.reasonCode, 'feedback-channel-unobserved');
+    assert.match(preview.document.failure.detail, new RegExp(`${clientId} declares no feedback channel`));
+    assert.match(preview.document.failure.detail, /not been observed/);
+    assert.equal(preview.document.observation ?? null, null, 'a refused preview offers no confirmation token.');
+
+    // Nothing was registered, created, or altered: not the client's own file,
+    // not a hook, not a receipt, and not one byte of the clone's Git config.
+    assert.equal(await readFile(path.join(root, surface), 'utf8'), owned);
+    assert.deepEqual(await hookDirectory(root), []);
+    assert.equal(await cloneConfiguration(root), beforeConfiguration);
+    assert.equal(await activationReceipt(root).catch(() => null), null);
+  }
+
+  // Authoritative Git, which declares no channel because it answers by
+  // blocking, activates exactly as it always has on the same kind of clone.
+  const root = await configuredClone(t, {
+    files: { '.claude/settings.local.json': { contents: '{\n  "hooks": {}\n}\n' } },
+  });
+  const preview = await gate(root, ['activate']);
+  const activated = await gate(root, ['activate', '--confirm', tokenOf(preview)]);
+
+  assert.equal(describeAdapter('git').capabilities.feedback.channel, null);
+  assert.equal(activated.document.mutation.performed, true);
+  assert.deepEqual(await hookDirectory(root), ['pre-commit']);
+  assert.equal(
+    await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'),
+    '{\n  "hooks": {}\n}\n',
+  );
 });
 
 /**
@@ -443,10 +499,11 @@ test('a resumption naming a transaction this clone never paused is refused and w
 
 /**
  * `SG-TRUST-001`, `FR-LIFE-004`. A client that reviews a registration only after
- * reading it has that recorded — never awaited, and never as something the Gate
- * observed. "Activated" must not be read as "this client is already running it".
+ * reading it declares so — and since `TB-048` that client's surface is not
+ * registered at all while its feedback channel is unobserved, so no pending
+ * review is ever reported for a registration the Gate refused to write.
  */
-test('a client review that happens after registration is recorded as a pending fact, not as an acceptance', async (t) => {
+test('a client review that happens after registration is declared, and is never reported for a registration that was refused', async (t) => {
   const codex = describeAdapter('codex-desktop');
 
   assert.notEqual(
@@ -465,31 +522,12 @@ test('a client review that happens after registration is recorded as a pending f
   const root = await configuredClone(t, {
     files: { '.codex/hooks.json': { contents: '{\n  "hooks": {}\n}\n' } },
   });
-  const preview = await gate(root, ['activate', '--client', 'codex-desktop']);
-  const activated = await gate(root, ['activate', '--client', 'codex-desktop', '--confirm', tokenOf(preview)]);
+  const refused = await gate(root, ['activate', '--client', 'codex-desktop']);
 
-  assert.equal(activated.document.mutation.performed, true);
-
-  // The receipt carries it beside the registration it is about, and says the
-  // Gate did not observe it.
-  const receipt = JSON.parse(await activationReceipt(root));
-  const recorded = (receipt.adapters ?? []).find((adapter) => adapter.id === 'codex-desktop') ?? null;
-
-  assert.notEqual(recorded, null, 'The receipt must carry the adapter whose surface was registered.');
-  assert.equal(recorded.registration.registered, true);
-  assert.equal(recorded.clientReview.when, 'after-registration');
-  assert.equal(
-    recorded.clientReview.observedByGate,
-    false,
-    'The Gate wrote a registration; whether the client reviewed it is the client\'s to know.',
-  );
-
-  // And the maintainer meets it without opening the receipt.
-  assert.match(activated.document.mutation.summary, /review and trust it in Codex/);
-  assert.match(activated.stdout, /review and trust it in Codex/);
-
-  // Nothing anywhere claims the client accepted anything.
-  assert.equal(/accepted|approved by the client|is running/i.test(activated.document.mutation.summary), false);
+  assert.equal(refused.document.failure.reasonCode, 'feedback-channel-unobserved');
+  assert.doesNotMatch(refused.stdout, /review and trust it in Codex/);
+  assert.equal(await readFile(path.join(root, '.codex/hooks.json'), 'utf8'), '{\n  "hooks": {}\n}\n');
+  assert.equal(await activationReceipt(root).catch(() => null), null);
 });
 
 /**

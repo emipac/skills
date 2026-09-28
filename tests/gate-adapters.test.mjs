@@ -15,6 +15,7 @@ import {
   BASELINE_CHECKS,
   classifySupport,
   describeAdapter,
+  FEEDBACK_ABSENCES,
   FEEDBACK_LIMITS,
   formatFeedback,
   normalizeNativeInvocation,
@@ -23,6 +24,7 @@ import {
   runAdapterEvaluation,
   runCompatibilityBaseline,
   SUPPORT_TIERS,
+  unreportableSurface,
   validateAdapterDeclaration,
   validateRegistrationDeclaration,
 } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
@@ -1463,6 +1465,98 @@ test('every declared trust model is defined by the contract, and a model it does
 
   // The declaration every v1 adapter actually carries is still valid.
   assert.deepEqual(validateAdapterDeclaration(complete), []);
+});
+
+/**
+ * TB-048 — `FR-ADAPT-004`, `FR-ADAPT-005`, `SG-OWNER-001`, `NFR-COMP-001`.
+ *
+ * "No channel needed" and "channel not yet observed" are different statements,
+ * and a declaration with no channel that says neither is rejected. Whether a
+ * surface can answer is read from that declaration alone.
+ */
+test('TB-048: a declaration with no feedback channel says whether none is needed or none has been observed, and one that says neither is rejected', () => {
+  for (const [id, absence] of Object.entries(FEEDBACK_ABSENCES)) {
+    assert.equal(absence.id, id, 'An absence must name itself.');
+
+    for (const field of ['asserts', 'requiresNativeBlocking']) {
+      assert.ok(field in absence, `The absence ${id} must state ${field}.`);
+    }
+  }
+
+  assert.deepEqual(Object.keys(FEEDBACK_ABSENCES).sort(), ['not-needed', 'not-observed']);
+
+  // Authoritative Git needs none, because it answers by blocking; the two
+  // unobserved desktop surfaces have none observed; Cursor names its channel.
+  const declared = Object.fromEntries(ADAPTER_IDS.map((adapterId) => {
+    const feedback = describeAdapter(adapterId).capabilities.feedback;
+
+    return [adapterId, [feedback.channel, feedback.absence]];
+  }));
+
+  assert.deepEqual(declared, {
+    git: [null, 'not-needed'],
+    'claude-code-desktop': [null, 'not-observed'],
+    'codex-desktop': [null, 'not-observed'],
+    cursor: ['stdout-json', null],
+  });
+  assert.equal(describeAdapter('git').capabilities.blocking.native, true);
+
+  for (const adapterId of ADAPTER_IDS) {
+    assert.deepEqual(validateAdapterDeclaration(describeAdapter(adapterId).capabilities), [], adapterId);
+  }
+
+  const git = describeAdapter('git').capabilities;
+  const desktop = describeAdapter('claude-code-desktop').capabilities;
+  const cursor = describeAdapter('cursor').capabilities;
+  const withFeedback = (capabilities, feedback) => ({
+    ...capabilities,
+    feedback: { ...capabilities.feedback, ...feedback },
+  });
+  const codesOf = (capabilities) => validateAdapterDeclaration(capabilities).map((error) => error.code);
+
+  // Saying neither: the field omitted, stated as null, or naming nothing.
+  const { absence: _omitted, ...silentFeedback } = desktop.feedback;
+
+  assert.deepEqual(
+    codesOf({ ...desktop, feedback: silentFeedback }).sort(),
+    ['adapter-capability-incomplete', 'adapter-feedback-absence-undeclared'],
+  );
+
+  for (const absence of [null, 'unknown', 'not-applicable']) {
+    assert.deepEqual(codesOf(withFeedback(desktop, { absence })), ['adapter-feedback-absence-undeclared'], String(absence));
+    assert.deepEqual(codesOf(withFeedback(git, { absence })), ['adapter-feedback-absence-undeclared'], String(absence));
+  }
+
+  // "Not needed" is only true of a surface that blocks: a non-blocking surface
+  // claiming it would be the old silence under a new name.
+  assert.deepEqual(codesOf(withFeedback(desktop, { absence: 'not-needed' })), ['adapter-feedback-absence-incoherent']);
+  assert.deepEqual(codesOf(withFeedback(git, { absence: 'not-observed' })), []);
+
+  // A declared channel has no absence to explain.
+  assert.deepEqual(codesOf(withFeedback(cursor, { absence: 'not-observed' })), ['adapter-feedback-absence-contradictory']);
+
+  // Only a preflight surface with no channel is one that cannot answer.
+  assert.equal(unreportableSurface('git'), null, 'Git answers by blocking and is never refused for having no channel.');
+  assert.equal(unreportableSurface('cursor'), null);
+  assert.equal(unreportableSurface('not-an-adapter'), null);
+
+  for (const adapterId of ['claude-code-desktop', 'codex-desktop']) {
+    const unreportable = unreportableSurface(adapterId);
+
+    assert.equal(unreportable.adapterId, adapterId);
+    assert.equal(unreportable.reasonCode, 'feedback-channel-unobserved');
+    assert.equal(unreportable.absence, 'not-observed');
+    assert.match(unreportable.detail, new RegExp(`^${adapterId} declares no feedback channel`));
+    assert.match(unreportable.detail, /not been observed/);
+  }
+
+  // Nothing was demoted, hidden, or removed: every declared surface is still a
+  // declared surface, and every desktop one is still a preflight surface.
+  assert.deepEqual([...ADAPTER_IDS], ['git', 'claude-code-desktop', 'codex-desktop', 'cursor']);
+  assert.deepEqual(
+    ADAPTER_IDS.filter((adapterId) => describeAdapter(adapterId).role === 'preflight'),
+    ['claude-code-desktop', 'codex-desktop', 'cursor'],
+  );
 });
 
 /**

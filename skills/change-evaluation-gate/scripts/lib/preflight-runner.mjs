@@ -17,6 +17,7 @@ import {
   formatFeedback,
   normalizeTurn,
   runAdapterEvaluation,
+  unreportableSurface,
 } from './adapters.mjs';
 import { createBoundedExecutor } from './bounded-execution.mjs';
 import { composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
@@ -320,6 +321,18 @@ export const runPreflight = async ({
     return silence({
       detail: `no declared adapter was named on the command line${adapterId === null ? '' : ` (${adapterId})`}; this hook cannot answer any client. Register it with --adapter <id>.`,
     });
+  }
+
+  // A surface that could not answer anything it evaluated is never registered,
+  // but a hook written before that rule, or by hand, can still reach this
+  // runner. Nothing is evaluated for it: no snapshot, no check, no Evidence —
+  // work that cannot be reported is not work to do, and nothing it would have
+  // said is assumed. The reason still reaches the person (`TB-048`,
+  // `FR-ADAPT-005`).
+  const unreportable = unreportableSurface(adapter.id);
+
+  if (unreportable !== null) {
+    return silence({ detail: `${unreportable.detail} Nothing was evaluated.` });
   }
 
   const parsed = parseNative(stdin);

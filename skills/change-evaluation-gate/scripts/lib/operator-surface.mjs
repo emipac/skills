@@ -74,6 +74,7 @@ import {
   previewSync,
   readHookRegistration,
   syncActivation,
+  unreportableAdapterRefusal,
 } from './activation.mjs';
 import {
   COMMAND_ALIAS_NAME,
@@ -1142,6 +1143,21 @@ const operateActivate = async ({ repositoryRoot, environment, selector, confirma
   }
 
   const { client, distribution, request } = resolved;
+
+  // A selected preflight surface that could not answer is refused before it is
+  // previewed, by the refusal the transaction itself makes at its preview: no
+  // token is offered for an activation that would register a surface which
+  // evaluates every turn and says nothing (`TB-048`, `SG-HOOK-001`).
+  const unreportable = unreportableAdapterRefusal(request.adapters);
+
+  if (unreportable !== null) {
+    return failure({
+      command: 'activate',
+      reasonCode: unreportable.reasonCode,
+      detail: `${unreportable.errors.map((entry) => entry.message).join(' ')} Nothing was previewed, registered, or written.`,
+    });
+  }
+
   const dependencies = { runGit, environment };
   let preview;
 

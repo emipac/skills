@@ -1814,11 +1814,19 @@ The declared registration file .cursor/hooks.json is not on disk.</code></pre>
             <tbody>
               <tr><td>Git</td><td><code>git</code> (default)</td><td>— this clone's own hook chain</td></tr>
               <tr><td>Cursor</td><td><code>cursor</code></td><td><code>.cursor/hooks.json</code>, carrying <code>"version": 1</code></td></tr>
-              <tr><td>Codex Desktop</td><td><code>codex-desktop</code></td><td><code>.codex/hooks.json</code></td></tr>
-              <tr><td>Claude Code Desktop</td><td><code>claude-code-desktop</code></td><td><code>.claude/settings.local.json</code></td></tr>
+              <tr><td>Codex Desktop</td><td><code>codex-desktop</code></td><td>— refused today: <code>feedback-channel-unobserved</code></td></tr>
+              <tr><td>Claude Code Desktop</td><td><code>claude-code-desktop</code></td><td>— refused today: <code>feedback-channel-unobserved</code></td></tr>
             </tbody>
           </table>
         </div>
+        <p>
+          Only a client that can answer is activated. Nobody has yet observed how Codex Desktop or
+          Claude Code Desktop takes an answer back, so neither declares a feedback channel, and a
+          registration would evaluate every turn and say nothing. Activating either is refused with
+          <code>feedback-channel-unobserved</code> before anything is previewed or written — no
+          token, no receipt, not a byte of that client's file. Both stay declared, and become
+          activatable once a real client invocation shows how each one answers.
+        </p>
         <p class="cmd-label">A minimum Cursor file, if you have none</p>
         <pre><code>mkdir -p .cursor
 printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></pre>
@@ -2188,7 +2196,7 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             </tr>
             <tr>
               <td>Your desktop client is silent</td>
-              <td>Either it was never activated, or its registration file was missing at activation, or it has no feedback channel at all.</td>
+              <td>Either it was never activated, or its registration file was missing at activation, or it is a client with no observed feedback channel — activation refuses those now, and one registered before that refusal existed evaluates nothing.</td>
               <td>Check Step 4's prerequisite box. Silence from Claude Code Desktop or Codex Desktop is never a pass.</td>
             </tr>
           </tbody>
@@ -2250,8 +2258,9 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
         in front of the agent. A clean turn is left alone. That message is not the decision a
         commit would receive: preflight grades the working tree, including unstaged edits;
         <code>git commit</code> still grades the isolated snapshot. Claude Code Desktop and Codex
-        Desktop do not currently send a follow-up — they have no declared channel to answer
-        through — so silence from those clients is not a pass.
+        Desktop cannot be activated yet: how either takes an answer back has not been observed, so
+        the Gate refuses to register them rather than wire in a hook that grades every turn and
+        says nothing. Silence from those clients is never a pass.
       </p>
       <p>
         The follow-up carries the whole decision, not just its failing checks: the outcome, each

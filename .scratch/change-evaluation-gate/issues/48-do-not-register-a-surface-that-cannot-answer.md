@@ -1,14 +1,14 @@
 # TB-048 — Do not register a surface that cannot answer
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 48-do-not-register-a-surface-that-cannot-answer
 Draft key: TB-048
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -180,22 +180,22 @@ channel.
 
 ## Acceptance Criteria
 
-- [ ] `AC-ADAPT-003`, `SG-HOOK-001`: activating a preflight surface whose channel
+- [x] `AC-ADAPT-003`, `SG-HOOK-001`: activating a preflight surface whose channel
   has not been observed is refused with a reason naming what is missing, and no
   client configuration file is created or altered.
-- [ ] Authoritative `git` activates exactly as it does today, and its declared
+- [x] Authoritative `git` activates exactly as it does today, and its declared
   absence of a channel is never treated as a fault.
-- [ ] `cursor` activates and reports exactly as it does today, proved by the
+- [x] `cursor` activates and reports exactly as it does today, proved by the
   existing capabilities passing untouched.
-- [ ] `FR-ADAPT-005`: a surface that cannot report performs no evaluation —
+- [x] `FR-ADAPT-005`: a surface that cannot report performs no evaluation —
   no snapshot materialized, no check spawned, no Evidence appended.
-- [ ] The declaration distinguishes "no channel needed" from "channel not yet
+- [x] The declaration distinguishes "no channel needed" from "channel not yet
   observed", and a declaration that says neither is rejected by the validator.
-- [ ] `NFR-COMP-001`, `AC-ADAPT-002`: the shared client baseline still exercises
+- [x] `NFR-COMP-001`, `AC-ADAPT-002`: the shared client baseline still exercises
   all four declared surfaces.
-- [ ] `AC-LIFE-009`: a refused registration leaves no partial adapter set active
+- [x] `AC-LIFE-009`: a refused registration leaves no partial adapter set active
   and leaves the clone exactly as it was.
-- [ ] The evaluation runtime for authoritative commits is unchanged.
+- [x] The evaluation runtime for authoritative commits is unchanged.
 
 ## Verification Matrix
 

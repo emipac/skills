@@ -17,7 +17,7 @@ The transaction runs these steps in exactly this order and never reorders them.
 | # | Step | What must hold |
 | --- | --- | --- |
 | 1 | `repository-identity` | Scope is `repository`, the trigger is `explicit`, a non-interactive run names both expected identities, any expected repository or configuration identity matches the clone in front of it, and a resumption's repository, configuration, and selected-adapter identities are unchanged |
-| 2 | `preview` | The exact hook locations, strategy, resolved commands, adapters, trust requirement, and runtime input names are stated; a resumption's preview and transaction identities are unchanged; nothing is written |
+| 2 | `preview` | The exact hook locations, strategy, resolved commands, adapters, trust requirement, and runtime input names are stated; a resumption's preview and transaction identities are unchanged; every selected preflight surface declares a feedback channel it can answer through (`TB-048`); nothing is written |
 | 3 | `consent` | Consent reproduces that exact preview and names this repository and this configuration |
 | 4 | `runner-resolution` | Every logical runner resolves to one platform executable whose identity and version are pinned; an unresolved runner never falls back to a shell |
 | 5 | `trust` | The client established trust; the gate never grants trust on the operator's behalf. A client that has not answered yet **pauses** the transaction rather than failing it |
@@ -241,7 +241,7 @@ required separately: a flag never implies it.
 | Step | Reason code |
 | --- | --- |
 | `repository-identity` | `activation-scope-global`, `activation-scope-unsupported`, `activation-trigger-prohibited`, `non-interactive-identity-missing`, `repository-identity-mismatch`, `configuration-identity-mismatch`, `resume-repository-mismatch`, `resume-configuration-mismatch`, `resume-adapter-mismatch` |
-| `preview` | `resume-preview-mismatch`, `resume-transaction-mismatch` |
+| `preview` | `resume-preview-mismatch`, `resume-transaction-mismatch`, `feedback-channel-unobserved` — a selected preflight surface declares no feedback channel because none has been observed; the whole selection registers nothing, before consent (`TB-048`) |
 | `consent` | `consent-missing`, `consent-preview-mismatch`, `consent-identity-mismatch` |
 | `runner-resolution` | `runner-unresolved` |
 | `trust` | `trust-not-established`, `trust-pending` (a **pause**, not a failure) |

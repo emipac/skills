@@ -64,13 +64,60 @@ omits a category, or invents one, is rejected rather than filled in.
 | `filesystem` | `sameFilesAsClient` |
 | `git` | `metadata`, `index` |
 | `invocation` | `nonInteractive`, `mechanism`, `structuredResult`, `timeoutMs` |
-| `feedback` | `channel`, `field`, `none` |
+| `feedback` | `channel`, `field`, `none`, `maxIterations`, `absence` |
 
 The feedback declaration names the channel by which a running adapter returns a
 preflight result to its client, the field that carries it, and the form that
 returns no result. An adapter that declares no feedback channel returns none.
 The packaged preflight program (`gate-preflight.mjs`) answers only through that
 declaration: it never learns a client field name of its own.
+
+### No channel: not needed, or not observed
+
+A declaration with no channel says why, in `absence` (`TB-048`). One `null`
+used to carry two unrelated meanings, and nothing could tell them apart:
+
+| `absence` | Asserts | Declared by | Can the surface answer? |
+| --- | --- | --- | --- |
+| `not-needed` | the surface answers by blocking, so its exit status is the answer | `git` | yes — only coherent beside `blocking.native: true` |
+| `not-observed` | how the surface takes an answer back has not been observed from a real client invocation, so no channel is declared and none is guessed | `claude-code-desktop`, `codex-desktop` | no |
+| `null` | — a channel is declared, so there is no absence to explain | `cursor` | yes |
+
+Both values are defined in `FEEDBACK_ABSENCES` in `scripts/lib/adapters.mjs`.
+`validateAdapterDeclaration` rejects a declaration with no channel that states
+neither (`adapter-feedback-absence-undeclared`), `not-needed` on a surface that
+does not block natively (`adapter-feedback-absence-incoherent`), and an absence
+beside a declared channel (`adapter-feedback-absence-contradictory`).
+
+A **preflight** surface answers only through its channel: it never blocks. One
+with no channel would evaluate every turn and report nothing, so
+`unreportableSurface` names it, from the declaration alone, and:
+
+- **it is never registered.** The Activation transaction refuses a selection
+  holding one at step 2, `preview`, with `feedback-channel-unobserved` and a
+  reason naming the surface and what is missing — before consent is read,
+  before trust, before any self-test, so the whole selection registers nothing
+  and no client file changes by a byte (`AC-LIFE-009`, `SG-HOOK-001`).
+  `gate activate --client <id>` refuses with the same reason before it
+  previews, so no token is offered, and `inspectActivation` — what `gate
+  doctor` asks — stops at the same step with the same reason.
+- **it does no work.** A hook registered before this rule, or by hand, can
+  still start `gate-preflight.mjs` for it. The runner then returns before
+  anything else: no snapshot is materialized, no check is spawned, no Evidence
+  store is opened, nothing it would have said is assumed, and the reason is
+  written to stderr (`FR-ADAPT-005`).
+
+Authoritative Git is untouched in every respect: its role is authoritative, it
+answers by blocking, and it is never refused for declaring no channel. A surface
+with a channel is untouched too: `formatFeedback` and its bounds are unchanged.
+
+A refusal is about wiring a surface into a clone, never about whether its
+declaration can be tested. Every declared surface stays declared, keeps its
+support tier, and is still driven by the shared baseline and by
+`gate-adapter-conformance`'s presentation, failure, and repository-root
+scenarios. When a real client invocation shows how an unobserved surface takes
+an answer back, filling in its channel makes it registrable — the path `cursor`
+took to `supported`.
 
 ### What a feedback channel carries
 
@@ -188,7 +235,10 @@ Where one is declared, the activation receipt carries it beside the registration
 it is about, with `observedByGate: false`, and the activation summary restates
 the adapter's own sentence so `activated` is never read as "this client is
 already running it". The Gate wrote an entry; whether the client has accepted it
-is the client's to know (`SG-TRUST-001`).
+is the client's to know (`SG-TRUST-001`). Since `TB-048` the one surface that
+declares such a review, `codex-desktop`, is not registered while its feedback
+channel is unobserved, so no pending review is reported for a registration the
+Gate refused to write; the declaration and the receipt field stay for when it is.
 
 ## 4. Trigger normalization
 
@@ -322,6 +372,14 @@ contract: `FR-ADAPT-004`'s intent is that one client's change cannot silently
 redefine another's, so the declarations stay separate. Only one surface carries
 its own format version, and only that one can signal a breaking change to its
 registration format without changing the Gate (`RISK-004`).
+
+Every surface declares its registration, but only a surface that can answer is
+registered through an activation: `claude-code-desktop` and `codex-desktop` are
+refused at the preview while their feedback channel is unobserved (§3,
+`TB-048`). Their declarations, and the `matcher-group` schema they share, are
+still exercised at the registration seam itself — registration, reconciliation,
+and removal of an entry in each schema — and still reconciled and removed for a
+receipt that pinned one before that refusal existed.
 
 ### What is owned, and what is never touched
 

@@ -141,7 +141,7 @@ import {
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
 } from './lib/activation-seams.mjs';
-import { describeAdapter } from './lib/adapters.mjs';
+import { describeAdapter, unreportableSurface } from './lib/adapters.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -1027,31 +1027,92 @@ const doctorThenActivate = async () => {
  * because every fixture injected its own trust implementation — the declared
  * model never selected anything.
  *
- * So this drives the packaged command, for two surfaces with different declared
- * block schemas, and requires each to complete, register exactly its own
- * declared entry, and publish a receipt (`AC-LIFE-009`, `FR-LIFE-004`,
- * `AC-ADAPT-003`).
+ * Since `TB-048` only a desktop surface that can answer is registered. So this
+ * drives the packaged command on ONE clone holding all three desktop client
+ * files: each surface whose feedback channel has not been observed is refused
+ * with a reason naming it, offers no token, and leaves the clone byte for byte
+ * as it was; the surface that answers then activates on that same clone,
+ * registers exactly its own declared entry, and publishes a receipt, and the
+ * refused surfaces' files are still untouched (`AC-LIFE-009`, `FR-LIFE-004`,
+ * `AC-ADAPT-002`, `AC-ADAPT-003`, `SG-HOOK-001`).
  */
 const commandDrivenDesktopActivation = async () => {
   const findings = [];
+  const unobserved = ['claude-code-desktop', 'codex-desktop'];
+  const answering = ['cursor'];
+  const ownerOf = (declared) => (declared.registration.schemaVersion === null
+    ? { hooks: {} }
+    : {
+      [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
+      hooks: {},
+    });
+  // The Gate never CREATES a client's configuration file, so a clone that
+  // proves a real registration is one where the client already has one.
+  const root = await fixtureRepository({
+    files: Object.fromEntries([...unobserved, ...answering].map((adapterId) => {
+      const declared = describeAdapter(adapterId);
 
-  for (const adapterId of ['cursor', 'codex-desktop']) {
+      return [declared.registration.file, { contents: `${JSON.stringify(ownerOf(declared), null, 2)}\n` }];
+    })),
+  });
+
+  await assertThrowawayRepository(root);
+
+  const snapshot = async () => JSON.stringify({
+    config: await readFile(path.join(root, '.git', 'config'), 'utf8'),
+    hook: await readFile(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK), 'utf8').catch(() => null),
+    files: await Promise.all([...unobserved, ...answering].map((adapterId) => (
+      readFile(path.join(root, describeAdapter(adapterId).registration.file), 'utf8')
+    ))),
+  });
+  const pristine = await snapshot();
+
+  for (const adapterId of unobserved) {
+    check(
+      findings,
+      unreportableSurface(adapterId)?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId} is expected to be a surface whose feedback channel has not been observed.`,
+    );
+
+    const refused = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
+    const document = JSON.parse(refused.stdout || '{}');
+    const rendered = await runPackagedCommand(root, ['activate', '--client', adapterId]);
+    const confirmation = await runPackagedCommand(root, ['activate', '--client', adapterId, '--confirm', `sha256:${'0'.repeat(64)}`, '--json']);
+    const confirmed = JSON.parse(confirmation.stdout || '{}');
+
+    check(
+      findings,
+      refused.exitCode === 2 && document.failure?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId} was not refused for its unobserved feedback channel: ${refused.exitCode} ${refused.stdout}${refused.stderr}`,
+    );
+    check(
+      findings,
+      new RegExp(`${adapterId} declares no feedback channel`).test(document.failure?.detail ?? '')
+        && /not been observed/.test(document.failure?.detail ?? ''),
+      `${adapterId}'s refusal does not say what is missing and why: ${JSON.stringify(document.failure?.detail)}.`,
+    );
+    check(
+      findings,
+      (document.observation ?? null) === null
+        && !/--confirm/.test(rendered.stdout)
+        && /declares no feedback channel/.test(`${rendered.stdout}${rendered.stderr}`),
+      `${adapterId}'s refusal offered something to confirm, or did not say why: ${rendered.stdout}${rendered.stderr}`,
+    );
+    check(
+      findings,
+      confirmation.exitCode === 2 && confirmed.failure?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId}: a confirmation was not refused for the same reason: ${confirmation.stdout}${confirmation.stderr}`,
+    );
+    check(
+      findings,
+      await snapshot() === pristine,
+      `${adapterId}'s refusal changed the clone: its Git configuration, its hook, or a client file.`,
+    );
+  }
+
+  for (const adapterId of answering) {
     const declared = describeAdapter(adapterId);
     const surface = declared.registration.file;
-    const owner = declared.registration.schemaVersion === null
-      ? { hooks: {} }
-      : {
-        [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
-        hooks: {},
-      };
-    // The Gate never CREATES a client's configuration file, so a clone that
-    // proves a real registration is one where the client already has one.
-    const root = await fixtureRepository({
-      files: { [surface]: { contents: `${JSON.stringify(owner, null, 2)}\n` } },
-    });
-
-    await assertThrowawayRepository(root);
-
     const preview = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
     const previewDocument = JSON.parse(preview.stdout || '{}');
 
@@ -1115,6 +1176,18 @@ const commandDrivenDesktopActivation = async () => {
         ? !/review/i.test(document.mutation?.summary ?? '')
         : (document.mutation?.summary ?? '').includes(review.detail),
       `${adapterId} did not report its declared post-registration review: ${JSON.stringify(document.mutation?.summary)}.`,
+    );
+  }
+
+  // The refused surfaces' files are exactly as their owners wrote them, after
+  // the answering surface activated beside them.
+  for (const adapterId of unobserved) {
+    const declared = describeAdapter(adapterId);
+
+    check(
+      findings,
+      await readFile(path.join(root, declared.registration.file), 'utf8') === `${JSON.stringify(ownerOf(declared), null, 2)}\n`,
+      `${adapterId}'s ${declared.registration.file} was written although it was never registered.`,
     );
   }
 

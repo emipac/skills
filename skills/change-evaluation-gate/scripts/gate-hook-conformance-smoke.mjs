@@ -21,12 +21,13 @@
  *    trust leaves no integration active, refuses to resume once the
  *    configuration identity changes, and completes only when every transaction
  *    identity is identical (AC-LIFE-009, FR-LIFE-016).
- * 5. `desktop-registration` — two adapters declaring different registration
- *    files and different block schemas both register through their own
- *    declarations into real client configuration files, every unrelated key and
- *    entry in those files survives, drift is reported and never repaired, and
- *    removal returns both files byte for byte to what their owners wrote
- *    (AC-ADAPT-003, FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
+ * 5. `desktop-registration` — a desktop adapter registers through its own
+ *    declaration into a real client configuration file beside another client's
+ *    file with a different block schema, every unrelated key and entry in both
+ *    files survives, drift is reported and never repaired, and removal returns
+ *    both files byte for byte to what their owners wrote. Only a surface that
+ *    can answer is registered (`TB-048`), so the other file is never selected
+ *    and never touched (AC-ADAPT-003, FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
  * 6. `settled-turn` — a real clean clone driven through the real packaged
  *    preflight program leaves no execution root, and cannot have made one: the
  *    child is given a temporary directory it may read and not write, so a run
@@ -799,13 +800,19 @@ const trustPauseAndResume = async () => {
 };
 
 /**
- * Two desktop registration surfaces, in real client configuration files.
+ * A desktop registration surface, in a real client configuration file, beside
+ * another client's file with a different block schema.
  *
  * This is the scenario `AC-ADAPT-003` exists for: not "an entry was written"
- * but "each entry was written in ITS OWN declared file and block schema, every
- * unrelated key and entry in those files survived registration, reconciliation
- * reported the truth without repairing it, and removal gave the files back
+ * but "the entry was written in ITS OWN declared file and block schema, every
+ * unrelated key and entry in that file survived registration, reconciliation
+ * reported the truth without repairing it, and removal gave the file back
  * byte for byte".
+ *
+ * Since `TB-048` only a desktop surface that can answer is registered, so the
+ * general settings file beside it is never selected: it is proved untouched at
+ * every step instead. Its own matcher-group schema is proved at the
+ * registration seam in `gate-adapter-registration.test.mjs`.
  *
  * No desktop client is installed or executed. The files are fixtures in the
  * shapes real captures recorded (FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
@@ -837,7 +844,6 @@ const desktopRegistration = async () => {
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '1.0.0', authoritative: false },
       { id: 'cursor', version: '1.0.0', authoritative: false },
     ],
   });
@@ -855,36 +861,25 @@ const desktopRegistration = async () => {
     '--adapter',
     adapterId,
   ].map((value) => `"${value}"`).join(' ');
-  const registered = { general: await readJson(general), dedicated: await readJson(dedicated) };
+  const registered = await readJson(dedicated);
 
   check(
     findings,
-    JSON.stringify(registered.general.hooks.Stop.at(-1))
-      === JSON.stringify({
-        matcher: '',
-        hooks: [{ type: 'command', command: commandFor('claude-code-desktop') }],
-      }),
-    'The general settings surface was not registered in its own declared block schema.',
-  );
-  check(
-    findings,
-    JSON.stringify(registered.dedicated.hooks.stop.at(-1))
-      === JSON.stringify({ command: commandFor('cursor') }),
+    JSON.stringify(registered.hooks.stop.at(-1)) === JSON.stringify({ command: commandFor('cursor') }),
     'The dedicated versioned surface was not registered in its own declared block schema.',
   );
 
-  // Survivors: every unrelated key and every unrelated entry, in both files.
+  // Survivors: every unrelated key and every unrelated entry, and the whole of
+  // the file that was never selected.
   check(
     findings,
-    JSON.stringify(registered.general.permissions) === JSON.stringify({ allow: ['Bash(ls:*)'], deny: [] })
-      && registered.dedicated.version === 1,
+    registered.version === 1 && registered.hooks.stop[0].command === 'somebody-elses-hook',
     'Registration rewrote a part of a client configuration file the adapter does not own.',
   );
   check(
     findings,
-    registered.general.hooks.Stop[0].hooks[0].command === 'somebody-elses-hook'
-      && registered.dedicated.hooks.stop[0].command === 'somebody-elses-hook',
-    'Registration disturbed an unrelated hook entry in the same client file.',
+    (await readFile(general, 'utf8')) === pristine.general,
+    'Registration touched a client configuration file no selected adapter declares.',
   );
 
   const healthy = await statusGate({ evidenceStore: store, repositoryRoot: root });
@@ -892,12 +887,12 @@ const desktopRegistration = async () => {
   check(findings, healthy.status === 'healthy', `A registered clone reported ${healthy.status}.`);
 
   // Somebody edits the Gate's own entry. Health reports it and repairs nothing.
-  const drifted = await readJson(general);
+  const drifted = await readJson(dedicated);
 
-  drifted.hooks.Stop.at(-1).matcher = '*';
-  await writeJson(general, drifted);
+  drifted.hooks.stop.at(-1).timeout = 5;
+  await writeJson(dedicated, drifted);
 
-  const beforeStatus = await readFile(general, 'utf8');
+  const beforeStatus = await readFile(dedicated, 'utf8');
   const degraded = await statusGate({ evidenceStore: store, repositoryRoot: root });
 
   check(
@@ -908,7 +903,7 @@ const desktopRegistration = async () => {
   );
   check(
     findings,
-    degraded.repaired === false && (await readFile(general, 'utf8')) === beforeStatus,
+    degraded.repaired === false && (await readFile(dedicated, 'utf8')) === beforeStatus,
     'Observing a drifted registration changed it.',
   );
 
@@ -922,14 +917,14 @@ const desktopRegistration = async () => {
   );
   check(
     findings,
-    refused.removed.length === 0 && (await readFile(dedicated, 'utf8')) === JSON.stringify(registered.dedicated, null, 2) + '\n',
+    refused.removed.length === 0 && (await readFile(dedicated, 'utf8')) === beforeStatus,
     'A refused deactivation still removed something.',
   );
 
-  // The operator puts their edit back; removal then takes exactly the two Gate
-  // entries and gives both files back byte for byte.
-  drifted.hooks.Stop.at(-1).matcher = '';
-  await writeJson(general, drifted);
+  // The operator puts their edit back; removal then takes exactly the Gate
+  // entry and gives both files back byte for byte.
+  delete drifted.hooks.stop.at(-1).timeout;
+  await writeJson(dedicated, drifted);
 
   const removal = await deactivateGate({ evidenceStore: store, repositoryRoot: root });
 
@@ -937,8 +932,8 @@ const desktopRegistration = async () => {
   check(
     findings,
     JSON.stringify(removal.removed.filter((entry) => entry.kind === 'adapter-registration').map((entry) => entry.adapter))
-      === JSON.stringify(['claude-code-desktop', 'cursor']),
-    'Deactivation did not withdraw both declared registrations.',
+      === JSON.stringify(['cursor']),
+    'Deactivation did not withdraw exactly the declared registration.',
   );
   check(
     findings,

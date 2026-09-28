@@ -625,8 +625,12 @@ with theirs:
 
 **The verdict is activation's own.** `inspectActivation` builds the same
 preview `gate activate` builds, from the same request, and applies the refusals
-of steps 1, 4, and 6 — the functions the transaction calls — in the
-transaction's order. The last line is either that activation would proceed past
+of steps 1, 2, 4, and 6 — the functions the transaction calls — in the
+transaction's order. Step 2's is a selected preflight surface whose feedback
+channel has not been observed (`feedback-channel-unobserved`, `TB-048`);
+doctor inspects the default activation, whose selection is authoritative Git
+alone, so it never meets that refusal, but it would stop there by the same
+function if it did. The last line is either that activation would proceed past
 every step doctor can see (`repository-identity`, `preview`,
 `runner-resolution`, `hook-chain-validation`) or the first step and reason code
 that stops it, which a confirmed `gate activate` then stops at with the same

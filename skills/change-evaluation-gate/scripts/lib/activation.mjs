@@ -28,7 +28,7 @@ import {
   registerAdapterSurface,
   withdrawAdapterRegistration,
 } from './adapter-registration.mjs';
-import { describeAdapter } from './adapters.mjs';
+import { describeAdapter, unreportableSurface } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
@@ -1340,6 +1340,35 @@ const entryRefusal = (request) => {
   return null;
 };
 
+/**
+ * The refusal step 2 makes: a selected preflight surface that could not answer
+ * anything it evaluated (`TB-048`).
+ *
+ * Whether a surface can answer is the adapter's own declared data, asked of
+ * `unreportableSurface`; this names no client. It is asked of the whole
+ * selection at the preview, before consent is read and long before anything is
+ * registered, so a selection holding one such surface registers nothing at all
+ * and offers nothing to confirm (`AC-LIFE-009`, `SG-HOOK-001`). Authoritative
+ * Git is never refused here: it answers by blocking.
+ */
+export const unreportableAdapterRefusal = (adapters = []) => {
+  const refused = adapters
+    .map((adapter) => unreportableSurface(adapter?.id ?? null))
+    .filter((entry) => entry !== null);
+
+  return refused.length === 0
+    ? null
+    : {
+      step: 'preview',
+      reasonCode: refused[0].reasonCode,
+      errors: refused.map((entry) => ({
+        adapter: entry.adapterId,
+        absence: entry.absence,
+        message: `${entry.detail} It is not registered; it stays declared and testable until a real client invocation shows how it answers.`,
+      })),
+    };
+};
+
 /** The refusal step 4 makes: a logical runner no platform executable was found for (FR-CFG-004). */
 const runnerResolutionRefusal = (described) => (described.runners.unresolved.length > 0
   ? { step: 'runner-resolution', reasonCode: 'runner-unresolved', errors: described.runners.unresolved }
@@ -1403,8 +1432,9 @@ export const STEPS_ANSWERED_BY_ACTIVATION = Object.freeze([
  * It resolves exactly what `runActivation` resolves — the same identities, the
  * same runner resolution, the same hook-chain validation — and builds the same
  * preview `previewActivation` builds, which writes nothing (`FR-LIFE-004`). It
- * then applies the refusals `runActivation` applies at steps 1, 4, and 6, in
- * that order, and reports the first. No consent is read, no trust is sought,
+ * then applies the refusals `runActivation` applies at steps 1, 2, 4, and 6,
+ * in that order, and reports the first — step 2's being a selected preflight
+ * surface that could not answer (`TB-048`). No consent is read, no trust is sought,
  * nothing is self-tested, and nothing is written; the steps that only
  * performing them could answer are `STEPS_ANSWERED_BY_ACTIVATION`.
  *
@@ -1430,6 +1460,12 @@ export const inspectActivation = async (request, dependencies = {}) => {
       preview: null,
       described,
     };
+  }
+
+  const unreportable = unreportableAdapterRefusal(described.adapters);
+
+  if (unreportable !== null) {
+    return { reached: ['repository-identity', 'preview'], stop: unreportable, preview, described };
   }
 
   const refusals = [
@@ -1873,6 +1909,15 @@ const runActivation = async (request, dependencies, transaction) => {
         actual: transactionId,
       }]);
     }
+  }
+
+  // A selected preflight surface that could not answer anything it evaluated
+  // is refused here, before consent, so the whole selection registers nothing
+  // (`TB-048`, `AC-LIFE-009`).
+  const unreportable = unreportableAdapterRefusal(described.adapters);
+
+  if (unreportable !== null) {
+    return fail(unreportable.step, unreportable.reasonCode, unreportable.errors);
   }
 
   // 3. Consent, bound to this repository and this preview. Consent is never

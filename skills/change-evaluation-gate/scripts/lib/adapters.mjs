@@ -99,6 +99,38 @@ export const ADAPTER_TRUST_MODELS = Object.freeze({
   }),
 });
 
+/**
+ * Why an adapter declares no feedback channel, when it declares none.
+ *
+ * One `null` used to carry two unrelated meanings. Authoritative Git declares
+ * no channel because it needs none: it answers by blocking, so a non-zero exit
+ * IS the answer. The desktop surfaces nobody has yet driven with a real client
+ * invocation declare no channel because nobody knows how they take an answer
+ * back. The runtime could not tell the two apart, so an unobserved surface
+ * registered as though it were ready and then evaluated every turn into
+ * silence (`TB-048`).
+ *
+ * `absence` states which one is meant, and the validator rejects a declaration
+ * with no channel that says neither. A declared channel has no absence to
+ * explain, so `absence` is `null` beside it.
+ *
+ * `requiresNativeBlocking` is the rule `not-needed` rests on: only a surface
+ * that blocks natively has an answer that is not a channel (`FR-ADAPT-004`,
+ * `FR-ADAPT-005`, `RISK-004`).
+ */
+export const FEEDBACK_ABSENCES = Object.freeze({
+  'not-needed': Object.freeze({
+    id: 'not-needed',
+    asserts: 'this surface needs no feedback channel: it answers by blocking, so its exit status is the answer.',
+    requiresNativeBlocking: true,
+  }),
+  'not-observed': Object.freeze({
+    id: 'not-observed',
+    asserts: 'how this surface takes an answer back has not been observed from a real client invocation, so no channel is declared and none is guessed.',
+    requiresNativeBlocking: false,
+  }),
+});
+
 /** The fields each category must state. An empty category declares nothing. */
 const CAPABILITY_FIELDS = Object.freeze({
   event: Object.freeze(['deterministic', 'normalizedTriggers']),
@@ -112,7 +144,9 @@ const CAPABILITY_FIELDS = Object.freeze({
   filesystem: Object.freeze(['sameFilesAsClient']),
   git: Object.freeze(['metadata', 'index']),
   invocation: Object.freeze(['nonInteractive', 'mechanism', 'structuredResult', 'timeoutMs']),
-  feedback: Object.freeze(['channel', 'field', 'none', 'maxIterations']),
+  // `absence` is stated even beside a channel, as `null`: "this surface has a
+  // channel" and "this surface did not say why it has none" must not look alike.
+  feedback: Object.freeze(['channel', 'field', 'none', 'maxIterations', 'absence']),
 });
 
 /** The sentinel a raced invocation resolves with when its timeout wins. */
@@ -181,6 +215,53 @@ const trustDeclarationErrors = (trust) => {
 };
 
 /**
+ * Check what an adapter declared about its feedback against what an absence of
+ * a channel is (`TB-048`).
+ *
+ * A declaration with no channel must say why, in a value `FEEDBACK_ABSENCES`
+ * defines, and `not-needed` is coherent only beside native blocking. A
+ * declaration with a channel states no absence.
+ */
+const feedbackDeclarationErrors = (capabilities) => {
+  const feedback = capabilities.feedback;
+
+  if (!isPlainObject(feedback) || !('channel' in feedback)) {
+    // The missing-category and missing-field checks already said so.
+    return [];
+  }
+
+  if (feedback.channel !== null) {
+    return 'absence' in feedback && feedback.absence !== null
+      ? [{
+        code: 'adapter-feedback-absence-contradictory',
+        path: 'capabilities.feedback.absence',
+        message: `A declaration naming the feedback channel ${JSON.stringify(feedback.channel)} has no absence to explain; absence must be null beside a channel.`,
+      }]
+      : [];
+  }
+
+  const declared = FEEDBACK_ABSENCES[feedback.absence] ?? null;
+
+  if (declared === null) {
+    return [{
+      code: 'adapter-feedback-absence-undeclared',
+      path: 'capabilities.feedback.absence',
+      message: `A declaration with no feedback channel must say why: ${Object.keys(FEEDBACK_ABSENCES).map((id) => JSON.stringify(id)).join(' or ')}. ${JSON.stringify(feedback.absence ?? null)} says neither, so nothing can tell a surface that needs no channel from one nobody has observed.`,
+    }];
+  }
+
+  if (declared.requiresNativeBlocking && capabilities.blocking?.native !== true) {
+    return [{
+      code: 'adapter-feedback-absence-incoherent',
+      path: 'capabilities.feedback.absence',
+      message: `${JSON.stringify(declared.id)} asserts that ${declared.asserts} This surface declares no native blocking, so it has no answer that is not a channel.`,
+    }];
+  }
+
+  return [];
+};
+
+/**
  * Validate one adapter capability declaration.
  *
  * A missing category is an error rather than a default, and an unknown one is
@@ -232,6 +313,7 @@ export const validateAdapterDeclaration = (capabilities) => {
   }
 
   errors.push(...trustDeclarationErrors(capabilities.trust));
+  errors.push(...feedbackDeclarationErrors(capabilities));
 
   return errors;
 };
@@ -297,11 +379,14 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 600_000,
       }),
+      // No channel is needed, and none ever will be: this surface answers by
+      // blocking, so a non-zero exit IS the answer (`TB-048`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-needed',
       }),
     }),
   }),
@@ -384,11 +469,18 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 300_000,
       }),
+      // No channel is declared because none has been observed: this surface
+      // has not been driven by a real client invocation, so how it takes an
+      // answer back is unknown and is not guessed. Until it is observed this
+      // surface stays declared and testable, and is never registered: a
+      // preflight that cannot answer would evaluate every turn into silence
+      // (`TB-048`, `SG-SUPPORT-001`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-observed',
       }),
     }),
   }),
@@ -472,11 +564,18 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 300_000,
       }),
+      // No channel is declared because none has been observed: this surface
+      // has not been driven by a real client invocation, so how it takes an
+      // answer back is unknown and is not guessed. Until it is observed this
+      // surface stays declared and testable, and is never registered: a
+      // preflight that cannot answer would evaluate every turn into silence
+      // (`TB-048`, `SG-SUPPORT-001`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-observed',
       }),
     }),
   }),
@@ -583,6 +682,7 @@ const ADAPTER_REGISTRY = Object.freeze({
         // on it; a third repetition of an unchanged verdict has nothing to add
         // and is how a preflight becomes a loop (TB-027).
         maxIterations: 2,
+        absence: null,
       }),
     }),
   }),
@@ -1017,6 +1117,37 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
     : decisionLines(view).join('\n');
 
   return `${JSON.stringify({ [feedback.field]: message })}\n`;
+};
+
+/**
+ * Why one adapter's surface cannot answer through anything it declares, or
+ * `null` when it can (`TB-048`).
+ *
+ * A preflight surface answers only through its feedback channel: it never
+ * blocks, so a preflight with no channel evaluates and then says nothing, on
+ * every turn. Such a surface is not registered, and a runner that reaches one
+ * anyway does no work. Authoritative Git declares no channel either and is
+ * never refused here: it answers by blocking (`FR-ADAPT-005`, `FR-ADAPT-007`).
+ *
+ * Read from the declaration alone, so Gate core asks this question without
+ * learning which client it is asking about (`SG-OWNER-001`).
+ */
+export const unreportableSurface = (adapterId) => {
+  const adapter = describeAdapter(adapterId);
+
+  if (adapter === null || adapter.role !== 'preflight' || adapter.capabilities.feedback.channel !== null) {
+    return null;
+  }
+
+  const absence = adapter.capabilities.feedback.absence ?? null;
+  const why = FEEDBACK_ABSENCES[absence]?.asserts ?? 'it does not say why.';
+
+  return {
+    adapterId: adapter.id,
+    reasonCode: 'feedback-channel-unobserved',
+    absence,
+    detail: `${adapter.id} declares no feedback channel (${absence ?? 'no absence stated'}): ${why} A preflight surface answers only through that channel, so this one would evaluate every turn and report nothing.`,
+  };
 };
 
 /**
