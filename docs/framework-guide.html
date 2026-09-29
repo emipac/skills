@@ -2158,9 +2158,10 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
 
       <p>
         A check passes when you run it by hand and fails or reports
-        <span class="pill p-unver">unverified</span> under the Gate. Almost always this is the
-        evaluation environment, not your code. Work down this list in order — it is ordered by how
-        often each one turns out to be the answer.
+        <span class="pill p-unver">unverified</span> under the Gate. Usually this is the evaluation
+        environment rather than your code — but not always, and the note at the end of this section
+        is the case where your own terminal is the one to distrust. Work down this list in order —
+        it is ordered by how often each one turns out to be the answer.
       </p>
 
       <div class="table-wrap">
@@ -2181,6 +2182,11 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
               <td>Tests fail on a missing key, token, or connection string that works in your shell</td>
               <td>The evaluation does not inherit your shell. A check receives only its <code>allowed_environment</code>, plus any name you approved.</td>
               <td>Name it in <code>evidence.sensitive_inputs</code>, and name the file it lives in — usually <code>.env</code> — in <code>evidence.environment_files</code>. Then re-pin.</td>
+            </tr>
+            <tr>
+              <td>A check flags files you never wrote — generated caches, compiled containers, build output</td>
+              <td>The tool's own paths include a generated directory. Yours is git-ignored, so it never enters the snapshot; the tool then boots the project, the directory is written fresh, and the tool grades what it has just caused to exist. Laravel's <code>bootstrap/cache</code> is the common one; so are <code>.next</code>, <code>dist</code>, <code>target</code>, and <code>__pycache__</code>.</td>
+              <td>Exclude the directory in that tool's own configuration — not in Gate policy. Nothing re-pins.</td>
             </tr>
             <tr>
               <td><span class="pill p-unver">unverified</span>, no output, right around the time limit</td>
@@ -2209,6 +2215,41 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">When your terminal is the one that is wrong</span>
+        <p>
+          A local pass is not automatically the truth. Your working copy carries state a clean
+          clone does not: a <code>.env</code>, generated directories in whatever shape your last
+          command left them, caches, and artifacts some tool rewrote on an earlier run. The
+          snapshot has none of it — which is precisely what a colleague's fresh clone and your CI
+          runner also have none of.
+        </p>
+        <p>
+          One measured example. A project's static-analysis check gave three different answers for
+          the same unchanged tree, decided entirely by when the developer had last run a command
+          that boots the application:
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>The generated cache directory held…</th><th>The check said</th></tr></thead>
+            <tbody>
+              <tr><td>Files an earlier run of that same tool had already rewritten</td><td>passed</td></tr>
+              <tr><td>Nothing — cleared, and not yet regenerated</td><td>passed</td></tr>
+              <tr><td>Freshly generated stock files — the snapshot, and any clean clone</td><td>two files would change</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Nothing about the code differed across those three runs. So when the Gate reports
+          <span class="pill p-deny">failed</span> — a grader ran and returned a verdict — and your
+          terminal reports a pass, find out what your tree is carrying that a clean one would not,
+          before concluding the Gate is wrong.
+          <span class="pill p-unver">unverified</span> is the outcome that usually points at the
+          evaluation environment; <span class="pill p-deny">failed</span> usually points at the
+          check.
+        </p>
       </div>
 
       <div class="note">
