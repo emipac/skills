@@ -283,6 +283,22 @@ must be explicit. `framework-setup` initially leaves gate configuration unselect
 Clients with component selection expose the module separately; clients that install
 an entire plugin may bundle dormant assets, which constitutes only `installed`.
 
+**Framework command**:
+The single maintainer-facing command shipped by the always-installed
+`framework-setup` module that composes existing previewed operations — setup,
+schema migration, Gate configuration, and Gate lifecycle — into guided setup,
+named Gate configuration revisions, and a static read-only report. It owns no
+write path of its own and reaches the **Gate module** only through the Gate's
+versioned machine-readable command interface.
+_Avoid_: wizard (as a component name), installer
+
+**Guided setup**:
+The **Framework command** flow that derives the next adoption or recovery step
+from observed state and runs each step through the operation that owns it,
+asking only what that operation cannot derive. In an interactive terminal an
+explicit answer after the complete preview is **Activation consent** for that
+preview; without one it confirms nothing and prints the plan.
+
 **Gate health**:
 The reconciled operational condition of an intended activation: `healthy` when the
 receipt, runtime, trust, hooks, and selected adapters match; `degraded` when a
