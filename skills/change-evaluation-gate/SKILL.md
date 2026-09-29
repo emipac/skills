@@ -160,7 +160,12 @@ pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
 historical Evidence. With `--json`, each entry of `observation.next.remedies`
 also carries `subcommands`, the Gate subcommands that perform it in order
 (empty when the remedy is the maintainer's own act); render commands from that
-list rather than from the remedy's name.
+list rather than from the remedy's name. `observation.configuration` carries the
+Gate section as values: `working` (the section this clone declares, or the
+reason it does not resolve) and, on an activated clone, `pinned` — the
+receipt's identity and, when a document reproduces that identity, its `source`
+and `policy`. Compare the two to say which value moved; never read the receipt
+for it.
 
 A declared Grader surface Git does not track — typically an
 `.agent-framework.yaml` nobody committed — is **unversioned**, not changed. Every

@@ -2085,6 +2085,19 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         </p>
       </div>
 
+      <div class="note">
+        <span class="note-tag">Which value moved?</span>
+        <p>
+          <code>agent-framework config show</code> lists the Gate section by subcontract — checks,
+          budget, bypass, execution, evidence — and marks each value <code>matches</code> or
+          <code>differs</code> against what the receipt pinned, naming each added or removed name.
+          It reads the pinned values the way <code>git gate sync</code> does, only from a document
+          that reproduces the pinned identity; when none does, it says so and compares only the
+          section as a whole. Sensitive inputs appear by name and source, never value. It writes
+          nothing. Add <code>--json</code> for the same view as a document.
+        </p>
+      </div>
+
       <p class="cmd-label">Re-pin the changed policy — edit, then one preview and one confirmation</p>
       <pre><code>git gate sync                            # what the policy was, what it is now, and whether it is weaker
 git gate sync --confirm &lt;token&gt;          # pins exactly that preview</code></pre>

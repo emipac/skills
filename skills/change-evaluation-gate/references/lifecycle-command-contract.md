@@ -194,7 +194,31 @@ the next commit was denied for. Runner pinning re-observes each pinned
 executable with one `access(2)` and composes each argument vector in-process: no
 pinned program is started and nothing is written. A trusted-configuration
 finding names `.agent-framework.yaml` as its `path`; the receipt pins an
-identity, not a document, so which key moved is not reported.
+identity, not a document, so the finding does not say which key moved.
+
+**The configuration section as values** (`TB-068`, `FR-GUIDE-005`). `gate
+status --json` also carries `observation.configuration`, on every clone:
+
+- `working` — `{ resolved, reasonCode, detail, identity, policy }`: the
+  `evaluation_gate` section `resolveConfiguration` reads, its configuration
+  identity (the one a receipt pins), or, when it does not resolve, the reason
+  (`gate-policy-missing`, `gate-policy-invalid`, …) with `identity` and `policy`
+  null.
+- `pinned` — `null` on a clone with no receipt, else `{ identity, source,
+  policy }`: the identity the receipt pinned, and the pinned section recovered
+  by the rule `gate sync` judges a transition against — the receipt itself when
+  a sync wrote it (`source: receipt`), the file when its identity never moved
+  (`configuration-file`), else the committed `.agent-framework.yaml` at `HEAD`
+  (`committed-configuration`), accepted only when it reproduces the pinned
+  identity. When nothing does, `source` and `policy` are null and only the
+  identities can be compared; nothing is guessed.
+
+Comparing `working.policy` with `pinned.policy` says which key moved; the
+Framework command's `agent-framework config show` renders exactly that. Git is
+only read, so status still writes nothing. The section holds check identities,
+limits, and Sensitive input names, never a value. The field is additive and
+the text rendering is unchanged, so the document stays
+`change-evaluation-gate/observation/1`.
 
 **Unversioned Grader surfaces** (`TB-066`). On an activated clone `gate
 status` also states every declared Grader surface Git does not track — the

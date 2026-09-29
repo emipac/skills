@@ -39,6 +39,35 @@ remain, and `2` when it could not run.
 Completion criterion: the next step and its owning command are known. Perform
 it through the section below that owns it.
 
+## What the Gate runs: `agent-framework config show`
+
+To read the Gate configuration section without reading flow-JSON lines, run:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs config show [--json] [--project <directory>]
+```
+
+It lists the five subcontracts — `checks`, `budget`, `bypass`, `execution`,
+`evidence` — by name, one line per key. On an activated clone each value is
+marked `matches` or `differs` against the section the Activation receipt
+pinned, and a differing list of names says which were added and removed. The
+receipt pins the section's identity, not its values, so the pinned values are
+those `gate status --json` recovers (`observation.configuration`) by the rule
+`gate sync` judges against: the receipt when a sync wrote it, else the file
+when its identity never moved, else the committed file at `HEAD`. When no
+document reproduces the pinned identity each value is `unrecoverable` and only
+the section as a whole is compared. A clone never activated compares nothing.
+Sensitive runtime inputs appear by name and the source `gate doctor --json`
+resolves each from — never a value. A clone with no Gate section says so and
+names setup's next step.
+
+It is read-only: nothing under the clone or `.git` changes. Without the Gate
+module a schema v4 clone is refused with `gate-unavailable`, and a Gate whose
+status lacks the section is refused with `gate-configuration-unobserved` — update
+the Gate module. Exit status is `0` when nothing differs, `1` when there is no
+Gate section, it does not resolve, or a value differs, and `2` when it could not
+run.
+
 ## Process
 
 ### 1. Discover

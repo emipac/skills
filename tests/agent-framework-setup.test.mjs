@@ -212,8 +212,17 @@ const throwawayRepository = async (t) => {
   return root;
 };
 
-/** The schema v4 configuration `gate-operator-surface` activates, with or without its Gate section. */
-const schemaV4Configuration = ({ gate = true, totalSeconds = 600 } = {}) => [
+/**
+ * The schema v4 configuration `gate-operator-surface` activates, with or
+ * without its Gate section, and with any dependency roots or evidence policy a
+ * fixture declares.
+ */
+const schemaV4Configuration = ({
+  gate = true,
+  totalSeconds = 600,
+  dependencyRoots = [],
+  evidence = {},
+} = {}) => [
   'schema_version: 4',
   'backend: laravel',
   'frontend: none',
@@ -246,7 +255,11 @@ const schemaV4Configuration = ({ gate = true, totalSeconds = 600 } = {}) => [
     '    marker: null',
     '  execution:',
     '    budget_skippable: []',
-    '  evidence: {}',
+    ...(dependencyRoots.length === 0 ? [] : [
+      '    dependency_roots:',
+      ...dependencyRoots.map((root) => `      - ${root}`),
+    ]),
+    `  evidence: ${JSON.stringify(evidence)}`,
   ] : []),
   '',
 ].join('\n');
@@ -278,17 +291,27 @@ const schemaV4Clone = async (t, options) => {
   return root;
 };
 
-const gateJson = async (root, argv) => {
-  const result = await run(process.execPath, [GATE, ...argv, '--json'], { cwd: root });
+const gateJson = async (root, argv, env = environment()) => {
+  const result = await run(process.execPath, [GATE, ...argv, '--json'], { cwd: root, env });
 
   return JSON.parse(result.stdout);
 };
 
-/** A clone activated through the Gate's own `activate`, previewed and then confirmed. */
-const activatedClone = async (t) => {
-  const root = await schemaV4Clone(t);
-  const preview = await gateJson(root, ['activate']);
-  const confirmed = await gateJson(root, ['activate', '--confirm', preview.observation.confirmationToken]);
+/**
+ * A clone activated through the Gate's own `activate`, previewed and then
+ * confirmed. `prepare` runs on the clone before its baseline commit, for a
+ * fixture that needs more than the configuration (an ignored environment
+ * file, say).
+ */
+const activatedClone = async (t, { prepare = async () => {}, env, ...options } = {}) => {
+  const root = await throwawayRepository(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration(options), 'utf8');
+  await prepare(root);
+  await commit(root);
+
+  const preview = await gateJson(root, ['activate'], env);
+  const confirmed = await gateJson(root, ['activate', '--confirm', preview.observation.confirmationToken], env);
 
   assert.equal(confirmed.mutation.performed, true, `The fixture failed to activate: ${confirmed.mutation.reasonCode}.`);
 
@@ -601,12 +624,16 @@ test('TB-074 SG-OWNER-001: the Framework command holds no remedy-to-command mapp
  * which command performs a remedy — exactly as it reports any Gate answer it
  * cannot use (`gate-unreadable`): exit 2, no steps, and nothing written.
  */
-test('TB-074: setup refuses, naming the installed Gate, when the Gate\'s document names a remedy without its subcommands', async (t) => {
+/**
+ * The real Gate on PATH, answering as a Gate from before a field existed:
+ * `strip` is the statement that removes that field from each `document` it
+ * prints.
+ */
+const olderGateOnPath = async (t, strip) => {
   const bin = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-bin-')));
   const olderGate = path.join(bin, 'change-evaluation-gate');
 
   t.after(() => rm(bin, { recursive: true, force: true }));
-  // The real Gate, answering as a Gate from before the field existed.
   await writeFile(olderGate, [
     '#!/usr/bin/env node',
     "const { spawnSync } = require('node:child_process');",
@@ -614,7 +641,7 @@ test('TB-074: setup refuses, naming the installed Gate, when the Gate\'s documen
     'let stdout = answered.stdout;',
     'try {',
     '  const document = JSON.parse(stdout);',
-    '  for (const remedy of document.observation?.next?.remedies ?? []) { delete remedy.subcommands; }',
+    `  ${strip}`,
     '  stdout = `${JSON.stringify(document, null, 2)}\\n`;',
     '} catch {}',
     'process.stdout.write(stdout);',
@@ -623,7 +650,14 @@ test('TB-074: setup refuses, naming the installed Gate, when the Gate\'s documen
     '',
   ].join('\n'), { mode: 0o755 });
 
-  const env = environment({ PATH: `${bin}${path.delimiter}${pathWithoutGate()}` });
+  return { olderGate, env: environment({ PATH: `${bin}${path.delimiter}${pathWithoutGate()}` }) };
+};
+
+test('TB-074: setup refuses, naming the installed Gate, when the Gate\'s document names a remedy without its subcommands', async (t) => {
+  const { olderGate, env } = await olderGateOnPath(
+    t,
+    'for (const remedy of document.observation?.next?.remedies ?? []) { delete remedy.subcommands; }',
+  );
   const root = await activatedClone(t);
 
   await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
@@ -740,13 +774,352 @@ test('TB-067: an unknown subcommand is refused with exit 2 and the usage', async
   const root = await noConfigurationClone(t);
   const before = await cloneHash(root);
 
-  for (const argv of [[], ['report'], ['setup', '--confirm', 'x']]) {
+  for (const argv of [[], ['report'], ['setup', '--confirm', 'x'], ['config'], ['config', 'edit'], ['config', 'show', '--confirm', 'x']]) {
     const result = await agentFramework(root, argv);
 
     assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}.`);
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /usage: agent-framework setup \[--json\] \[--project <directory>\]/);
+    assert.match(result.stderr, /agent-framework config show \[--json\] \[--project <directory>\]/);
   }
 
   assert.equal(await cloneHash(root), before);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-068: `agent-framework config show`.
+ *
+ * The Gate configuration section, read through the Gate's own `status --json`
+ * (`observation.configuration`), shown by subcontract, and on an activated
+ * clone marked value by value against the section the Activation receipt
+ * pinned (`FR-GUIDE-005`, `AC-GUIDE-003`).
+ * ------------------------------------------------------------------------- */
+
+const SUBCONTRACTS = ['checks', 'budget', 'bypass', 'execution', 'evidence'];
+
+/** How one shown value reads in the text rendering, as the document states it. */
+const shownValue = (value) => (value.declared ? JSON.stringify(value.value) : '(not set)');
+
+/**
+ * The text rendering names the same state, subcontracts, values, markings,
+ * runtime inputs, and next step as the document (`--json` mirrors text).
+ */
+const assertConfigMirror = (stdout, shown) => {
+  const lines = stdout.split('\n');
+
+  assert.equal(lines[0], 'agent-framework config show');
+  assert.ok(lines.includes(`project: ${shown.project}`));
+
+  if (shown.failure !== null) {
+    assert.ok(lines.some((line) => line.startsWith(`failed: ${shown.failure.reasonCode} — `)));
+
+    return;
+  }
+
+  assert.ok(lines.includes(`state: ${shown.state}`), `text does not name state ${shown.state}.`);
+
+  for (const subcontract of shown.subcontracts) {
+    const heading = lines.indexOf(`${subcontract.name}:`);
+
+    assert.notEqual(heading, -1, `text does not name the ${subcontract.name} subcontract.`);
+
+    for (const value of subcontract.values) {
+      const line = lines.slice(heading + 1).find((entry) => entry.startsWith(`  ${value.key}: `));
+
+      assert.ok(line, `text does not show ${subcontract.name}.${value.key}.`);
+      assert.ok(line.startsWith(`  ${value.key}: ${shownValue(value)}`), line);
+
+      if (value.marking !== null) {
+        assert.match(line, new RegExp(` — ${value.marking}\\b`), line);
+      }
+    }
+  }
+
+  for (const input of shown.runtimeInputs?.resolved ?? []) {
+    assert.ok(lines.includes(`  - ${input.name}: from ${input.source}`), `text does not name ${input.name}'s source.`);
+  }
+
+  for (const input of shown.runtimeInputs?.unresolved ?? []) {
+    assert.ok(lines.some((line) => line.startsWith(`  - ${input.name}: unresolved`)), `text does not name ${input.name}.`);
+  }
+
+  for (const file of shown.runtimeInputs?.environmentFiles ?? []) {
+    assert.ok(lines.includes(`  environment file ${file.path}: ${file.status}`), `text does not name ${file.path}.`);
+  }
+
+  const next = lines.filter((line) => line.startsWith('next: '));
+
+  assert.equal(next.length, 1);
+  assert.equal(next[0], `next: ${shown.next === null ? 'nothing' : (shown.next.command ?? shown.next.instruction)}`);
+};
+
+/**
+ * Run `config show` and `config show --json` twice each against `root`, and
+ * prove the four runs changed nothing under the clone or `.git`, printed
+ * byte-identical output on repeat, and that the text carries what the document
+ * carries (`SG-GUIDE-001`).
+ */
+const observeConfigShow = async (root, options = {}) => {
+  const before = await cloneHash(root);
+  const text = await agentFramework(root, ['config', 'show'], options);
+  const json = await agentFramework(root, ['config', 'show', '--json'], options);
+  const textAgain = await agentFramework(root, ['config', 'show'], options);
+  const jsonAgain = await agentFramework(root, ['config', 'show', '--json'], options);
+
+  assert.equal(await cloneHash(root), before, 'config show changed a byte under the clone or .git.');
+  assert.equal(text.stderr, '', text.stderr);
+  assert.equal(json.stderr, '', json.stderr);
+  assert.equal(textAgain.stdout, text.stdout, 'a repeated config show printed different text.');
+  assert.equal(jsonAgain.stdout, json.stdout, 'a repeated config show --json printed a different document.');
+  assert.equal(text.status, json.status);
+  assert.equal(json.document.exitStatus, json.status);
+  assert.equal(json.document.document, 'agent-framework/config-show/1');
+  assert.equal(json.document.command, 'config show');
+  assertConfigMirror(text.stdout, json.document);
+
+  return { text, json, shown: json.document };
+};
+
+/** One shown value, by its path in the section. */
+const valueAt = (shown, dotted) => {
+  const [name, key] = dotted.split('.');
+
+  return shown.subcontracts.find((subcontract) => subcontract.name === name)
+    ?.values.find((value) => value.key === key);
+};
+
+/**
+ * THE FIRST RED TEST OF TB-068.
+ *
+ * An activated clone whose working configuration adds a dependency root after
+ * activation shows that root as differing from what the Activation receipt
+ * pinned, and every other value as matching — where before this slice the
+ * Gate said only that the configuration's identity moved (`AC-GUIDE-003`,
+ * `FR-GUIDE-005`).
+ */
+test('TB-068 AC-GUIDE-003: an activated clone lists a dependency root added after activation as differing from the pinned value', async (t) => {
+  const root = await activatedClone(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ dependencyRoots: ['vendor'] }), 'utf8');
+
+  const { shown, text } = await observeConfigShow(root);
+  const roots = valueAt(shown, 'execution.dependency_roots');
+
+  assert.equal(shown.state, 'activated');
+  assert.equal(shown.exitStatus, 1);
+  assert.deepEqual(roots.value, ['vendor']);
+  assert.equal(roots.declared, true);
+  assert.deepEqual(roots.pinned, { declared: false, value: null });
+  assert.equal(roots.marking, 'differs');
+  assert.deepEqual(roots.added, ['vendor']);
+  assert.deepEqual(roots.removed, []);
+  assert.match(text.stdout, /^ {2}dependency_roots: \["vendor"\] — differs from the pinned value \(not set\); added vendor$/m);
+
+  // Every other value is what the receipt pinned.
+  const others = shown.subcontracts.flatMap((subcontract) => subcontract.values
+    .filter((value) => value !== roots)
+    .map((value) => [`${subcontract.name}.${value.key}`, value.marking]));
+
+  assert.ok(others.length > 0);
+  assert.deepEqual(others.filter(([, marking]) => marking !== 'matches'), []);
+
+  // The section-level verdict is the Gate's: the identity it pinned moved.
+  const status = await gateJson(root, ['status']);
+
+  assert.equal(shown.section.pinned.identity, status.observation.configuration.pinned.identity);
+  assert.equal(shown.section.identity, status.observation.configuration.working.identity);
+  assert.equal(shown.section.pinned.matches, false);
+  assert.equal(shown.section.pinned.source, 'committed-configuration');
+  assert.match(text.stdout, /^section: differs from what the Activation receipt pinned/m);
+});
+
+test('TB-068 AC-GUIDE-003: an activated, unchanged clone shows every subcontract by name, each value matching the pinned one', async (t) => {
+  const root = await activatedClone(t);
+  const { shown, text } = await observeConfigShow(root);
+
+  assert.equal(shown.state, 'activated');
+  assert.equal(shown.exitStatus, 0);
+  assert.deepEqual(shown.subcontracts.map((subcontract) => subcontract.name), SUBCONTRACTS);
+  assert.deepEqual(
+    shown.subcontracts.map((subcontract) => [subcontract.name, subcontract.values.map((value) => [value.key, value.marking])]),
+    [
+      ['checks', [['required', 'matches'], ['advisory', 'matches']]],
+      ['budget', [['total_seconds', 'matches']]],
+      ['bypass', [['enabled', 'matches'], ['marker', 'matches']]],
+      ['execution', [['budget_skippable', 'matches']]],
+      ['evidence', []],
+    ],
+  );
+  assert.deepEqual(valueAt(shown, 'checks.required').value, ['configuration.broad-tests.test']);
+  assert.deepEqual(valueAt(shown, 'budget.total_seconds').pinned, { declared: true, value: 600 });
+  assert.equal(shown.section.pinned.matches, true);
+  assert.equal(shown.section.pinned.source, 'configuration-file');
+  assert.equal(shown.runtimeInputs, null);
+  assert.equal(shown.next, null);
+  assert.match(text.stdout, /^section: matches what the Activation receipt pinned \(sha256:[0-9a-f]{64}\)$/m);
+  assert.match(text.stdout, /^ {2}total_seconds: 600 — matches the pinned value$/m);
+});
+
+test('TB-068 AC-GUIDE-003: a removed and an added check name are each named, and the next step is setup\'s', async (t) => {
+  const root = await activatedClone(t);
+
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    schemaV4Configuration().replace(
+      '    required:\n      - configuration.broad-tests.test\n    advisory: []\n',
+      '    required: []\n    advisory:\n      - configuration.broad-tests.test\n',
+    ),
+    'utf8',
+  );
+
+  const { shown, text } = await observeConfigShow(root);
+  const setup = await agentFramework(root, ['setup', '--json']);
+
+  assert.deepEqual(
+    ['checks.required', 'checks.advisory'].map((dotted) => {
+      const { marking, added, removed } = valueAt(shown, dotted);
+
+      return { marking, added, removed };
+    }),
+    [
+      { marking: 'differs', added: [], removed: ['configuration.broad-tests.test'] },
+      { marking: 'differs', added: ['configuration.broad-tests.test'], removed: [] },
+    ],
+  );
+  assert.match(text.stdout, /^ {2}required: \[\] — differs from the pinned value \["configuration\.broad-tests\.test"\]; removed configuration\.broad-tests\.test$/m);
+  assert.deepEqual(shown.next, setup.document.next);
+});
+
+test('TB-068: a pinned section no document reproduces marks each value unrecoverable and compares only the section', async (t) => {
+  const root = await activatedClone(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 300 }), 'utf8');
+  await git(root, ['add', '--all']);
+  await git(root, ['-c', 'user.email=setup@example.test', '-c', 'user.name=Setup', 'commit', '--quiet', '--no-verify', '--message', 'past the gate']);
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
+
+  const { shown, text } = await observeConfigShow(root);
+
+  assert.equal(shown.exitStatus, 1);
+  assert.deepEqual(shown.section.pinned, {
+    identity: shown.section.pinned.identity,
+    source: null,
+    recovered: false,
+    matches: false,
+  });
+  assert.deepEqual(
+    [...new Set(shown.subcontracts.flatMap((subcontract) => subcontract.values.map((value) => value.marking)))],
+    ['unrecoverable'],
+  );
+  assert.equal(valueAt(shown, 'budget.total_seconds').pinned, null);
+  assert.match(text.stdout, /^pinned values: unrecoverable — no document reproduces the pinned identity/m);
+});
+
+test('TB-068 AC-GUIDE-003: a configured clone that was never activated shows every subcontract and compares nothing', async (t) => {
+  const root = await schemaV4Clone(t);
+  const { shown, text } = await observeConfigShow(root);
+  const setup = await agentFramework(root, ['setup', '--json']);
+
+  assert.equal(shown.state, 'configured');
+  assert.equal(shown.exitStatus, 0);
+  assert.deepEqual(shown.subcontracts.map((subcontract) => subcontract.name), SUBCONTRACTS);
+  assert.equal(shown.section.pinned, null);
+  assert.deepEqual(
+    [...new Set(shown.subcontracts.flatMap((subcontract) => subcontract.values.map((value) => value.marking)))],
+    [null],
+  );
+  assert.equal(valueAt(shown, 'budget.total_seconds').value, 600);
+  assert.equal(valueAt(shown, 'budget.total_seconds').pinned, null);
+  assert.match(text.stdout, /^section: not pinned — this clone has no Activation receipt/m);
+  assert.match(text.stdout, /^ {2}total_seconds: 600$/m);
+  // The next step is setup's own: activation.
+  assert.deepEqual(shown.next, setup.document.next);
+  assert.equal(shown.next.step, 'activate');
+});
+
+test('TB-068 AC-GUIDE-003: a clone with no Gate section says so and names setup\'s next step', async (t) => {
+  for (const clone of [() => schemaV4Clone(t, { gate: false }), () => schemaV3Clone(t), () => noConfigurationClone(t)]) {
+    const root = await clone();
+    const { shown, text } = await observeConfigShow(root);
+    const setup = await agentFramework(root, ['setup', '--json']);
+
+    assert.equal(shown.exitStatus, 1);
+    assert.equal(shown.state, setup.document.state);
+    assert.equal(shown.section, null);
+    assert.deepEqual(shown.subcontracts, []);
+    assert.notEqual(shown.next, null);
+    assert.deepEqual(shown.next, setup.document.next);
+    assert.match(text.stdout, /^section: none — \.agent-framework\.yaml has no Gate configuration section\.$/m);
+  }
+});
+
+test('TB-068 FR-GUIDE-009: without the Gate module a clone with no section names setup\'s step, and a schema v4 clone is refused', async (t) => {
+  const { entry } = await setupOnlyInstall(t);
+  const schemaV3 = await schemaV3Clone(t);
+  const unconfigured = (await observeConfigShow(schemaV3, { entry })).shown;
+
+  assert.equal(unconfigured.section, null);
+  assert.equal(unconfigured.gate.available, false);
+  assert.equal(unconfigured.next.step, 'migrate-schema-v4');
+
+  const configured = await schemaV4Clone(t);
+  const { shown } = await observeConfigShow(configured, { entry });
+
+  assert.equal(shown.exitStatus, 2);
+  assert.equal(shown.failure.reasonCode, 'gate-unavailable');
+  assert.match(shown.failure.detail, /read only through the Gate's own command/);
+  assert.deepEqual(shown.subcontracts, []);
+});
+
+test('TB-068: config show refuses, naming the installed Gate, when the Gate\'s status reports no configuration section', async (t) => {
+  const { olderGate, env } = await olderGateOnPath(t, 'if (document.observation) { delete document.observation.configuration; }');
+  const root = await activatedClone(t);
+  const { shown, text } = await observeConfigShow(root, { env });
+
+  assert.equal(shown.exitStatus, 2);
+  assert.equal(shown.ok, false);
+  assert.equal(shown.gate.located, 'path');
+  assert.equal(shown.failure.reasonCode, 'gate-configuration-unobserved');
+  assert.ok(shown.failure.detail.includes(olderGate), shown.failure.detail);
+  assert.deepEqual(shown.subcontracts, []);
+  assert.match(text.stdout, /^failed: gate-configuration-unobserved — /m);
+});
+
+/**
+ * `SG-GUIDE-002`, `SG-SECRET-001`, `RISK-006`. A Sensitive input set in the
+ * environment and another in a declared environment file are shown by name
+ * and the source each resolves from, and neither value appears anywhere in
+ * either rendering.
+ */
+test('TB-068 SG-GUIDE-002: no secret canary from the environment or a declared environment file appears in config show', async (t) => {
+  const environmentCanary = `env-canary-${createHash('sha256').update('environment').digest('hex').slice(0, 16)}`;
+  const fileCanary = `file-canary-${createHash('sha256').update('file').digest('hex').slice(0, 16)}`;
+  const env = environment({ APP_KEY: environmentCanary });
+  const root = await activatedClone(t, {
+    env,
+    evidence: { sensitive_inputs: ['APP_KEY', 'MAIL_PASSWORD', 'NOT_SET_ANYWHERE'], environment_files: ['.env'] },
+    prepare: async (clone) => {
+      await writeFile(path.join(clone, '.gitignore'), '.env\n', 'utf8');
+      await writeFile(path.join(clone, '.env'), `APP_KEY=${fileCanary}-shadowed\nMAIL_PASSWORD=${fileCanary}\n`, 'utf8');
+    },
+  });
+  const { shown, text, json } = await observeConfigShow(root, { env });
+
+  for (const output of [text.stdout, json.stdout]) {
+    assert.equal(output.includes(environmentCanary), false, 'the environment canary was printed.');
+    assert.equal(output.includes(fileCanary), false, 'the environment-file canary was printed.');
+  }
+
+  assert.deepEqual(shown.runtimeInputs.resolved, [
+    { name: 'APP_KEY', source: 'environment' },
+    { name: 'MAIL_PASSWORD', source: '.env' },
+  ]);
+  assert.deepEqual(shown.runtimeInputs.unresolved, [{ name: 'NOT_SET_ANYWHERE' }]);
+  assert.deepEqual(shown.runtimeInputs.environmentFiles, [{ path: '.env', status: 'read' }]);
+  assert.deepEqual(valueAt(shown, 'evidence.sensitive_inputs').value, ['APP_KEY', 'MAIL_PASSWORD', 'NOT_SET_ANYWHERE']);
+  assert.equal(valueAt(shown, 'evidence.sensitive_inputs').marking, 'matches');
+  assert.match(text.stdout, /^ {2}- APP_KEY: from environment$/m);
+  assert.match(text.stdout, /^ {2}- MAIL_PASSWORD: from \.env$/m);
+  assert.match(text.stdout, /^ {2}- NOT_SET_ANYWHERE: unresolved — no source sets it$/m);
+  assert.match(text.stdout, /^ {2}environment file \.env: read$/m);
 });

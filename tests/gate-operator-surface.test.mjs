@@ -2472,11 +2472,12 @@ test('TB-060: a healthy clone prints next: nothing and otherwise exactly what it
     '',
   ].join('\n'));
 
-  // `--json` keeps every field it had, in order, and gains two.
+  // `--json` keeps every field it had, in order, and gains two — and a third,
+  // the configuration section as values (`TB-068`).
   const machine = await observe(root, ['status', '--json']);
 
   assert.deepEqual(Object.keys(machine.document.observation), [
-    'state', 'health', 'release', 'receiptId', 'repaired', 'mutations', 'findings', 'controlSurface', 'next',
+    'state', 'health', 'release', 'receiptId', 'repaired', 'mutations', 'findings', 'controlSurface', 'configuration', 'next',
   ]);
   assert.deepEqual(machine.document.observation.next, {
     instruction: 'nothing',
@@ -3402,4 +3403,107 @@ test('TB-066 NFR-OPER-001 / SG-TRUST-001: status states an unversioned configura
 
   assert.equal(versioned.document.observation.findings.some((finding) => finding.code === 'grader-surface-unversioned'), false);
   assert.equal(nextLineOf(versioned), 'nothing');
+});
+
+/* -------------------------------------------------------------------------
+ * TB-068: the Gate configuration section as values, not only as an identity.
+ *
+ * `gate status --json` gains `observation.configuration`: the section this
+ * clone declares, and on an activated clone the section the receipt pinned,
+ * recovered by the rule `gate sync` already judges transitions with — accepted
+ * only from a document that reproduces the pinned identity (`GAP-005`,
+ * `FR-GUIDE-005`, `FR-CFG-005`).
+ * ------------------------------------------------------------------------- */
+
+/** The Gate section of a configuration document, as the Gate's own reader parses it. */
+const sectionOf = (contents) => parseConfigurationDocument(contents).value.evaluation_gate;
+
+test('TB-068 FR-GUIDE-005: status reports the working section and the pinned section as values, recovered only from a document that reproduces the pinned identity', async (t) => {
+  const root = await commandActivatedClone(t);
+  const prior = await receiptOf(root);
+  const pinnedPolicy = sectionOf(activatableConfiguration());
+  const before = await cloneFingerprint(root);
+  const healthy = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  // Undrifted: the file itself reproduces the pinned identity.
+  assert.deepEqual(healthy, {
+    working: {
+      resolved: true,
+      reasonCode: null,
+      detail: null,
+      identity: prior.configuration.identity,
+      policy: pinnedPolicy,
+    },
+    pinned: { identity: prior.configuration.identity, source: 'configuration-file', policy: pinnedPolicy },
+  });
+
+  // Drifted and uncommitted: the committed file at HEAD is the pinned section.
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+
+  const drifted = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  assert.deepEqual(drifted.working.policy, sectionOf(tightenedConfiguration()));
+  assert.notEqual(drifted.working.identity, prior.configuration.identity);
+  assert.deepEqual(drifted.pinned, {
+    identity: prior.configuration.identity,
+    source: 'committed-configuration',
+    policy: pinnedPolicy,
+  });
+
+  // Observation is still observation: nothing but the edit moved.
+  await writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration(), 'utf8');
+  assert.equal(await cloneFingerprint(root), before);
+
+  // A receipt `gate sync` wrote pins the policy itself, and is read first.
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+
+  const sync = await observe(root, ['sync']);
+
+  assert.equal((await observe(root, ['sync', '--confirm', tokenOf(sync)])).document.mutation.performed, true);
+
+  const synced = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  assert.equal(synced.pinned.source, 'receipt');
+  assert.deepEqual(synced.pinned.policy, sectionOf(tightenedConfiguration()));
+  assert.equal(synced.pinned.identity, synced.working.identity);
+});
+
+test('TB-068: a pinned section no document reproduces is reported by identity alone, never guessed', async (t) => {
+  const root = await commandActivatedClone(t);
+  const prior = await receiptOf(root);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+  await runGit(root, ['add', '--all']);
+  await runGit(root, ['-c', 'user.email=gate@example.test', '-c', 'user.name=Gate', 'commit', '--quiet', '--no-verify', '--message', 'past the gate']);
+  await writeFile(path.join(root, '.agent-framework.yaml'), demotedConfiguration(), 'utf8');
+
+  const { configuration } = (await observe(root, ['status', '--json'])).document.observation;
+
+  assert.deepEqual(configuration.pinned, { identity: prior.configuration.identity, source: null, policy: null });
+  assert.deepEqual(configuration.working.policy, sectionOf(demotedConfiguration()));
+});
+
+test('TB-068: a clone with no receipt reports its working section and no pinned one, and a missing section by its reason', async (t) => {
+  const configured = await configuredClone(t);
+  const configuredBefore = await wholeCloneSnapshot(configured);
+  const shown = (await observe(configured, ['status', '--json'])).document.observation;
+
+  assert.equal(shown.state, 'configured');
+  assert.equal(shown.configuration.working.resolved, true);
+  assert.deepEqual(shown.configuration.working.policy, sectionOf(SHARED_CONFIGURATION));
+  assert.equal(shown.configuration.pinned, null);
+  assert.equal(await wholeCloneSnapshot(configured), configuredBefore);
+
+  const installed = await installedClone(t);
+  const missing = (await observe(installed, ['status', '--json'])).document.observation.configuration;
+
+  assert.deepEqual(missing.working, {
+    resolved: false,
+    reasonCode: 'gate-policy-missing',
+    detail: missing.working.detail,
+    identity: null,
+    policy: null,
+  });
+  assert.match(missing.working.detail, /evaluation_gate/);
+  assert.equal(missing.pinned, null);
 });

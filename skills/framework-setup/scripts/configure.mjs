@@ -881,7 +881,8 @@ export const draftGatePolicy = async ({ projectRoot, out = null } = {}) => {
   }, out);
 };
 
-const gatePolicyKeys = ['checks', 'budget', 'bypass', 'execution', 'evidence'];
+/** The Gate configuration section's five subcontracts, in the order `configure-gate` writes them. */
+export const gatePolicyKeys = Object.freeze(['checks', 'budget', 'bypass', 'execution', 'evidence']);
 const gateForbiddenOwnershipFields = new Set([
   'activation',
   'activated',

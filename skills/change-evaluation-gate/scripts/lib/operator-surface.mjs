@@ -69,10 +69,12 @@ import {
   STEPS_ANSWERED_BY_ACTIVATION,
   activate,
   adapterIdentity,
+  configurationIdentity,
   inspectActivation,
   previewActivation,
   previewSync,
   readHookRegistration,
+  recoverTrustedConfiguration,
   syncActivation,
   unreportableAdapterRefusal,
 } from './activation.mjs';
@@ -1356,6 +1358,47 @@ const observeStatusControlSurface = async ({ repositoryRoot, receipt }) => {
 };
 
 /**
+ * The Gate configuration section as values: the one this clone declares, and
+ * on an activated clone the one its Activation receipt pinned (`TB-068`,
+ * `GAP-005`).
+ *
+ * The receipt pins the section's identity, not the section, so the pinned
+ * values are recovered by the rule `gate sync` already judges a transition
+ * with (`recoverTrustedConfiguration`): the receipt itself when a sync wrote
+ * it, else the file when its identity never moved, else the committed
+ * `.agent-framework.yaml` at `HEAD` — and only from a document that
+ * reproduces the pinned identity. Anything else is reported as the identity
+ * alone, `source` and `policy` null, never guessed. Git is only read. The
+ * section holds names and limits, never a Sensitive runtime value.
+ */
+const observeConfigurationSection = async ({ repositoryRoot, receipt, configuration }) => {
+  const working = configuration.ok
+    ? { schemaVersion: configuration.configuration?.schema_version ?? null, policy: configuration.policy }
+    : null;
+  const pinned = receipt === null
+    ? null
+    : (recoverTrustedConfiguration({
+      prior: receipt,
+      trusted: working === null ? null : { ...working, source: 'configuration-file' },
+    }) ?? recoverTrustedConfiguration({ prior: receipt, trusted: await committedConfiguration(repositoryRoot) }));
+
+  return {
+    working: {
+      resolved: configuration.ok,
+      reasonCode: configuration.ok ? null : configuration.reasonCode,
+      detail: configuration.ok ? null : configuration.detail,
+      identity: working === null ? null : configurationIdentity(working),
+      policy: working?.policy ?? null,
+    },
+    pinned: receipt === null ? null : {
+      identity: receipt.configuration?.identity ?? null,
+      source: pinned?.source ?? null,
+      policy: pinned?.policy ?? null,
+    },
+  };
+};
+
+/**
  * The declared Grader surfaces of this clone that Git does not track, asked of
  * the same status parse and the same classification every evaluation uses, so
  * status and the next decision cannot disagree about which surfaces are
@@ -1464,6 +1507,11 @@ const operateStatus = async ({ repositoryRoot, environment }) => {
           .filter((finding) => finding.code === 'control-surface-drift')
           .map((finding) => finding.surface),
       },
+      configuration: await observeConfigurationSection({
+        repositoryRoot,
+        receipt: clone.receipt,
+        configuration: surface?.configuration ?? await resolveConfiguration(repositoryRoot),
+      }),
       next: nextRemedies(findings, shortcut),
     },
     mutation: null,

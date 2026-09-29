@@ -2395,9 +2395,11 @@ const keptAdapterRegistrations = async ({ prior, request }) => {
  * the operator surface reads the committed `.agent-framework.yaml` at `HEAD` —
  * or the configuration file itself when its identity never moved. Anything
  * that does not hash to the pinned identity is not the Trusted configuration,
- * whatever it claims (`FR-CFG-005`, `TB-062`).
+ * whatever it claims (`FR-CFG-005`, `TB-062`). `gate status` reads the pinned
+ * section by the same rule, so what it shows as pinned is what a sync judges
+ * against (`TB-068`).
  */
-const recoverTrustedConfiguration = ({ prior, trusted }) => {
+export const recoverTrustedConfiguration = ({ prior, trusted }) => {
   const pinned = prior?.configuration?.identity ?? null;
   const candidates = [
     prior?.configuration?.policy === undefined ? null : {
