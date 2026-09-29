@@ -157,7 +157,10 @@ nothing to restore, and a refused `gate sync` name their recovery from the same
 table, so follow the command a denial names: `gate repair` is named only for a
 gate-owned hook registration, and a changed configuration, descriptor, or runner
 pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
-historical Evidence.
+historical Evidence. With `--json`, each entry of `observation.next.remedies`
+also carries `subcommands`, the Gate subcommands that perform it in order
+(empty when the remedy is the maintainer's own act); render commands from that
+list rather than from the remedy's name.
 
 A declared Grader surface Git does not track — typically an
 `.agent-framework.yaml` nobody committed — is **unversioned**, not changed. Every

@@ -17,7 +17,9 @@
  * - the migration's open decisions are its own preview's ambiguities, and a
  *   draft it would refuse is reported with its own refusal;
  * - the Gate section's absence, the Gate lifecycle state, and every recovery
- *   are `gate status --json`'s `observation.state` and `observation.next`;
+ *   are `gate status --json`'s `observation.state` and `observation.next`,
+ *   down to the subcommands that perform each remedy — a Gate whose document
+ *   does not name them is refused, never guessed for (`TB-074`);
  * - whether activation would stop is `gate doctor --json`'s `verdict`.
  *
  * It confirms, writes, registers, and trusts nothing (`SG-GUIDE-001`), and
@@ -230,28 +232,23 @@ const activationStep = (prefix) => ({
 });
 
 /**
- * The Gate subcommands a remedy `gate status` names is performed by. The
- * remedy — which one, and in what order — is the Gate's; this only spells the
- * subcommand of the same name. A remedy with no subcommand is the
- * maintainer's own act, stated in the Gate's words.
+ * One remedy `gate status` names, as a step: the Gate's own identifier and
+ * instruction, and each subcommand the Gate names for it previewed and then
+ * confirmed, in the Gate's order (`TB-074`). Which remedy, in what order, and
+ * what performs it are all the Gate's; a remedy it names no subcommand for is
+ * the maintainer's own act, stated in the Gate's words. A remedy performed by
+ * `activate` alone is the activation step setup already plans, with its
+ * decision.
  */
-const REMEDY_SUBCOMMANDS = Object.freeze({
-  activate: ['activate'],
-  repair: ['repair'],
-  sync: ['sync'],
-  'activation-transaction': ['deactivate', 'activate'],
-});
-
-const remedyStep = (prefix, remedy) => (remedy.remedy === 'activate'
-  ? activationStep(prefix)
+const remedyStep = (prefix, remedy) => (remedy.subcommands.length === 1 && remedy.subcommands[0] === 'activate'
+  ? { ...activationStep(prefix), id: remedy.remedy }
   : {
     id: remedy.remedy,
     owner: 'change-evaluation-gate',
     summary: remedy.instruction,
     decisions: [],
     refusal: null,
-    commands: (REMEDY_SUBCOMMANDS[remedy.remedy] ?? [])
-      .flatMap((subcommand) => previewedGateCommands(prefix, subcommand)),
+    commands: remedy.subcommands.flatMap((subcommand) => previewedGateCommands(prefix, subcommand)),
   });
 
 const failure = (reasonCode, detail) => ({ failure: { reasonCode, detail } });
@@ -289,6 +286,18 @@ const gatePlan = async ({ projectRoot, gate, environment }) => {
         activationStep(gate.display),
       ],
     };
+  }
+
+  // A Gate from before remedies carried their subcommands: say so, never guess one.
+  const unnamed = observation.next.remedies.find((remedy) => !Array.isArray(remedy.subcommands));
+
+  if (unnamed !== undefined) {
+    const release = observation.release ? `${observation.release.id} ${observation.release.version}` : 'a release it does not name';
+
+    return failure(
+      'gate-remedy-subcommands-missing',
+      `\`${[...gate.display, 'status', '--json'].join(' ')}\` names no subcommands for the ${unnamed.remedy} remedy: the installed Gate (${release}, ${gate.detail}) predates remedy subcommands. Update the Gate module; setup does not guess which command performs a remedy.`,
+    );
   }
 
   let doctor = null;

@@ -20,6 +20,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { REMEDIES } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 import { configureProject } from '../skills/framework-setup/scripts/configure.mjs';
 
 /**
@@ -526,7 +527,133 @@ test('TB-067 AC-GUIDE-001: hook drift names exactly the remedy Gate status names
   assert.equal(plan.health, 'broken');
   assert.deepEqual(commandsOf(plan), status.observation.next.remedies.map((remedy) => remedy.remedy));
   assert.deepEqual(commandsOf(plan), ['repair']);
+  assert.deepEqual(plan.steps[0].commands.map((command) => command.run), ['git gate repair', 'git gate repair --confirm <token>']);
   assert.equal(plan.next.command, 'git gate repair');
+});
+
+test('TB-074 AC-GUIDE-001: runtime drift names the new Activation transaction exactly as Gate status names it', async (t) => {
+  const root = await activatedClone(t);
+  const receiptPath = path.join(root, '.git/change-evaluation-gate/evidence/activation/receipt.json');
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+
+  // A gate speaking a protocol version this clone never activated against.
+  await writeFile(
+    receiptPath,
+    `${JSON.stringify({ ...receipt, runtime: { ...receipt.runtime, gate: { ...receipt.runtime.gate, protocolVersion: '0.9' } } }, null, 2)}\n`,
+    'utf8',
+  );
+
+  const { plan } = await observeSetup(root);
+  const status = await gateJson(root, ['status']);
+  const [remedy] = status.observation.next.remedies;
+
+  assert.equal(plan.health, 'broken');
+  assert.deepEqual(commandsOf(plan), ['activation-transaction']);
+  assert.deepEqual(remedy.subcommands, ['deactivate', 'activate']);
+  // TB-067's rendering, unchanged: the Gate's own instruction, no decision,
+  // and each named subcommand previewed and then confirmed, in order.
+  assert.equal(plan.steps[0].summary, remedy.instruction);
+  assert.deepEqual(plan.steps[0].decisions, []);
+  assert.deepEqual(plan.steps[0].commands.map((command) => command.run), [
+    'git gate deactivate',
+    'git gate deactivate --confirm <token>',
+    'git gate activate',
+    'git gate activate --confirm <token>',
+  ]);
+  assert.equal(plan.next.command, 'git gate deactivate');
+});
+
+/**
+ * `SG-OWNER-001`, ADR 0004. Which remedy applies, in what order, and what
+ * performs it are all the Gate's: the Framework command renders the
+ * subcommands the Gate's document names and holds no remedy of its own. Read
+ * from the Gate's own table, so a remedy added later is covered too.
+ * `activate` is the one remedy spelled like a subcommand setup plans by itself
+ * — the activation step of a clone configured but not yet activated — so it
+ * may appear, as that subcommand.
+ */
+test('TB-074 SG-OWNER-001: the Framework command holds no remedy-to-command mapping and names no remedy', async () => {
+  const remedies = new Set(Object.values(REMEDIES)
+    .flatMap((entry) => (typeof entry === 'string' ? [entry] : Object.values(entry)))
+    .filter((remedy) => remedy !== 'informational' && remedy !== 'activate'));
+
+  assert.ok(remedies.has('sync') && remedies.has('activation-transaction'));
+
+  for (const source of [ENTRY, path.join(SETUP_SKILL, 'scripts', 'lib', 'gate-command.mjs')]) {
+    const code = (await readFile(source, 'utf8'))
+      .split('\n')
+      .filter((line) => !/^\s*(\/\/|\/\*\*?|\*)/.test(line))
+      .join('\n');
+
+    for (const remedy of remedies) {
+      assert.doesNotMatch(code, new RegExp(`['"\`]${remedy}['"\`]`), `${path.basename(source)} names the remedy ${remedy}.`);
+    }
+
+    assert.doesNotMatch(code, /\.remedy ===|REMEDY_SUBCOMMANDS/, `${path.basename(source)} decides by remedy.`);
+  }
+
+  assert.match(await readFile(ENTRY, 'utf8'), /\.subcommands\b/, 'setup does not read the subcommands the Gate names.');
+});
+
+/**
+ * A Gate installed before `TB-074` names each remedy without its subcommands.
+ * Setup states that and stops, naming the installed Gate, rather than guessing
+ * which command performs a remedy — exactly as it reports any Gate answer it
+ * cannot use (`gate-unreadable`): exit 2, no steps, and nothing written.
+ */
+test('TB-074: setup refuses, naming the installed Gate, when the Gate\'s document names a remedy without its subcommands', async (t) => {
+  const bin = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-bin-')));
+  const olderGate = path.join(bin, 'change-evaluation-gate');
+
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  // The real Gate, answering as a Gate from before the field existed.
+  await writeFile(olderGate, [
+    '#!/usr/bin/env node',
+    "const { spawnSync } = require('node:child_process');",
+    `const answered = spawnSync(process.execPath, [${JSON.stringify(GATE)}, ...process.argv.slice(2)], { encoding: 'utf8' });`,
+    'let stdout = answered.stdout;',
+    'try {',
+    '  const document = JSON.parse(stdout);',
+    '  for (const remedy of document.observation?.next?.remedies ?? []) { delete remedy.subcommands; }',
+    '  stdout = `${JSON.stringify(document, null, 2)}\\n`;',
+    '} catch {}',
+    'process.stdout.write(stdout);',
+    'process.stderr.write(answered.stderr);',
+    'process.exitCode = answered.status;',
+    '',
+  ].join('\n'), { mode: 0o755 });
+
+  const env = environment({ PATH: `${bin}${path.delimiter}${pathWithoutGate()}` });
+  const root = await activatedClone(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
+
+  const older = JSON.parse((await run(olderGate, ['status', '--json'], { cwd: root, env })).stdout);
+
+  assert.deepEqual(older.observation.next.remedies.map((remedy) => Object.keys(remedy)), [['remedy', 'instruction', 'findings']]);
+
+  const before = await cloneHash(root);
+  const text = await agentFramework(root, ['setup'], { env });
+  const json = await agentFramework(root, ['setup', '--json'], { env });
+  const { document } = json;
+
+  assert.equal(await cloneHash(root), before, 'a refused setup changed a byte under the clone or .git.');
+  assert.equal(json.status, 2, json.stderr);
+  assert.equal(text.status, 2, text.stderr);
+  assert.equal(document.ok, false);
+  assert.equal(document.exitStatus, 2);
+  assert.deepEqual(document.steps, []);
+  assert.equal(document.next, null);
+  assert.equal(document.gate.located, 'path');
+  assert.equal(document.failure.reasonCode, 'gate-remedy-subcommands-missing');
+  assert.ok(document.failure.detail.includes(olderGate), `the refusal does not name the installed Gate: ${document.failure.detail}`);
+  assert.ok(document.failure.detail.includes(older.observation.release.version), document.failure.detail);
+  assert.match(document.failure.detail, /names no subcommands for the sync remedy/);
+  assert.match(
+    text.stdout,
+    /^failed: gate-remedy-subcommands-missing — .*names no subcommands for the sync remedy/m,
+  );
+  assert.doesNotMatch(text.stdout, /^\s+\$ /m, 'a refused setup still printed a command.');
 });
 
 test('TB-067 AC-GUIDE-001 / FR-GUIDE-009: without the Gate module only setup steps are named and Gate steps are unavailable', async (t) => {

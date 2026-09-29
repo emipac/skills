@@ -4,7 +4,7 @@ Status: ready-for-agent
 Parent: guided-setup-feature-spec
 Assignee:
 Labels: ready-for-agent, enhancement
-Blocked by: 67-name-the-next-step-without-a-terminal
+Blocked by: 67-name-the-next-step-without-a-terminal, 74-let-the-gate-name-the-command-for-each-remedy
 Tracker ID: 72-walk-a-maintainer-to-a-healthy-clone
 Draft key: TB-072
 
@@ -107,6 +107,7 @@ Frontend build and browser evidence are inapplicable.
 ## Blocked By
 
 - `TB-067` — the plan this slice executes.
+- `TB-074` — recovery steps take their commands from the Gate.
 
 ## Unresolved Assumptions
 

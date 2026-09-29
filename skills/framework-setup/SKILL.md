@@ -23,9 +23,12 @@ remaining step in order with the command that owns it, and the exact next
 command, including the draft path to use. It writes, confirms, and registers
 nothing, and it never prompts. Each boundary is the owning command's own
 answer: this skill's schema reading, migration preview, and policy preview;
-`gate status --json` for the Gate state and its named remedy; `gate doctor
---json` for whether activation would stop. A step the owning command would
-refuse carries that refusal verbatim.
+`gate status --json` for the Gate state, its named remedies, and the Gate
+subcommands that perform each one; `gate doctor --json` for whether activation
+would stop. A step the owning command would refuse carries that refusal
+verbatim. A Gate whose document names a remedy without its subcommands predates
+them: setup stops with `gate-remedy-subcommands-missing`, naming the installed
+Gate, rather than guess a command — update the Gate module.
 
 It reaches the Gate only by running `change-evaluation-gate` on the path, else
 the installed `change-evaluation-gate` skill beside this one. When neither

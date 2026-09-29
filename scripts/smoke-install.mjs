@@ -85,6 +85,11 @@ const assertNoAdoptionState = async (actor) => {
   }
 };
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
+// A clone configured for the Gate and not activated, kept apart from the
+// install root, which must hold no adoption state. `gate status` names its
+// remedies with the subcommands that perform them (TB-074), and the installed
+// Framework command renders its steps from those alone.
+const configuredRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-configured-'));
 const agents = [
   'codex',
   'claude-code',
@@ -108,6 +113,44 @@ const smokeSkills = [
 ];
 
 try {
+  execFileSync('git', ['init', '--quiet'], { cwd: configuredRoot });
+  await mkdir(path.join(configuredRoot, 'tools'));
+  await writeFile(path.join(configuredRoot, 'tools/check.mjs'), 'process.exitCode = 0;\n');
+  await writeFile(path.join(configuredRoot, '.agent-framework.yaml'), [
+    'schema_version: 4',
+    'backend: laravel',
+    'frontend: none',
+    'verification:',
+    '  commands:',
+    '    test:',
+    '      backend: []',
+    '      frontend: []',
+    '      both:',
+    '        - runner: repository-script',
+    '          args:',
+    '            - tools/check.mjs',
+    '          working_directory: .',
+    '          timeout_seconds: 60',
+    '          allowed_environment:',
+    '            - PATH',
+    '          evidence_category: test',
+    '          source_scope: both',
+    'evaluation_gate:',
+    '  checks:',
+    '    required:',
+    '      - configuration.broad-tests.test',
+    '    advisory: []',
+    '  budget:',
+    '    total_seconds: 600',
+    '  bypass:',
+    '    enabled: false',
+    '    marker: null',
+    '  execution:',
+    '    budget_skippable: []',
+    '  evidence: {}',
+    '',
+  ].join('\n'));
+
   await writeFile(
     path.join(temporaryRoot, 'package.json'),
     `${JSON.stringify({ name: 'ai-skills-framework-smoke', private: true }, null, 2)}\n`,
@@ -556,6 +599,26 @@ try {
         ) {
           throw new Error(`${agent}: installed agent-framework setup did not plan from the installed skills`);
         }
+
+        // On a configured clone the steps come from the remedies the installed
+        // Gate names, with the subcommands it names for them (TB-074).
+        const configuredThroughInstalledPath = runInstalledCommand(installedScript, argv, configuredRoot);
+        const configuredThroughLink = runInstalledCommand(linkedScript, argv, configuredRoot);
+        const configured = JSON.parse(configuredThroughInstalledPath.stdout);
+
+        if (
+          configuredThroughLink.stdout !== configuredThroughInstalledPath.stdout
+          || configuredThroughLink.status !== configuredThroughInstalledPath.status
+          || configured.failure !== null
+          || configured.state !== 'configured'
+          || !configured.gate.detail.includes(installedGate)
+          || !configured.steps.some((step) => step.commands.some((entry) => entry.argv.at(-1) === 'activate'))
+        ) {
+          throw new Error(
+            `${agent}: installed agent-framework setup did not plan a configured clone from the installed Gate's remedies: `
+            + (configured.failure?.detail ?? configured.state),
+          );
+        }
       }
     }
   }
@@ -566,4 +629,5 @@ try {
   console.log(`Smoke-installed ${smokeSkills.join(', ')} for ${agents.join(', ')}.`);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
+  await rm(configuredRoot, { recursive: true, force: true });
 }

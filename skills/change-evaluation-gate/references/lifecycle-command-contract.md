@@ -222,7 +222,14 @@ one `next:` line and the document carries the same answer as
 (`git gate` when this clone's `.git/config` holds the alias activation writes
 for this command, byte for byte, otherwise `null` and the line says `gate`),
 `remedies` (each with the finding codes it answers, in the order they must be
-performed), and `informational` (codes that need nothing). A clone with nothing
+performed), and `informational` (codes that need nothing). Each remedy is
+`{ remedy, instruction, subcommands, findings }`: `subcommands` (`TB-074`) lists
+the Gate subcommands that perform it, in the order they are run — `["sync"]`,
+`["deactivate", "activate"]` — and is empty for a remedy the maintainer
+performs. It names subcommands only; the command prefix and the
+preview-then-`--confirm <token>` spelling are the caller's. The field is
+additive, so the document stays `change-evaluation-gate/observation/1`, and
+`gate repair --json` carries the same remedies. A clone with nothing
 to act on prints `next: nothing`, and its rendering is otherwise unchanged. The
 document also gains `observation.controlSurface` — the `observed` surface and
 the `drifted` surface names, or `null` on a clone with no receipt. No existing
@@ -240,8 +247,17 @@ the Gate tells a maintainer what to run renders through it (`TB-065`, below):
 | `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
 | `grader-surface-unversioned` (`TB-066`) | the maintainer commits it to version control, when they choose to — the Gate never stages or commits anything, and running unversioned stays allowed; named last, after any recovery |
 
+The subcommands of each remedy are recorded beside its instruction in the same
+module: `gate repair` → `repair`; `gate sync` → `sync`; the new Activation
+transaction → `deactivate`, `activate`; `gate activate` → `activate`; correcting
+the configuration, reconciling a client registration, and committing a Grader
+surface → none. A caller that renders a remedy as commands — the Framework
+command's `agent-framework setup` — reads them from the document and keeps no
+copy of its own (`SG-OWNER-001`, ADR 0004).
+
 A finding with no entry fails the unit suite, which enumerates every code
-`statusGate` can emit from its source. Deactivation leaves the `git gate` alias
+`statusGate` can emit from its source; so does a remedy with no recorded
+instruction or subcommand list. Deactivation leaves the `git gate` alias
 in place, so the pair runs through it end to end. Where a clone needs both a
 sync and a new Activation transaction, `next:` names only the pair: it re-pins
 the configuration as well, and a sync refuses a clone whose adapter set moved.
@@ -741,7 +757,12 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   same sync, and following that command exactly lets the next commit through;
   a foreign `gate` alias is never named; every control surface and runner-pin
   reason code has a remedy entry; no module but the table names a recovery
-  inline; and repair's scope is unchanged beside configuration drift.
+  inline; and repair's scope is unchanged beside configuration drift. `TB-074`
+  adds configuration-, hook-, and runtime-drift clones whose every remedy in
+  `gate status --json` and `gate repair --json` carries its subcommands in
+  order, and an enumeration of the table in which every remedy has an
+  instruction and a subcommand list, empty exactly for the maintainer's own
+  acts.
 - `tests/gate-check-command.test.mjs` (`TB-061`) — `gate check` against real
   clones: the check outcomes and snapshot identity the preflight recorded for
   the same working tree, `not-authoritative`, and the exit status; `--staged`

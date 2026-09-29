@@ -35,7 +35,12 @@ import {
   quoteForShell,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
-import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
+import {
+  nextRemedies,
+  REMEDIES,
+  remedyInstruction,
+  remedySubcommands,
+} from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 import { CONTROL_SURFACES } from '../skills/change-evaluation-gate/scripts/lib/security-control.mjs';
 
 const runFile = promisify(execFile);
@@ -3209,7 +3214,7 @@ test('TB-065: one remedy table serves every site, and no inline remedy string re
       assert.doesNotMatch(line, inline, `${source} names a remedy inline: ${line.trim()}`);
     }
 
-    assert.doesNotMatch(contents, /REMEDIES = |remedyInstruction = /, `${source} defines a second remedy table.`);
+    assert.doesNotMatch(contents, /REMEDIES = |remedyInstruction = |SUBCOMMANDS = |remedySubcommands = /, `${source} defines a second remedy table.`);
   }
 });
 
@@ -3239,6 +3244,119 @@ test('TB-065 AC-LIFE-010: repair still restores exactly its three findings and r
     ['control-surface-drift:command-descriptors'],
   );
   assert.deepEqual(observation.next.remedies.map((remedy) => remedy.remedy), ['sync']);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-074: the Gate names the subcommands that perform each remedy.
+ *
+ * A caller that renders a remedy as commands — the Framework command's
+ * `setup` — reads them from the next-step document instead of keeping its own
+ * copy of which remedy maps to which command (ADR 0004, `SG-OWNER-001`).
+ * ------------------------------------------------------------------------- */
+
+/** A remedy as `--json` carries it, reduced to what a caller renders commands from. */
+const remedyCommandsOf = (result) => result.document.observation.next.remedies
+  .map(({ remedy, subcommands }) => ({ remedy, subcommands }));
+
+/**
+ * THE FIRST RED TEST OF TB-074.
+ *
+ * On the configuration-drift, hook-drift, and runtime-drift fixtures every
+ * remedy `gate status --json` and `gate repair --json` name carries the Gate
+ * subcommands that perform it, in order — where before this slice a remedy
+ * carried no command at all.
+ */
+test('TB-074 AC-GUIDE-001: every remedy status and repair name carries the subcommands that perform it, in order', async (t) => {
+  const drifts = {
+    configuration: {
+      drift: async (root) => writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration({ totalSeconds: 900 }), 'utf8'),
+      expected: [{ remedy: 'sync', subcommands: ['sync'] }],
+    },
+    hook: {
+      drift: async (root) => rm((await receiptOf(root)).hooks[0].path, { force: true }),
+      expected: [{ remedy: 'repair', subcommands: ['repair'] }],
+      // Repair previews restoring it, so nothing remains for its own next step.
+      afterRepair: [],
+    },
+    runtime: {
+      // A gate speaking a protocol version this clone never activated against.
+      drift: async (root) => {
+        const receipt = await receiptOf(root);
+
+        await writeFile(
+          receiptPathOf(root),
+          `${JSON.stringify({ ...receipt, runtime: { ...receipt.runtime, gate: { ...receipt.runtime.gate, protocolVersion: '0.9' } } }, null, 2)}\n`,
+          'utf8',
+        );
+      },
+      expected: [{ remedy: 'activation-transaction', subcommands: ['deactivate', 'activate'] }],
+    },
+  };
+
+  for (const [name, { drift, expected, afterRepair = expected }] of Object.entries(drifts)) {
+    const root = await commandActivatedClone(t);
+
+    await drift(root);
+
+    const status = await observe(root, ['status', '--json']);
+    const repair = await observe(root, ['repair', '--json']);
+
+    assert.equal(status.document.observation.health, 'broken', `the ${name} fixture did not drift.`);
+    assert.deepEqual(remedyCommandsOf(status), expected, `status on ${name} drift`);
+    assert.deepEqual(remedyCommandsOf(repair), afterRepair, `repair on ${name} drift`);
+    // Additive: the document identifier and every earlier field are unchanged.
+    assert.equal(status.document.document, 'change-evaluation-gate/observation/1');
+
+    for (const remedy of [...status.document.observation.next.remedies, ...repair.document.observation.next.remedies]) {
+      assert.deepEqual(Object.keys(remedy), ['remedy', 'instruction', 'subcommands', 'findings']);
+    }
+  }
+});
+
+/**
+ * Every remedy the table can name records its subcommands beside its
+ * instruction; a remedy the maintainer performs records an empty list. Read
+ * from the table itself, so a remedy added without a command list fails here
+ * exactly as one without an instruction does.
+ */
+test('TB-074: every remedy in the table has a recorded subcommand list, and the maintainer\'s own acts have an empty one', () => {
+  const remedies = new Set(Object.values(REMEDIES)
+    .flatMap((entry) => (typeof entry === 'string' ? [entry] : Object.values(entry)))
+    .filter((remedy) => remedy !== 'informational'));
+
+  for (const remedy of remedies) {
+    const subcommands = remedySubcommands(remedy);
+
+    assert.ok(remedyInstruction(remedy) !== null, `${remedy} has no instruction.`);
+    assert.ok(Array.isArray(subcommands), `${remedy} has no recorded subcommand list.`);
+
+    // Each named subcommand is the one its instruction tells a maintainer to run.
+    for (const subcommand of subcommands) {
+      assert.ok(remedyInstruction(remedy, 'gate').includes(`gate ${subcommand}`), `${remedy} names ${subcommand}, which its instruction does not.`);
+    }
+  }
+
+  assert.deepEqual(
+    Object.fromEntries([...remedies].sort().map((remedy) => [remedy, remedySubcommands(remedy)])),
+    {
+      activate: ['activate'],
+      'activation-transaction': ['deactivate', 'activate'],
+      'correct-configuration': [],
+      'reconcile-client-registration': [],
+      repair: ['repair'],
+      sync: ['sync'],
+      'version-control': [],
+    },
+  );
+  assert.equal(remedySubcommands('no-such-remedy'), null);
+
+  // The document carries the list; an unrecorded code is the maintainer's to read.
+  assert.deepEqual(
+    nextRemedies([{ code: 'activation-absent' }, { code: 'grader-surface-unversioned' }]).remedies
+      .map(({ remedy, subcommands }) => [remedy, subcommands]),
+    [['activate', ['activate']], ['version-control', []]],
+  );
+  assert.deepEqual(nextRemedies([{ code: 'no-such-code' }]).remedies[0].subcommands, []);
 });
 
 /**
