@@ -1,14 +1,14 @@
 # TB-061 — Evaluate the tree from the command line
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by:
 Tracker ID: 61-evaluate-the-tree-from-the-command-line
 Draft key: TB-061
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -173,23 +173,23 @@ a command that mutates nothing.
 
 ## Acceptance Criteria
 
-- [ ] `AC-EVAL-001`, `FR-EVAL-003`: `gate check` evaluates the working tree and prints every check's
+- [x] `AC-EVAL-001`, `FR-EVAL-003`: `gate check` evaluates the working tree and prints every check's
   outcome and reason, the outcome, and `authorization: not-authoritative`;
   exit status carries the outcome.
-- [ ] `AC-EVAL-006`: `gate check --staged` evaluates the index, is distinguishable in output, and a missing prerequisite or crashed check renders `unverified` with its reason code exactly as the hook would;
+- [x] `AC-EVAL-006`: `gate check --staged` evaluates the index, is distinguishable in output, and a missing prerequisite or crashed check renders `unverified` with its reason code exactly as the hook would;
   the two scopes never share a snapshot identity for a tree whose index and worktree differ.
-- [ ] `NFR-REL-001`: for one tree, `gate check` and the preflight produce
+- [x] `NFR-REL-001`: for one tree, `gate check` and the preflight produce
   the same check outcomes and the same snapshot identity.
-- [ ] `FR-ADAPT-005`: no adapter is invoked, no loop-guard state is read or
+- [x] `FR-ADAPT-005`: no adapter is invoked, no loop-guard state is read or
   written, no feedback channel is used — proved by running `gate check`
   three times on an unchanged tree and getting three full answers.
-- [ ] `RISK-010`: a passing `gate check` appends no evidence; a failing one
+- [x] `RISK-010`: a passing `gate check` appends no evidence; a failing one
   persists its decision, and the output says which and where.
-- [ ] `FR-EVAL-001`: a commit after a passing `gate check` still runs the
+- [x] `FR-EVAL-001`: a commit after a passing `gate check` still runs the
   hook and is still evaluated; nothing from `check` is consulted.
-- [ ] `runPreflight` behaviour is byte-identical after the refactor, proved
+- [x] `runPreflight` behaviour is byte-identical after the refactor, proved
   by the adapter conformance baseline and hook-conformance smoke unchanged.
-- [ ] `--json` mirrors the rendered document; `gate --help` and the command
+- [x] `--json` mirrors the rendered document; `gate --help` and the command
   contract list the command.
 
 ## Verification Matrix

@@ -83,6 +83,17 @@
  *    previewed and confirmed, lets the next real commit through with no drift
  *    and the registered hook byte-identical (`NFR-OPER-001`, `FR-LIFE-019`,
  *    `AC-SEC-001`, `AC-LIFE-010`).
+ * 10. `packaged-unversioned-configuration` — a configuration that is
+ *    unversioned is not one that changed (`TB-066`). On a clone whose
+ *    `.agent-framework.yaml` was never committed, the shipped hook authorizes
+ *    an ordinary commit and its decision records the file as unversioned, not
+ *    as changed, with `controlSurfaceChanged` false; the
+ *    shipped `gate status` stays `healthy` and states the fact once as
+ *    information with the maintainer's remedy, implying no intent; and once the
+ *    configuration is committed, a staged edit to it is recorded as a changed
+ *    `gate-configuration` surface with `controlSurfaceChanged` true on the very
+ *    next evaluation. Nothing is staged or committed by the Gate
+ *    (`AC-SEC-001`, `RISK-008`, `SG-CFG-001`, `FR-LIFE-009`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -1694,6 +1705,127 @@ const packagedDescriptorRecovery = async () => {
   return { name: 'packaged-descriptor-recovery', ok: findings.length === 0, findings };
 };
 
+/**
+ * TB-066 — unversioned is a standing fact, never a change and never a fault.
+ *
+ * A real project keeps `.agent-framework.yaml` untracked until somebody
+ * commits it. That must neither read as the change editing what grades it on
+ * every evaluation nor cost the clone a commit or its health — and once the
+ * file is versioned, a real edit to it must still be reported, at the point
+ * that authorizes it (`AC-SEC-001`, `RISK-008`, `SG-CFG-001`).
+ */
+const packagedUnversionedConfiguration = async () => {
+  const findings = [];
+  const repositoryRoot = await temporaryDirectory(`${CAPABILITY}-unversioned-repo-`);
+  const intent = /tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i;
+  const commitAs = (message) => git(repositoryRoot, [
+    '-c', 'user.email=gate@example.test',
+    '-c', 'user.name=Gate Security Control Smoke',
+    'commit', '--quiet', '--message', message,
+  ]);
+  const lastIntegrity = async () => {
+    const store = await openEvidenceStore({ repositoryRoot, identity: storeIdentity() });
+    const log = await store.readLog();
+
+    return log.length === 0 ? null : (await store.readEnvelope(log.at(-1).evidenceId))?.decision?.integrity ?? null;
+  };
+
+  // The check script is committed, because a commit grades the index and an
+  // untracked script is not in it; the configuration is read from the clone
+  // and was never committed.
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\n', 'utf8');
+  await mkdir(path.join(repositoryRoot, 'tools'), { recursive: true });
+  await writeFile(path.join(repositoryRoot, 'tools/check.mjs'), RUNNER_CHECK_SCRIPT, 'utf8');
+  await git(repositoryRoot, ['init', '--quiet']);
+  await git(repositoryRoot, ['add', '--all']);
+  await commitAs('baseline');
+  await writeFile(path.join(repositoryRoot, '.agent-framework.yaml'), runnerConfiguration(), 'utf8');
+  await publishRunnerReceipt(repositoryRoot);
+
+  await writeFile(path.join(repositoryRoot, 'source.txt'), 'baseline\nordinary work\n', 'utf8');
+  await git(repositoryRoot, ['add', 'source.txt']);
+
+  const ordinary = await runPackagedRunner(repositoryRoot);
+  const unversioned = await lastIntegrity();
+
+  check(findings, ordinary.exitCode === 0, `An unversioned configuration cost an ordinary commit its authorization: ${ordinary.output}`);
+  check(
+    findings,
+    (unversioned?.changedGraderSurfaces ?? []).length === 0 && unversioned?.controlSurfaceChanged === false,
+    `An untouched, untracked configuration was recorded as changed: ${JSON.stringify(unversioned)}`,
+  );
+  check(
+    findings,
+    JSON.stringify((unversioned?.unversionedGraderSurfaces ?? []).map((surface) => [surface.kind, surface.path]))
+      === JSON.stringify([['gate-configuration', '.agent-framework.yaml']]),
+    `The commit decision did not record the unversioned configuration: ${JSON.stringify(unversioned)}`,
+  );
+  check(findings, !intent.test(ordinary.output), `The hook implied intent: ${ordinary.output}`);
+
+  const status = await runPackagedCommand(repositoryRoot, ['status', '--json']);
+  let observation = null;
+
+  try {
+    observation = JSON.parse(status.stdout).observation;
+  } catch (error) {
+    check(findings, false, `gate status did not answer (${error.message}): ${status.stdout}${status.stderr}`);
+  }
+
+  if (observation !== null) {
+    const stated = (observation.findings ?? []).filter((finding) => finding.code === 'grader-surface-unversioned');
+
+    check(findings, observation.health === 'healthy', `An unversioned configuration moved health: ${JSON.stringify(observation)}`);
+    check(
+      findings,
+      JSON.stringify(stated.map((finding) => [finding.severity, finding.path]).sort())
+        === JSON.stringify([['informational', '.agent-framework.yaml']]),
+      `gate status did not state each unversioned surface as information: ${JSON.stringify(observation.findings)}`,
+    );
+    check(
+      findings,
+      /never stages or commits anything/.test(observation.next?.instruction ?? ''),
+      `gate status did not name the maintainer's remedy: ${JSON.stringify(observation.next)}`,
+    );
+    check(findings, !intent.test(JSON.stringify({ stated, next: observation.next })), `gate status implied intent: ${JSON.stringify(stated)}`);
+  }
+
+  check(
+    findings,
+    (await git(repositoryRoot, ['status', '--porcelain', '--untracked-files=all'])).stdout
+      .split('\n')
+      .filter((line) => line.startsWith('??'))
+      .sort()
+      .join('\n') === '?? .agent-framework.yaml',
+    'The Gate staged or committed a surface it only reported.',
+  );
+
+  // The maintainer versions it; an edit to it is now a change, and reported
+  // at the evaluation that authorizes it.
+  await commitAs('ordinary work');
+  await git(repositoryRoot, ['add', '.agent-framework.yaml']);
+  await commitAs('versioned');
+  await writeFile(
+    path.join(repositoryRoot, '.agent-framework.yaml'),
+    `# edited after it was versioned\n${runnerConfiguration()}`,
+    'utf8',
+  );
+  await git(repositoryRoot, ['add', '.agent-framework.yaml']);
+  await runPackagedRunner(repositoryRoot);
+
+  const edited = await lastIntegrity();
+
+  check(
+    findings,
+    JSON.stringify((edited?.changedGraderSurfaces ?? []).map((surface) => [surface.kind, surface.path]))
+      === JSON.stringify([['gate-configuration', '.agent-framework.yaml']])
+      && edited?.controlSurfaceChanged === true
+      && (edited?.unversionedGraderSurfaces ?? []).length === 0,
+    `A staged edit to the versioned configuration was not recorded as a change: ${JSON.stringify(edited)}`,
+  );
+
+  return { name: 'packaged-unversioned-configuration', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1709,6 +1841,7 @@ const main = async () => {
       await packagedBypass(),
       await packagedPolicySync(),
       await packagedDescriptorRecovery(),
+      await packagedUnversionedConfiguration(),
     ];
   } finally {
     for (const root of temporaryRoots) {

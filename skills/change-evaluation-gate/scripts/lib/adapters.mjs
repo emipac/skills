@@ -22,6 +22,7 @@ import {
   validateDecision,
 } from './evaluation-contract.mjs';
 import { authorizationFor } from './policy.mjs';
+import { REMEDIES, remedyInstruction } from './remedies.mjs';
 
 /**
  * The capability categories every adapter declares for itself.
@@ -99,6 +100,38 @@ export const ADAPTER_TRUST_MODELS = Object.freeze({
   }),
 });
 
+/**
+ * Why an adapter declares no feedback channel, when it declares none.
+ *
+ * One `null` used to carry two unrelated meanings. Authoritative Git declares
+ * no channel because it needs none: it answers by blocking, so a non-zero exit
+ * IS the answer. The desktop surfaces nobody has yet driven with a real client
+ * invocation declare no channel because nobody knows how they take an answer
+ * back. The runtime could not tell the two apart, so an unobserved surface
+ * registered as though it were ready and then evaluated every turn into
+ * silence (`TB-048`).
+ *
+ * `absence` states which one is meant, and the validator rejects a declaration
+ * with no channel that says neither. A declared channel has no absence to
+ * explain, so `absence` is `null` beside it.
+ *
+ * `requiresNativeBlocking` is the rule `not-needed` rests on: only a surface
+ * that blocks natively has an answer that is not a channel (`FR-ADAPT-004`,
+ * `FR-ADAPT-005`, `RISK-004`).
+ */
+export const FEEDBACK_ABSENCES = Object.freeze({
+  'not-needed': Object.freeze({
+    id: 'not-needed',
+    asserts: 'this surface needs no feedback channel: it answers by blocking, so its exit status is the answer.',
+    requiresNativeBlocking: true,
+  }),
+  'not-observed': Object.freeze({
+    id: 'not-observed',
+    asserts: 'how this surface takes an answer back has not been observed from a real client invocation, so no channel is declared and none is guessed.',
+    requiresNativeBlocking: false,
+  }),
+});
+
 /** The fields each category must state. An empty category declares nothing. */
 const CAPABILITY_FIELDS = Object.freeze({
   event: Object.freeze(['deterministic', 'normalizedTriggers']),
@@ -112,7 +145,9 @@ const CAPABILITY_FIELDS = Object.freeze({
   filesystem: Object.freeze(['sameFilesAsClient']),
   git: Object.freeze(['metadata', 'index']),
   invocation: Object.freeze(['nonInteractive', 'mechanism', 'structuredResult', 'timeoutMs']),
-  feedback: Object.freeze(['channel', 'field', 'none', 'maxIterations']),
+  // `absence` is stated even beside a channel, as `null`: "this surface has a
+  // channel" and "this surface did not say why it has none" must not look alike.
+  feedback: Object.freeze(['channel', 'field', 'none', 'maxIterations', 'absence']),
 });
 
 /** The sentinel a raced invocation resolves with when its timeout wins. */
@@ -181,6 +216,53 @@ const trustDeclarationErrors = (trust) => {
 };
 
 /**
+ * Check what an adapter declared about its feedback against what an absence of
+ * a channel is (`TB-048`).
+ *
+ * A declaration with no channel must say why, in a value `FEEDBACK_ABSENCES`
+ * defines, and `not-needed` is coherent only beside native blocking. A
+ * declaration with a channel states no absence.
+ */
+const feedbackDeclarationErrors = (capabilities) => {
+  const feedback = capabilities.feedback;
+
+  if (!isPlainObject(feedback) || !('channel' in feedback)) {
+    // The missing-category and missing-field checks already said so.
+    return [];
+  }
+
+  if (feedback.channel !== null) {
+    return 'absence' in feedback && feedback.absence !== null
+      ? [{
+        code: 'adapter-feedback-absence-contradictory',
+        path: 'capabilities.feedback.absence',
+        message: `A declaration naming the feedback channel ${JSON.stringify(feedback.channel)} has no absence to explain; absence must be null beside a channel.`,
+      }]
+      : [];
+  }
+
+  const declared = FEEDBACK_ABSENCES[feedback.absence] ?? null;
+
+  if (declared === null) {
+    return [{
+      code: 'adapter-feedback-absence-undeclared',
+      path: 'capabilities.feedback.absence',
+      message: `A declaration with no feedback channel must say why: ${Object.keys(FEEDBACK_ABSENCES).map((id) => JSON.stringify(id)).join(' or ')}. ${JSON.stringify(feedback.absence ?? null)} says neither, so nothing can tell a surface that needs no channel from one nobody has observed.`,
+    }];
+  }
+
+  if (declared.requiresNativeBlocking && capabilities.blocking?.native !== true) {
+    return [{
+      code: 'adapter-feedback-absence-incoherent',
+      path: 'capabilities.feedback.absence',
+      message: `${JSON.stringify(declared.id)} asserts that ${declared.asserts} This surface declares no native blocking, so it has no answer that is not a channel.`,
+    }];
+  }
+
+  return [];
+};
+
+/**
  * Validate one adapter capability declaration.
  *
  * A missing category is an error rather than a default, and an unknown one is
@@ -232,6 +314,7 @@ export const validateAdapterDeclaration = (capabilities) => {
   }
 
   errors.push(...trustDeclarationErrors(capabilities.trust));
+  errors.push(...feedbackDeclarationErrors(capabilities));
 
   return errors;
 };
@@ -297,11 +380,14 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 600_000,
       }),
+      // No channel is needed, and none ever will be: this surface answers by
+      // blocking, so a non-zero exit IS the answer (`TB-048`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-needed',
       }),
     }),
   }),
@@ -384,11 +470,18 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 300_000,
       }),
+      // No channel is declared because none has been observed: this surface
+      // has not been driven by a real client invocation, so how it takes an
+      // answer back is unknown and is not guessed. Until it is observed this
+      // surface stays declared and testable, and is never registered: a
+      // preflight that cannot answer would evaluate every turn into silence
+      // (`TB-048`, `SG-SUPPORT-001`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-observed',
       }),
     }),
   }),
@@ -472,11 +565,18 @@ const ADAPTER_REGISTRY = Object.freeze({
         structuredResult: true,
         timeoutMs: 300_000,
       }),
+      // No channel is declared because none has been observed: this surface
+      // has not been driven by a real client invocation, so how it takes an
+      // answer back is unknown and is not guessed. Until it is observed this
+      // surface stays declared and testable, and is never registered: a
+      // preflight that cannot answer would evaluate every turn into silence
+      // (`TB-048`, `SG-SUPPORT-001`).
       feedback: Object.freeze({
         channel: null,
         field: null,
         none: '',
         maxIterations: null,
+        absence: 'not-observed',
       }),
     }),
   }),
@@ -583,6 +683,7 @@ const ADAPTER_REGISTRY = Object.freeze({
         // on it; a third repetition of an unchanged verdict has nothing to add
         // and is how a preflight becomes a loop (TB-027).
         maxIterations: 2,
+        absence: null,
       }),
     }),
   }),
@@ -862,6 +963,9 @@ export const presentDecision = ({ adapterId, decision }) => {
       // (`NFR-OPER-001`, `FR-EVAL-009`, `TB-064`).
       diagnostics: (decision.diagnostics ?? []).map(presentDiagnostic),
       changedGraderSurfaces: (decision.integrity?.changedGraderSurfaces ?? []).map(presentGraderSurface),
+      // Carried every time, as the decision records it; whether the channel
+      // says it again is the channel's own rule (`TB-066`).
+      unversionedGraderSurfaces: (decision.integrity?.unversionedGraderSurfaces ?? []).map(presentGraderSurface),
     },
   };
 };
@@ -916,9 +1020,11 @@ const plural = (count, noun) => `${count} more ${noun}${count === 1 ? '' : 's'}`
  * outcome; each failing check's own summary, because those are what a
  * maintainer can act on directly; every control-surface drift; the other
  * diagnostics with their reason codes; every changed Grader surface, stated as
- * observation; and, when anything was left out, what was left out.
+ * observation; every unversioned Grader surface with its remedy, unless this
+ * clone was already told about exactly that set; and, when anything was left
+ * out, what was left out.
  */
-const decisionLines = (view) => {
+const decisionLines = (view, { unversionedAlreadyStated = false } = {}) => {
   const presentation = view?.presentation ?? {};
   const failing = (presentation.checks ?? []).filter(
     (check) => check?.outcome !== 'passed' && check?.outcome !== 'not-applicable',
@@ -927,6 +1033,7 @@ const decisionLines = (view) => {
   const drift = diagnostics.filter((diagnostic) => diagnostic?.reasonCode === DRIFT_REASON);
   const other = diagnostics.filter((diagnostic) => diagnostic?.reasonCode !== DRIFT_REASON);
   const surfaces = presentation.changedGraderSurfaces ?? [];
+  const unversioned = unversionedAlreadyStated ? [] : presentation.unversionedGraderSurfaces ?? [];
   const listedChecks = failing.slice(0, FEEDBACK_LIMITS.checks);
   const listedOther = other.slice(0, FEEDBACK_LIMITS.diagnostics);
   const omittedChecks = failing.slice(listedChecks.length);
@@ -961,6 +1068,17 @@ const decisionLines = (view) => {
     );
   }
 
+  // A standing fact about the clone, not about this change, and nobody's
+  // fault: stated plainly, once, with the remedy named as the maintainer's.
+  // The agent is told what it is not asked to do (`FR-LIFE-009`, `TB-066`).
+  if (unversioned.length > 0) {
+    lines.push(
+      'Unversioned Grader surfaces (Git does not track these, so they have no history to review or diff; not a change and not a fault; said once, and again only when this set changes):',
+      ...unversioned.map((surface) => `- ${surface?.kind} ${surface?.path}`),
+      `Remedy, the maintainer's and not this agent's: ${remedyInstruction(REMEDIES['grader-surface-unversioned'])}.`,
+    );
+  }
+
   const omitted = [
     ...(omittedChecks.length > 0
       ? [`${plural(omittedChecks.length, 'failing check')} (${tally(omittedChecks.map((check) => check?.reasonCode ?? check?.outcome))})`]
@@ -982,14 +1100,20 @@ const decisionLines = (view) => {
  *
  * The runner never learns a client field name: it asks this function, and this
  * function reads the field from the declaration (FR-ADAPT-004, SG-OWNER-001).
- * A genuinely clean preflight — `passed`, with no diagnostic and no changed
- * Grader surface — returns the declared silence form so a clean turn is not
- * interrupted. Every other outcome — a failed required check, unverified
- * coverage, drift, a changed Grader surface, or a harness fault — occupies the
- * declared field as one message rendered from the decision (`TB-064`). An
- * adapter that declares no channel returns none.
+ * A genuinely clean preflight — `passed`, with no diagnostic, no changed
+ * Grader surface, and no unversioned surface still to state — returns the
+ * declared silence form so a clean turn is not interrupted. Every other
+ * outcome — a failed required check, unverified coverage, drift, a changed
+ * Grader surface, an unversioned surface not yet stated, or a harness fault —
+ * occupies the declared field as one message rendered from the decision
+ * (`TB-064`). An adapter that declares no channel returns none.
+ *
+ * `unversionedAlreadyStated` is the runner's answer to whether this clone was
+ * already told about exactly this set of unversioned surfaces (`TB-066`). It
+ * withholds that one statement and nothing else: a changed Grader surface is
+ * never rate-limited by it.
  */
-export const formatFeedback = ({ adapterId, view } = {}) => {
+export const formatFeedback = ({ adapterId, view, unversionedAlreadyStated = false } = {}) => {
   const adapter = describeAdapter(adapterId);
   const feedback = adapter?.capabilities?.feedback ?? null;
 
@@ -1000,7 +1124,8 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
   const silent = view?.outcome === 'passed'
     && view?.failure == null
     && (view?.presentation?.diagnostics ?? []).length === 0
-    && (view?.presentation?.changedGraderSurfaces ?? []).length === 0;
+    && (view?.presentation?.changedGraderSurfaces ?? []).length === 0
+    && (unversionedAlreadyStated || (view?.presentation?.unversionedGraderSurfaces ?? []).length === 0);
 
   if (silent) {
     return typeof feedback.none === 'string' ? feedback.none : '';
@@ -1014,9 +1139,40 @@ export const formatFeedback = ({ adapterId, view } = {}) => {
   // has always had (`FR-ADAPT-005`).
   const message = view?.failure
     ? `${PREFLIGHT_LEAD}: unverified — ${view.failure.detail ?? 'the evaluation could not be completed'}.`
-    : decisionLines(view).join('\n');
+    : decisionLines(view, { unversionedAlreadyStated }).join('\n');
 
   return `${JSON.stringify({ [feedback.field]: message })}\n`;
+};
+
+/**
+ * Why one adapter's surface cannot answer through anything it declares, or
+ * `null` when it can (`TB-048`).
+ *
+ * A preflight surface answers only through its feedback channel: it never
+ * blocks, so a preflight with no channel evaluates and then says nothing, on
+ * every turn. Such a surface is not registered, and a runner that reaches one
+ * anyway does no work. Authoritative Git declares no channel either and is
+ * never refused here: it answers by blocking (`FR-ADAPT-005`, `FR-ADAPT-007`).
+ *
+ * Read from the declaration alone, so Gate core asks this question without
+ * learning which client it is asking about (`SG-OWNER-001`).
+ */
+export const unreportableSurface = (adapterId) => {
+  const adapter = describeAdapter(adapterId);
+
+  if (adapter === null || adapter.role !== 'preflight' || adapter.capabilities.feedback.channel !== null) {
+    return null;
+  }
+
+  const absence = adapter.capabilities.feedback.absence ?? null;
+  const why = FEEDBACK_ABSENCES[absence]?.asserts ?? 'it does not say why.';
+
+  return {
+    adapterId: adapter.id,
+    reasonCode: 'feedback-channel-unobserved',
+    absence,
+    detail: `${adapter.id} declares no feedback channel (${absence ?? 'no absence stated'}): ${why} A preflight surface answers only through that channel, so this one would evaluate every turn and report nothing.`,
+  };
 };
 
 /**

@@ -13,6 +13,7 @@ import {
   ACTIVATION_STEPS,
   activate,
   configurationIdentity,
+  inspectActivation,
   previewActivation,
   repositoryIdentity,
 } from '../skills/change-evaluation-gate/scripts/lib/activation.mjs';
@@ -751,7 +752,7 @@ test('a failing adapter self-test leaves no partial adapter set active and never
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '2.0.0', authoritative: false },
+      { id: 'cursor', version: '2.0.0', authoritative: false },
     ],
   });
   const preview = await previewActivation(request, dependencies());
@@ -991,7 +992,14 @@ const seedClientConfigurations = async (root) => {
   );
 };
 
-test('AC-ADAPT-003: activation registers two differently declared desktop surfaces without branching on a client name', async (t) => {
+/**
+ * Since `TB-048` only a desktop surface that can answer is registered, so this
+ * proves one surface registering through its declaration in a clone whose
+ * other client file holds a different block schema, and leaves that file alone.
+ * The matcher-group schema is proved at the registration seam itself, in
+ * `gate-adapter-registration.test.mjs`.
+ */
+test('AC-ADAPT-003: activation registers a declared desktop surface without branching on a client name', async (t) => {
   const root = await throwawayRepository(t);
 
   await installHookProgram(root);
@@ -999,10 +1007,10 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
 
   await seedClientConfigurations(root);
 
+  const general = await readFile(path.join(root, '.claude/settings.local.json'), 'utf8');
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '2.0.0', authoritative: false },
       { id: 'cursor', version: '3.0.0', authoritative: false },
     ],
   });
@@ -1016,25 +1024,17 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
   assert.equal(result.activated, true, `Activation refused: ${result.reasonCode}.`);
 
   const commandFor = (adapterId) => `"${process.execPath}" "${path.join(root, 'tools/gate-runner.mjs')}" "--adapter" "${adapterId}"`;
-  const general = JSON.parse(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'));
   const dedicated = JSON.parse(await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'));
 
-  // Each surface received the Gate entry in its own declared block schema,
+  // The surface received the Gate entry in its own declared block schema,
   // pointing at the preflight program named with that adapter's id.
-  assert.deepEqual(general.hooks.Stop.at(-1), {
-    matcher: '',
-    hooks: [{ type: 'command', command: commandFor('claude-code-desktop') }],
-  });
   assert.deepEqual(dedicated.hooks.stop.at(-1), { command: commandFor('cursor') });
 
-  // Every unrelated key and every unrelated entry survived activation.
-  assert.deepEqual(general.permissions, { allow: ['Bash(ls:*)'], deny: [] });
+  // Every unrelated key and every unrelated entry survived activation, and the
+  // other client's file was not selected and was not touched.
   assert.equal(dedicated.version, 1);
-  assert.deepEqual(
-    general.hooks.Stop[0],
-    { matcher: '', hooks: [{ type: 'command', command: 'somebody-elses-hook' }] },
-  );
   assert.deepEqual(dedicated.hooks.stop[0], { command: 'somebody-elses-hook' });
+  assert.equal(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'), general);
 
   // The receipt pins what was registered, per adapter, so a later status or
   // removal reconciles this exact entry rather than searching for one.
@@ -1050,13 +1050,9 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
   // receipt's own `hookChain` already pins that surface.
   assert.deepEqual(registrations, [
     ['git', null, null, false],
-    ['claude-code-desktop', 'client-configuration-file', path.join(root, '.claude/settings.local.json'), true],
     ['cursor', 'client-configuration-file', path.join(root, '.cursor/hooks.json'), true],
   ]);
-
-  for (const adapter of result.receipt.adapters.slice(1)) {
-    assert.match(adapter.registration.entryIdentity, /^sha256:[0-9a-f]{64}$/);
-  }
+  assert.match(result.receipt.adapters[1].registration.entryIdentity, /^sha256:[0-9a-f]{64}$/);
 
   // SG-OWNER-001: the registration mechanics and activation itself name no
   // client. Every client name in this module set lives in the adapter
@@ -1071,6 +1067,88 @@ test('AC-ADAPT-003: activation registers two differently declared desktop surfac
       `${module} branches on a client name.`,
     );
   }
+});
+
+/**
+ * TB-048 — `AC-ADAPT-003`, `AC-LIFE-009`, `SG-HOOK-001`, `FR-ADAPT-005`.
+ *
+ * A selection holding a preflight surface whose feedback channel has not been
+ * observed is refused at the preview, before consent is read, and registers
+ * nothing at all — not the unobserved surface, and not the surface beside it
+ * that could have answered. The inspection `gate doctor` makes stops at the
+ * same step with the same reason, because it applies the same refusal.
+ */
+test('TB-048 AC-LIFE-009: a selection holding a preflight surface that cannot answer registers nothing, and the inspection predicts the same refusal', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await installHookProgram(root);
+  const store = await storeFor(root);
+
+  await seedClientConfigurations(root);
+
+  const before = {
+    general: await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'),
+    dedicated: await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'),
+  };
+  const request = activationRequest(root, {
+    adapters: [
+      { id: 'git', version: '1.0.0', authoritative: true },
+      { id: 'claude-code-desktop', version: '2.0.0', authoritative: false },
+      { id: 'cursor', version: '3.0.0', authoritative: false },
+    ],
+  });
+  const preview = await previewActivation(request, dependencies());
+  const selfTested = [];
+  const trusted = [];
+  const result = await activateFixture(root, { ...request, consent: consentFor(preview) }, dependencies({
+    evidenceStore: store,
+    establishTrust: async (options) => {
+      trusted.push(options.client?.id ?? null);
+
+      return { established: true, grantedBy: 'fixture' };
+    },
+    selfTestAdapter: async (adapter) => {
+      selfTested.push(adapter.id);
+
+      return { ok: true, detail: `${adapter.id} responded` };
+    },
+  }));
+
+  assert.equal(result.activated, false);
+  assert.equal(result.state, 'configured');
+  assert.equal(result.step, 'preview');
+  assert.equal(result.reasonCode, 'feedback-channel-unobserved');
+  assert.deepEqual(result.errors.map((entry) => [entry.adapter, entry.absence]), [['claude-code-desktop', 'not-observed']]);
+  assert.match(result.errors[0].message, /claude-code-desktop declares no feedback channel/);
+  assert.match(result.errors[0].message, /not been observed/);
+
+  // Refused before consent: no trust was sought, nothing was self-tested, and
+  // there was nothing to roll back.
+  assert.deepEqual(result.order, ['repository-identity', 'preview']);
+  assert.deepEqual(trusted, []);
+  assert.deepEqual(selfTested, []);
+  assert.deepEqual(result.rollback.actions, []);
+
+  // No partial adapter set: neither client file holds a Gate byte, no receipt,
+  // no hook.
+  assert.equal(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'), before.general);
+  assert.equal(await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'), before.dedicated);
+  assert.equal(await store.activationReceipt().read(), null);
+  assert.deepEqual(await registeredHooks(path.join(store.gitCommonDirectory, 'hooks')), []);
+
+  // The inspection agrees, through the same refusal.
+  const inspected = await inspectActivation(request, dependencies());
+
+  assert.deepEqual(inspected.reached, ['repository-identity', 'preview']);
+  assert.equal(inspected.stop.step, result.step);
+  assert.equal(inspected.stop.reasonCode, result.reasonCode);
+  assert.deepEqual(inspected.stop.errors, result.errors);
+
+  // Authoritative Git declares no channel either, and is never refused for it:
+  // it answers by blocking.
+  const gitOnly = activationRequest(root);
+
+  assert.equal((await inspectActivation(gitOnly, dependencies())).stop, null);
 });
 
 test('SG-HOOK-001: an activation that fails after registering desktop surfaces leaves every client configuration file exactly as it was', async (t) => {
@@ -1088,7 +1166,6 @@ test('SG-HOOK-001: an activation that fails after registering desktop surfaces l
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '2.0.0', authoritative: false },
       { id: 'cursor', version: '3.0.0', authoritative: false },
     ],
   });
@@ -1109,9 +1186,9 @@ test('SG-HOOK-001: an activation that fails after registering desktop surfaces l
   assert.equal(result.step, 'receipt');
   assert.equal(result.reasonCode, 'receipt-write-failed');
 
-  // Both registered surfaces were withdrawn, newest first, and neither client
-  // file kept a single Gate byte.
-  assert.deepEqual(result.rollback.actions, ['adapter:cursor', 'adapter:claude-code-desktop', 'trust']);
+  // The registered surface was withdrawn before trust, and neither client file
+  // kept a single Gate byte.
+  assert.deepEqual(result.rollback.actions, ['adapter:cursor', 'trust']);
   assert.deepEqual(result.rollback.failures, []);
   assert.equal(await readFile(path.join(root, '.claude/settings.local.json'), 'utf8'), before.general);
   assert.equal(await readFile(path.join(root, '.cursor/hooks.json'), 'utf8'), before.dedicated);
@@ -1134,7 +1211,6 @@ test('AC-ADAPT-003: a declared registration surface that cannot be confirmed is 
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '2.0.0', authoritative: false },
       { id: 'cursor', version: '3.0.0', authoritative: false },
     ],
   });
@@ -1147,11 +1223,7 @@ test('AC-ADAPT-003: a declared registration surface that cannot be confirmed is 
 
   assert.equal(result.activated, true, `Activation refused: ${result.reasonCode}.`);
 
-  const confirmed = result.receipt.adapters.find((adapter) => adapter.id === 'claude-code-desktop');
   const unconfirmed = result.receipt.adapters.find((adapter) => adapter.id === 'cursor');
-
-  assert.equal(confirmed.registration.registered, true);
-  assert.equal(confirmed.registration.state, 'registered');
 
   // The unconfirmed surface is reported, never claimed.
   assert.equal(unconfirmed.registration.state, 'unverified');

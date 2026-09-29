@@ -73,15 +73,40 @@ Every surface entry names its `kind`, repository-relative `path`, owning
 actually evaluated. Surfaces are declared, never guessed: an undeclared path is
 not reported.
 
-`integrity.controlSurfaceChanged` is `true` when a `gate-configuration` or
-`provider` surface changed. Reporting a changed surface is visibility, not a
-malicious classification: it never changes the outcome by itself. The
-dual-policy transition that a control-surface change requires is owned by the
-configuration-transition slice (`SG-CFG-001`).
+A declared surface Git does not track is **unversioned**, not changed
+(`TB-066`). A worktree change's path set holds every untracked path, because a
+file the agent just created is new work an applicability rule must see; but an
+untracked declared surface has no version for the change to have moved it
+from, and on a clone whose `.agent-framework.yaml` was never committed it was in
+that set on every snapshot. So the untracked paths are carried out of the same
+single `git status` parse (`listPathChanges` in `scripts/lib/snapshot.mjs`)
+beside the changed ones, and `integrity.unversionedGraderSurfaces` lists every
+declared surface among them, in the same entry shape and order. A path is never
+in both lists, and the contract refuses a decision that reports one twice. Every
+declared kind is reported this way, a test matched by a declared glob included:
+an untracked test is the same fact about the same class of file, and no runner
+declares test globs today. An untracked file nothing declares is ordinary new
+work and is in neither list. Every decision records the list — a commit's too,
+although its `git-index` snapshot still excludes untracked paths exactly as
+before — and a no-subject decision records it with `identity: null`, because
+nothing was materialized.
+
+`integrity.controlSurfaceChanged` is `true` when a tracked `gate-configuration`
+or `provider` surface changed; an unversioned one never sets it. Reporting a
+changed or an unversioned surface is visibility, not a malicious
+classification: neither changes the outcome by itself, and neither word implies
+anybody did anything (`AC-SEC-001`). The dual-policy transition that a
+control-surface change requires is owned by the configuration-transition slice
+(`SG-CFG-001`).
 
 Every changed surface is also named, by kind and path, on each declared
 preflight feedback channel — on a passing turn too — and never truncated there
 (`TB-064`; see the [adapter conformance contract](adapter-conformance-contract.md)).
+An unversioned surface is named there once, under the channel's own once-only
+rule, and stated standing by `gate status` as an informational
+`grader-surface-unversioned` finding whose `next:` line names the maintainer's
+remedy: commit it. The Gate never stages or commits it, and a clone may run
+with it unversioned indefinitely (`FR-LIFE-009`, `SG-TRUST-001`).
 
 ## Served-source binding
 

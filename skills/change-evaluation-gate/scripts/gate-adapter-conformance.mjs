@@ -38,6 +38,14 @@
  *    channel and a reason on stderr, and a hook registered without an adapter
  *    reports itself rather than looking like a clean turn (AC-ADAPT-001,
  *    FR-ADAPT-002, SG-TRUST-001).
+ * 6. `unobserved-surface-refused` — a selection holding a preflight surface
+ *    whose feedback channel has not been observed is refused at the preview,
+ *    self-tests and writes nothing, and names every such surface; the same
+ *    clone then activates for Git and every surface that can answer exactly as
+ *    before. Every declared surface is still driven by scenarios 1 to 4 and by
+ *    the shared baseline: a refusal is about registering a surface in a clone,
+ *    never about whether its declaration can be tested (AC-ADAPT-002,
+ *    AC-ADAPT-003, AC-LIFE-009, SG-HOOK-001, FR-ADAPT-005, TB-048).
  *
  * NO DESKTOP CLIENT IS REQUIRED. Nothing here launches, probes, or detects
  * Claude Code Desktop, Codex Desktop, or Cursor. Each surface is driven by an
@@ -80,6 +88,7 @@ import {
   presentDecision,
   runAdapterEvaluation,
   runCompatibilityBaseline,
+  unreportableSurface,
 } from './lib/adapters.mjs';
 import { evaluate } from './lib/evaluate.mjs';
 import { commandPreview } from './lib/command-descriptor.mjs';
@@ -262,11 +271,22 @@ const gatePolicy = () => ({
 });
 
 /**
- * The activation request. Every v1 adapter is selected, so activation
- * self-tests and registers the authoritative Git adapter and all three
- * supported desktop preflight adapters as one all-or-nothing set.
+ * The desktop surfaces that can answer through a declared feedback channel.
+ * Only these are ever registered; a surface whose channel has not been observed
+ * is refused at the preview (`TB-048`). Every declared surface is still driven
+ * by every other scenario here.
  */
-const activationRequest = (root) => ({
+const ANSWERING_DESKTOP_ADAPTER_IDS = DESKTOP_ADAPTER_IDS.filter((id) => unreportableSurface(id) === null);
+
+const UNOBSERVED_DESKTOP_ADAPTER_IDS = DESKTOP_ADAPTER_IDS.filter((id) => unreportableSurface(id) !== null);
+
+/**
+ * The activation request. Authoritative Git and every desktop surface that can
+ * answer are selected, so activation self-tests and registers them as one
+ * all-or-nothing set. `desktopAdapterIds` widens the selection, which is how
+ * scenario 6 asks for a surface that cannot answer.
+ */
+const activationRequest = (root, desktopAdapterIds = ANSWERING_DESKTOP_ADAPTER_IDS) => ({
   scope: 'repository',
   trigger: 'explicit',
   repository: { root },
@@ -292,7 +312,7 @@ const activationRequest = (root) => ({
   }],
   adapters: [
     { id: 'git', version: describeAdapter('git').version, authoritative: true },
-    ...DESKTOP_ADAPTER_IDS.map((id) => ({
+    ...desktopAdapterIds.map((id) => ({
       id,
       version: describeAdapter(id).version,
       authoritative: false,
@@ -335,14 +355,20 @@ const activationDependencies = (overrides = {}) => ({
   ...overrides,
 });
 
-/** A throwaway clone with the real hook program in it, activated for real. */
-const activatedClone = async () => {
+/** A throwaway clone with the real hook program in it, and any client files named. */
+const cloneWithHookProgram = async (files = {}) => {
   const root = await temporaryDirectory(`${CAPABILITY}-repo-`);
 
   await mkdir(path.join(root, 'tools'), { recursive: true });
   await writeFile(path.join(root, 'tools/gate-runner.mjs'), HOOK_RUNNER, 'utf8');
   await writeFile(path.join(root, 'tools/check.mjs'), 'process.exitCode = 0;\n', 'utf8');
   await writeFile(path.join(root, 'source.txt'), 'baseline\n', 'utf8');
+
+  for (const [relative, contents] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await writeFile(path.join(root, relative), contents, 'utf8');
+  }
+
   await git(root, ['init', '--quiet']);
   await git(root, ['add', '--all']);
   await commit(root, 'baseline');
@@ -351,9 +377,15 @@ const activatedClone = async () => {
 
   await assertThrowawayRepository(root);
 
-  const request = activationRequest(root);
+  return { root, store };
+};
+
+/** One consented Activation transaction for the given desktop selection. */
+const activateClone = async ({ root, store }, desktopAdapterIds = ANSWERING_DESKTOP_ADAPTER_IDS, overrides = {}) => {
+  const request = activationRequest(root, desktopAdapterIds);
   const preview = await previewActivation(request, activationDependencies());
-  const result = await activate({
+
+  return activate({
     ...request,
     consent: {
       previewId: preview.previewId,
@@ -362,7 +394,13 @@ const activatedClone = async () => {
       actor: { name: CAPABILITY, source: 'fixture' },
       grantedAt: new Date().toISOString(),
     },
-  }, activationDependencies({ evidenceStore: store }));
+  }, activationDependencies({ evidenceStore: store, ...overrides }));
+};
+
+/** A throwaway clone with the real hook program in it, activated for real. */
+const activatedClone = async () => {
+  const { root, store } = await cloneWithHookProgram();
+  const result = await activateClone({ root, store });
 
   if (result.activated !== true) {
     throw new Error(`${CAPABILITY} could not activate its fixture: ${result.reasonCode}.`);
@@ -381,7 +419,7 @@ const oneDecisionFourSurfaces = async () => {
 
   check(
     findings,
-    ['git', ...DESKTOP_ADAPTER_IDS].every((id) => selfTested.includes(id)),
+    ['git', ...ANSWERING_DESKTOP_ADAPTER_IDS].every((id) => selfTested.includes(id)),
     `Activation did not self-test every selected adapter; it tested ${JSON.stringify(selfTested)}.`,
   );
 
@@ -1171,6 +1209,100 @@ const packagedPreflightAnswersClient = async () => {
   return { name: 'packaged-preflight-answers-client', ok: findings.length === 0, findings };
 };
 
+/**
+ * Scenario 6. A surface that cannot answer is not registered (`TB-048`).
+ *
+ * One real clone holds every desktop surface's own client file. A selection of
+ * every declared adapter is refused at the preview because it holds a surface
+ * whose feedback channel has not been observed: nothing is self-tested, no
+ * client file changes by a byte, no hook and no receipt are written, and the
+ * refusal names every such surface. The same clone then activates for Git and
+ * for every surface that can answer, exactly as it does without them
+ * (`AC-ADAPT-002`, `AC-ADAPT-003`, `AC-LIFE-009`, `SG-HOOK-001`, `FR-ADAPT-005`).
+ */
+const unobservedSurfaceRefused = async () => {
+  const findings = [];
+  const ownerOf = (declared) => `${JSON.stringify(declared.registration.schemaVersion === null
+    ? { hooks: {} }
+    : { [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value, hooks: {} }, null, 2)}\n`;
+  const files = Object.fromEntries(DESKTOP_ADAPTER_IDS.map((id) => {
+    const declared = describeAdapter(id);
+
+    return [declared.registration.file, ownerOf(declared)];
+  }));
+  const clone = await cloneWithHookProgram(files);
+  const readFiles = async () => JSON.stringify(await Promise.all(
+    Object.keys(files).map((relative) => readFile(path.join(clone.root, relative), 'utf8')),
+  ));
+  const hooks = async () => readFile(path.join(clone.root, '.git/hooks/pre-commit'), 'utf8').catch(() => null);
+  const pristine = await readFiles();
+
+  check(
+    findings,
+    UNOBSERVED_DESKTOP_ADAPTER_IDS.length > 0 && ANSWERING_DESKTOP_ADAPTER_IDS.length > 0,
+    `This scenario needs both kinds of surface: unobserved ${JSON.stringify(UNOBSERVED_DESKTOP_ADAPTER_IDS)}, answering ${JSON.stringify(ANSWERING_DESKTOP_ADAPTER_IDS)}.`,
+  );
+
+  const tested = [];
+  const refused = await activateClone(clone, DESKTOP_ADAPTER_IDS, {
+    selfTestAdapter: async (adapter) => {
+      tested.push(adapter.id);
+
+      return { ok: true, detail: `${adapter.id} responded` };
+    },
+  });
+
+  check(
+    findings,
+    refused.activated === false && refused.step === 'preview' && refused.reasonCode === 'feedback-channel-unobserved',
+    `A selection holding an unobserved surface was not refused at the preview: ${refused.step} ${refused.reasonCode}.`,
+  );
+  check(
+    findings,
+    JSON.stringify((refused.errors ?? []).map((entry) => entry.adapter)) === JSON.stringify(UNOBSERVED_DESKTOP_ADAPTER_IDS)
+      && (refused.errors ?? []).every((entry) => /declares no feedback channel/.test(entry.message) && /not been observed/.test(entry.message)),
+    `The refusal did not name every unobserved surface and why: ${JSON.stringify(refused.errors)}.`,
+  );
+  check(findings, tested.length === 0, `A refused selection self-tested ${JSON.stringify(tested)}.`);
+  check(findings, await readFiles() === pristine, 'A refused selection changed a client configuration file.');
+  check(findings, await hooks() === null, 'A refused selection wrote the pre-commit hook.');
+  check(
+    findings,
+    await clone.store.activationReceipt().read() === null,
+    'A refused selection published a receipt.',
+  );
+
+  // The same clone, Git and every surface that can answer: activated as always.
+  const activated = await activateClone(clone);
+
+  check(findings, activated.activated === true, `The same clone did not activate for Git and the answering surfaces: ${activated.reasonCode}.`);
+  check(
+    findings,
+    JSON.stringify(activated.receipt?.adapters?.map((adapter) => adapter.id)) === JSON.stringify(['git', ...ANSWERING_DESKTOP_ADAPTER_IDS]),
+    `The activated set is not Git and the answering surfaces: ${JSON.stringify(activated.receipt?.adapters?.map((adapter) => adapter.id))}.`,
+  );
+
+  for (const id of ANSWERING_DESKTOP_ADAPTER_IDS) {
+    const pinned = activated.receipt?.adapters?.find((adapter) => adapter.id === id)?.registration ?? null;
+
+    check(findings, pinned?.registered === true, `${id} was not registered on its own declared surface: ${JSON.stringify(pinned)}.`);
+  }
+
+  for (const id of UNOBSERVED_DESKTOP_ADAPTER_IDS) {
+    const declared = describeAdapter(id);
+
+    check(
+      findings,
+      await readFile(path.join(clone.root, declared.registration.file), 'utf8') === ownerOf(declared),
+      `${id}'s ${declared.registration.file} changed although it was never selected for registration.`,
+    );
+  }
+
+  check(findings, (await hooks()) !== null, 'Git was not enabled on the clone that activated.');
+
+  return { name: 'unobserved-surface-refused', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1182,6 +1314,7 @@ const main = async () => {
       await failuresAreUnverified(),
       await repositoryRootIsResolved(),
       await packagedPreflightAnswersClient(),
+      await unobservedSurfaceRefused(),
     ];
   } finally {
     for (const root of temporaryRoots) {

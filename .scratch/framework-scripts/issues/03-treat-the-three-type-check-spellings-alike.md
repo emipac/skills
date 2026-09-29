@@ -1,12 +1,12 @@
 # FS-003 — Treat the three type-check spellings alike
 
-Status: ready-for-agent
-Labels: ready-for-agent, defect
+Status: done
+Labels: done, defect
 Blocked by: 02-name-every-script-the-setup-did-not-classify
 Tracker ID: 03-treat-the-three-type-check-spellings-alike
 Draft key: FS-003
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. `framework-setup` owns deterministic project
 discovery, and no feature contract governs which package-script names it accepts.
@@ -125,18 +125,18 @@ appearing in it.
 
 ## Acceptance Criteria
 
-- [ ] A fixture declaring `typecheck:check`, `type-check:check`, and
+- [x] A fixture declaring `typecheck:check`, `type-check:check`, and
   `types:check` classifies all three identically — same category, same scope,
   same capability.
-- [ ] Each of the three still declines an unsafe qualifier, proved for at least
+- [x] Each of the three still declines an unsafe qualifier, proved for at least
   `watch` and `fix`, and the declined script is still named in the discovery
   output with its reason.
-- [ ] A project declaring a TypeScript check under any of the three spellings
+- [x] A project declaring a TypeScript check under any of the three spellings
   reports the TypeScript capability rather than a lint one.
-- [ ] No other base name's accepted qualifiers change, proved by a fixture
+- [x] No other base name's accepted qualifiers change, proved by a fixture
   covering the bases this slice does not touch.
-- [ ] Repeat discovery and repeat configuration are byte-identical.
-- [ ] The behavior change is stated in a changeset: a project already declaring
+- [x] Repeat discovery and repeat configuration are byte-identical.
+- [x] The behavior change is stated in a changeset: a project already declaring
   `typecheck:check` or `type-check:check` gains a check it did not have.
 
 ## Verification Matrix

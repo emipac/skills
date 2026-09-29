@@ -15,6 +15,7 @@ import {
   BASELINE_CHECKS,
   classifySupport,
   describeAdapter,
+  FEEDBACK_ABSENCES,
   FEEDBACK_LIMITS,
   formatFeedback,
   normalizeNativeInvocation,
@@ -23,6 +24,7 @@ import {
   runAdapterEvaluation,
   runCompatibilityBaseline,
   SUPPORT_TIERS,
+  unreportableSurface,
   validateAdapterDeclaration,
   validateRegistrationDeclaration,
 } from '../skills/change-evaluation-gate/scripts/lib/adapters.mjs';
@@ -30,6 +32,7 @@ import {
   REASON_OUTCOMES,
   validateEvaluationRequest,
 } from '../skills/change-evaluation-gate/scripts/lib/evaluation-contract.mjs';
+import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 
 const runFile = promisify(execFile);
 
@@ -1466,6 +1469,98 @@ test('every declared trust model is defined by the contract, and a model it does
 });
 
 /**
+ * TB-048 — `FR-ADAPT-004`, `FR-ADAPT-005`, `SG-OWNER-001`, `NFR-COMP-001`.
+ *
+ * "No channel needed" and "channel not yet observed" are different statements,
+ * and a declaration with no channel that says neither is rejected. Whether a
+ * surface can answer is read from that declaration alone.
+ */
+test('TB-048: a declaration with no feedback channel says whether none is needed or none has been observed, and one that says neither is rejected', () => {
+  for (const [id, absence] of Object.entries(FEEDBACK_ABSENCES)) {
+    assert.equal(absence.id, id, 'An absence must name itself.');
+
+    for (const field of ['asserts', 'requiresNativeBlocking']) {
+      assert.ok(field in absence, `The absence ${id} must state ${field}.`);
+    }
+  }
+
+  assert.deepEqual(Object.keys(FEEDBACK_ABSENCES).sort(), ['not-needed', 'not-observed']);
+
+  // Authoritative Git needs none, because it answers by blocking; the two
+  // unobserved desktop surfaces have none observed; Cursor names its channel.
+  const declared = Object.fromEntries(ADAPTER_IDS.map((adapterId) => {
+    const feedback = describeAdapter(adapterId).capabilities.feedback;
+
+    return [adapterId, [feedback.channel, feedback.absence]];
+  }));
+
+  assert.deepEqual(declared, {
+    git: [null, 'not-needed'],
+    'claude-code-desktop': [null, 'not-observed'],
+    'codex-desktop': [null, 'not-observed'],
+    cursor: ['stdout-json', null],
+  });
+  assert.equal(describeAdapter('git').capabilities.blocking.native, true);
+
+  for (const adapterId of ADAPTER_IDS) {
+    assert.deepEqual(validateAdapterDeclaration(describeAdapter(adapterId).capabilities), [], adapterId);
+  }
+
+  const git = describeAdapter('git').capabilities;
+  const desktop = describeAdapter('claude-code-desktop').capabilities;
+  const cursor = describeAdapter('cursor').capabilities;
+  const withFeedback = (capabilities, feedback) => ({
+    ...capabilities,
+    feedback: { ...capabilities.feedback, ...feedback },
+  });
+  const codesOf = (capabilities) => validateAdapterDeclaration(capabilities).map((error) => error.code);
+
+  // Saying neither: the field omitted, stated as null, or naming nothing.
+  const { absence: _omitted, ...silentFeedback } = desktop.feedback;
+
+  assert.deepEqual(
+    codesOf({ ...desktop, feedback: silentFeedback }).sort(),
+    ['adapter-capability-incomplete', 'adapter-feedback-absence-undeclared'],
+  );
+
+  for (const absence of [null, 'unknown', 'not-applicable']) {
+    assert.deepEqual(codesOf(withFeedback(desktop, { absence })), ['adapter-feedback-absence-undeclared'], String(absence));
+    assert.deepEqual(codesOf(withFeedback(git, { absence })), ['adapter-feedback-absence-undeclared'], String(absence));
+  }
+
+  // "Not needed" is only true of a surface that blocks: a non-blocking surface
+  // claiming it would be the old silence under a new name.
+  assert.deepEqual(codesOf(withFeedback(desktop, { absence: 'not-needed' })), ['adapter-feedback-absence-incoherent']);
+  assert.deepEqual(codesOf(withFeedback(git, { absence: 'not-observed' })), []);
+
+  // A declared channel has no absence to explain.
+  assert.deepEqual(codesOf(withFeedback(cursor, { absence: 'not-observed' })), ['adapter-feedback-absence-contradictory']);
+
+  // Only a preflight surface with no channel is one that cannot answer.
+  assert.equal(unreportableSurface('git'), null, 'Git answers by blocking and is never refused for having no channel.');
+  assert.equal(unreportableSurface('cursor'), null);
+  assert.equal(unreportableSurface('not-an-adapter'), null);
+
+  for (const adapterId of ['claude-code-desktop', 'codex-desktop']) {
+    const unreportable = unreportableSurface(adapterId);
+
+    assert.equal(unreportable.adapterId, adapterId);
+    assert.equal(unreportable.reasonCode, 'feedback-channel-unobserved');
+    assert.equal(unreportable.absence, 'not-observed');
+    assert.match(unreportable.detail, new RegExp(`^${adapterId} declares no feedback channel`));
+    assert.match(unreportable.detail, /not been observed/);
+  }
+
+  // Nothing was demoted, hidden, or removed: every declared surface is still a
+  // declared surface, and every desktop one is still a preflight surface.
+  assert.deepEqual([...ADAPTER_IDS], ['git', 'claude-code-desktop', 'codex-desktop', 'cursor']);
+  assert.deepEqual(
+    ADAPTER_IDS.filter((adapterId) => describeAdapter(adapterId).role === 'preflight'),
+    ['claude-code-desktop', 'codex-desktop', 'cursor'],
+  );
+});
+
+/**
  * TB-064 — say why, in the channel that asks for the change.
  *
  * These fixtures drive the real presentation and the real `formatFeedback`
@@ -1484,6 +1579,7 @@ const channelDecision = ({
   checks = [],
   diagnostics = [],
   changedGraderSurfaces = [],
+  unversionedGraderSurfaces = [],
 } = {}) => ({
   evaluationId: 'sha256:tb-064-evaluation',
   outcome,
@@ -1493,6 +1589,7 @@ const channelDecision = ({
   integrity: {
     changedGraderSurfaces,
     controlSurfaceChanged: changedGraderSurfaces.some((surface) => surface.kind === 'gate-configuration'),
+    unversionedGraderSurfaces,
   },
 });
 
@@ -1705,5 +1802,98 @@ test('TB-064: the presentation carries the decision\'s diagnostics and changed G
 
     assert.deepEqual(presentation.diagnostics, [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }]);
     assert.deepEqual(presentation.changedGraderSurfaces, [{ kind: 'gate-configuration', path: '.agent-framework.yaml' }]);
+  }
+});
+
+/**
+ * TB-066 — say a Gate configuration is unversioned, once.
+ *
+ * An untracked declared surface is unversioned, not changed. The presentation
+ * carries it every time; the channel states it with its remedy unless the
+ * runner says this clone was already told about exactly this set, and that
+ * answer withholds the unversioned statement and nothing else.
+ */
+const UNVERSIONED = Object.freeze([
+  { kind: 'gate-configuration', path: '.agent-framework.yaml', checkId: null, role: null, identity: 'sha256:a' },
+  { kind: 'verification-script', path: 'tools/check.mjs', checkId: 'configuration.broad-tests.test', role: 'evaluate', identity: 'sha256:b' },
+]);
+
+const INTENT = /tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i;
+
+test('TB-066 NFR-OPER-001 / AC-SEC-001: a passing turn over unversioned surfaces states each one and the maintainer\'s remedy, as a fact and never as a change or an accusation', () => {
+  const decision = channelDecision({
+    outcome: 'passed',
+    checks: [passedCheck('configuration.broad-tests.test')],
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const message = channelMessage(adapterId, decision);
+
+    assert.match(message, /^Preflight \(not a commit decision\): passed\./);
+    assert.doesNotMatch(message, /Changed Grader surfaces/, message);
+    assert.match(message, /Unversioned Grader surfaces/, message);
+
+    for (const surface of UNVERSIONED) {
+      assert.ok(message.includes(`- ${surface.kind} ${surface.path}`), `${adapterId} did not name ${surface.path}: ${message}`);
+    }
+
+    // The remedy is named through the one table, and it is the maintainer's.
+    assert.ok(
+      message.includes(remedyInstruction(REMEDIES['grader-surface-unversioned'])),
+      `${adapterId} did not name the remedy: ${message}`,
+    );
+    assert.match(message, /the maintainer's and not this agent's/, message);
+    assert.match(message, /never stages or commits/, message);
+    assert.doesNotMatch(message, INTENT, `${adapterId} implied intent: ${message}`);
+  }
+});
+
+test('TB-066: a set already stated is withheld, so an otherwise clean turn is silent again', () => {
+  const decision = channelDecision({
+    outcome: 'passed',
+    checks: [passedCheck('configuration.broad-tests.test')],
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const view = presentDecision({ adapterId, decision });
+
+    assert.deepEqual(
+      view.presentation.unversionedGraderSurfaces,
+      UNVERSIONED.map(({ kind, path: relative }) => ({ kind, path: relative })),
+      'the presentation carries what the decision records, whatever the channel says.',
+    );
+    assert.equal(
+      formatFeedback({ adapterId, view, unversionedAlreadyStated: true }),
+      describeAdapter(adapterId).capabilities.feedback.none,
+      `${adapterId} repeated an unversioned set it had already stated.`,
+    );
+  }
+});
+
+test('TB-066 RISK-008 / SG-CFG-001: withholding a stated unversioned set never withholds a changed Grader surface, a failing check, or a diagnostic', () => {
+  const changed = [{ kind: 'gate-configuration', path: 'config/gate.yaml', checkId: null, role: null, identity: 'sha256:c' }];
+  const decision = channelDecision({
+    outcome: 'failed',
+    checks: [failedCheck('configuration.broad-tests.test')],
+    diagnostics: [{ reasonCode: 'integrity-drift', detail: DRIFT_DETAIL }],
+    changedGraderSurfaces: changed,
+    unversionedGraderSurfaces: UNVERSIONED,
+  });
+
+  for (const adapterId of CHANNELLED_ADAPTER_IDS) {
+    const field = describeAdapter(adapterId).capabilities.feedback.field;
+    const message = JSON.parse(formatFeedback({
+      adapterId,
+      view: presentDecision({ adapterId, decision }),
+      unversionedAlreadyStated: true,
+    }))[field];
+
+    assert.match(message, /Changed Grader surfaces/, message);
+    assert.ok(message.includes('- gate-configuration config/gate.yaml'), message);
+    assert.match(message, /configuration\.broad-tests\.test: failed/, message);
+    assert.match(message, /integrity-drift/, message);
+    assert.doesNotMatch(message, /Unversioned Grader surfaces/, message);
   }
 });

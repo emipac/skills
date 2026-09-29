@@ -32,7 +32,11 @@ import {
   validateEvaluationRequest,
 } from './evaluation-contract.mjs';
 import { withoutRunLocalValues } from './evidence-identity.mjs';
-import { changedGraderSurfaces, touchesControlSurface } from './grader-surface.mjs';
+import {
+  changedGraderSurfaces,
+  touchesControlSurface,
+  unversionedGraderSurfaces,
+} from './grader-surface.mjs';
 import { mutationDiagnostic } from './mutation.mjs';
 import { describeMissingPrerequisites } from './prerequisites.mjs';
 import {
@@ -154,6 +158,7 @@ const buildDecision = ({
   scope,
   delegation,
   surfaces = [],
+  unversioned = [],
   runtimeBinding = null,
   bypass = null,
   dependencies = null,
@@ -271,7 +276,11 @@ const buildDecision = ({
       environmentId,
       snapshotId,
       changedGraderSurfaces: surfaces,
+      // True only when a tracked control surface moved: an unversioned one is
+      // a standing fact about the clone, recorded beside it on every decision
+      // and never counted as a change (`TB-066`).
       controlSurfaceChanged: touchesControlSurface(surfaces),
+      unversionedGraderSurfaces: unversioned,
       runtimeBinding: runtimeBinding ?? unboundRuntime(snapshotId),
     },
     delegation,
@@ -546,9 +555,23 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
 
   const scope = await scopeOf(request, snapshot.executionRoot);
   // A change that edits what judges it is reported before any check runs, so
-  // the surfaces are named even when execution later fails (FR-EVAL-009).
+  // the surfaces are named even when execution later fails (FR-EVAL-009). A
+  // declared surface Git does not track is reported beside them as
+  // unversioned, never as changed (`TB-066`). A caller that states the changed
+  // paths states the untracked ones too, so the two sets always describe one
+  // observation.
+  const untrackedPaths = (dependencies.changedPaths ?? null) === null
+    ? capture.untrackedPaths ?? []
+    : dependencies.untrackedPaths ?? [];
   const surfaces = await changedGraderSurfaces({
     changedPaths: dependencies.changedPaths ?? capture.changedPaths,
+    untrackedPaths,
+    checks: dependencies.checks ?? [],
+    declarations: dependencies.graderSurfaces ?? {},
+    executionRoot: snapshot.executionRoot,
+  });
+  const unversioned = await unversionedGraderSurfaces({
+    untrackedPaths,
     checks: dependencies.checks ?? [],
     declarations: dependencies.graderSurfaces ?? {},
     executionRoot: snapshot.executionRoot,
@@ -745,6 +768,7 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     providerVersions,
     scope,
     surfaces,
+    unversioned,
     runtimeBinding,
     delegation: resolution.delegation,
     // Established by materialization, not re-derived: what was provided, what
@@ -752,10 +776,22 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
     dependencies: capture.dependencies,
   };
 
+  const decision = buildDecision(graded);
+  const store = dependencies.evidenceStore ?? null;
+
+  // A caller with no repetition to bound may decline to record a pass. Every
+  // runner records every graded decision; only the operator's `gate check`,
+  // which authorizes nothing and answers no client loop, declines — so a
+  // maintainer asking often grows the store only by what failed (`RISK-010`,
+  // `TB-061`). A decision that did not pass is always persisted.
+  if (dependencies.recordPassing === false && decision.outcome === 'passed') {
+    return notRecorded(decision, store, NOT_RECORDED_PASSING);
+  }
+
   return persistEvidence(
-    buildDecision(graded),
+    decision,
     {
-      store: dependencies.evidenceStore ?? null,
+      store,
       outputs: capturedOutputs,
       graded,
       housekeeping: dependencies.housekeeping ?? null,
@@ -769,6 +805,34 @@ const evaluateSnapshot = async (request, dependencies = {}) => {
  * and failed, which carries a `reasonCode` instead (`AC-EVID-002`).
  */
 const NOT_RECORDED_NO_CHANGE = 'no-change-to-record';
+
+/**
+ * What it says when the caller declined to record a passing decision
+ * (`TB-061`): the evaluation ran and passed, and nothing was appended by choice.
+ */
+const NOT_RECORDED_PASSING = 'passing-not-recorded';
+
+/**
+ * A decision that deliberately appended nothing, and says why in its evidence
+ * reference, so a reader can tell a decision that was never recorded from one
+ * whose record was lost: an append that failed names the reason it failed and
+ * this names why none was attempted.
+ */
+const notRecorded = (decision, store, why) => ({
+  ...decision,
+  evidence: {
+    ...decision.evidence,
+    persisted: false,
+    reference: {
+      evidenceId: null,
+      storeRoot: store?.root ?? null,
+      appendedAt: null,
+      blobIds: [],
+      reasonCode: null,
+      notRecorded: why,
+    },
+  },
+});
 
 /**
  * Decide one evaluation whose change set is empty, without materializing
@@ -901,8 +965,16 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     providerVersions,
     scope,
     // No changed path can have touched a Grader surface, and no check ran, so
-    // no runtime was ever probed.
+    // no runtime was ever probed. An untracked declared surface is still
+    // unversioned when nothing is staged, and a decision states its own
+    // conditions completely (`TB-066`); nothing was materialized, so none has
+    // an evaluated identity.
     surfaces: [],
+    unversioned: await unversionedGraderSurfaces({
+      untrackedPaths: dependencies.untrackedPaths ?? [],
+      checks: dependencies.checks ?? [],
+      declarations: dependencies.graderSurfaces ?? {},
+    }),
     runtimeBinding: null,
     delegation: resolution.delegation,
     // Nothing was materialized on this path, so nothing was provided. What the
@@ -932,24 +1004,7 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     });
   }
 
-  return {
-    ...decision,
-    evidence: {
-      ...decision.evidence,
-      persisted: false,
-      // Said in the decision, so a reader can tell a turn that was never
-      // recorded from one whose record was lost: an append that failed names
-      // the reason it failed and this names why none was attempted.
-      reference: {
-        evidenceId: null,
-        storeRoot: store?.root ?? null,
-        appendedAt: null,
-        blobIds: [],
-        reasonCode: null,
-        notRecorded: NOT_RECORDED_NO_CHANGE,
-      },
-    },
-  };
+  return notRecorded(decision, store, NOT_RECORDED_NO_CHANGE);
 };
 
 /**

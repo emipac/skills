@@ -20,7 +20,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
-import { captureSnapshot, verifySnapshot } from '../skills/change-evaluation-gate/scripts/lib/snapshot.mjs';
+import {
+  captureSnapshot,
+  listChangedPaths,
+  listPathChanges,
+  verifySnapshot,
+} from '../skills/change-evaluation-gate/scripts/lib/snapshot.mjs';
 
 const runFile = promisify(execFile);
 
@@ -284,4 +289,29 @@ test('TB-034 FR-EVAL-004: creating a file moves the worktree snapshot identity',
   // agent that answers feedback by adding a file would be told its unchanged
   // verdict had already been reported and silenced.
   assert.notEqual(after.snapshot.id, before.snapshot.id);
+});
+
+test('TB-066 FR-EVAL-009: the one status parse names the untracked paths beside the changed ones, and the git-index change still excludes them', async (t) => {
+  const root = await clone(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), 'schema_version: 4\n', 'utf8');
+  await writeFile(path.join(root, 'app/Order.php'), 'modified\n', 'utf8');
+  await writeFile(path.join(root, 'app/Staged.php'), 'staged\n', 'utf8');
+  await git(root, ['add', 'app/Staged.php']);
+
+  const worktree = await listPathChanges(root, 'worktree');
+  const index = await listPathChanges(root, 'git-index');
+
+  assert.deepEqual(worktree.untracked, ['.agent-framework.yaml'], 'a staged file is tracked; only the untracked one is named.');
+  assert.deepEqual(index.untracked, ['.agent-framework.yaml'], 'untracked is a fact about the clone, whatever the kind.');
+  assert.deepEqual(worktree.changed, ['.agent-framework.yaml', 'app/Order.php', 'app/Staged.php'], 'an untracked file is still new work to a worktree change.');
+  assert.deepEqual(index.changed, ['app/Staged.php'], 'the git-index change is exactly what it always was.');
+  assert.deepEqual(await listChangedPaths(root, 'worktree'), worktree.changed);
+  assert.deepEqual(await listChangedPaths(root, 'git-index'), index.changed);
+
+  const capture = await captureSnapshot({ repositoryRoot: root, kind: 'worktree', executionRoot: await executionRoot(t) });
+
+  assert.equal(capture.captured, true, capture.detail);
+  assert.deepEqual(capture.untrackedPaths, ['.agent-framework.yaml']);
+  assert.deepEqual(capture.changedPaths, worktree.changed);
 });

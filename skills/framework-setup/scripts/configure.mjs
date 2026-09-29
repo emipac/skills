@@ -1305,12 +1305,15 @@ export const discoverVerification = async (
     }
   }
 
+  // One concept, three spellings: every table below reads this list, so a
+  // spelling cannot be accepted in one place and declined in another.
+  const typeCheckBases = ['typecheck', 'type-check', 'types'];
   const scriptCategories = {
     format: 'format',
     lint: 'static_analysis',
-    typecheck: 'static_analysis',
-    'type-check': 'static_analysis',
-    types: 'static_analysis',
+    ...Object.fromEntries(
+      typeCheckBases.map((base) => [base, 'static_analysis']),
+    ),
     test: 'test',
     smoke: 'smoke',
     build: 'build',
@@ -1319,9 +1322,10 @@ export const discoverVerification = async (
   const safeQualifiers = {
     format: new Set(['check', 'server', 'backend', 'client', 'frontend']),
     lint: new Set(['check', 'server', 'backend', 'client', 'frontend']),
-    typecheck: new Set(['server', 'backend', 'client', 'frontend']),
-    'type-check': new Set(['server', 'backend', 'client', 'frontend']),
-    types: new Set(['check', 'server', 'backend', 'client', 'frontend']),
+    ...Object.fromEntries(typeCheckBases.map((base) => [
+      base,
+      new Set(['check', 'server', 'backend', 'client', 'frontend']),
+    ])),
     test: new Set([
       'unit',
       'integration',
@@ -1452,7 +1456,7 @@ export const discoverVerification = async (
   };
   const addPackageCapability = (category, scope, script) => {
     if (
-      ['typecheck', 'type-check', 'types'].some(
+      typeCheckBases.some(
         (name) => script.split(':').includes(name),
       )
     ) {

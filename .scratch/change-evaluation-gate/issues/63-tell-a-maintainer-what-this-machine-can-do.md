@@ -1,14 +1,14 @@
 # TB-063 — Tell a maintainer what this machine can do
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by:
 Tracker ID: 63-tell-a-maintainer-what-this-machine-can-do
 Draft key: TB-063
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -184,27 +184,27 @@ unanswerable here. Do not simulate a self-test. Do not replace or change
 
 ## Acceptance Criteria
 
-- [ ] `FR-CFG-004`: every configured runner is reported as resolved (with
+- [x] `FR-CFG-004`: every configured runner is reported as resolved (with
   the path activation would pin) or not (naming the descriptor), through the
   same resolver activation uses.
-- [ ] `AC-PORT-001`, `NFR-PORT-002`: clone capability, same-volume, and
+- [x] `AC-PORT-001`, `NFR-PORT-002`: clone capability, same-volume, and
   directory-link capability are reported from probes under the temporary
   directory, with no operating-system branch in the code.
-- [ ] `FR-CFG-006`: each declared sensitive input is reported `resolved` or
+- [x] `FR-CFG-006`: each declared sensitive input is reported `resolved` or
   `unresolved` with its source, each declared environment file with its
   status, and no value appears in any output form — proved by scanning
   stdout and `--json` for a known value.
-- [ ] Hook-chain validity is reported through activation's own validation.
-- [ ] `FR-LIFE-004`, `AC-LIFE-008`: the final verdict is activation's preview, computed against the repository and configuration identities the receipt would pin; on a clone
+- [x] Hook-chain validity is reported through activation's own validation.
+- [x] `FR-LIFE-004`, `AC-LIFE-008`: the final verdict is activation's preview, computed against the repository and configuration identities the receipt would pin; on a clone
   where the preview would refuse, `doctor` names the same step and reason.
-- [ ] `SG-LIFE-001`: the clone and repository are byte-identical before and
+- [x] `SG-LIFE-001`: the clone and repository are byte-identical before and
   after; only a probe under the temporary directory is created and it is
   removed.
-- [ ] Questions `doctor` cannot answer are listed as answered-by-activation
+- [x] Questions `doctor` cannot answer are listed as answered-by-activation
   with the step named.
-- [ ] `SG-OWNER-001`: no client, tool, or framework name added to
+- [x] `SG-OWNER-001`: no client, tool, or framework name added to
   `scripts/lib/`, stated in the report.
-- [ ] `--json` mirrors the rendered document; `gate --help` and the command
+- [x] `--json` mirrors the rendered document; `gate --help` and the command
   contract list the command.
 
 ## Verification Matrix

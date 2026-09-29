@@ -17,7 +17,7 @@ The transaction runs these steps in exactly this order and never reorders them.
 | # | Step | What must hold |
 | --- | --- | --- |
 | 1 | `repository-identity` | Scope is `repository`, the trigger is `explicit`, a non-interactive run names both expected identities, any expected repository or configuration identity matches the clone in front of it, and a resumption's repository, configuration, and selected-adapter identities are unchanged |
-| 2 | `preview` | The exact hook locations, strategy, resolved commands, adapters, trust requirement, and runtime input names are stated; a resumption's preview and transaction identities are unchanged; nothing is written |
+| 2 | `preview` | The exact hook locations, strategy, resolved commands, adapters, trust requirement, and runtime input names are stated; a resumption's preview and transaction identities are unchanged; every selected preflight surface declares a feedback channel it can answer through (`TB-048`); nothing is written |
 | 3 | `consent` | Consent reproduces that exact preview and names this repository and this configuration |
 | 4 | `runner-resolution` | Every logical runner resolves to one platform executable whose identity and version are pinned; an unresolved runner never falls back to a shell |
 | 5 | `trust` | The client established trust; the gate never grants trust on the operator's behalf. A client that has not answered yet **pauses** the transaction rather than failing it |
@@ -29,6 +29,15 @@ The transaction runs these steps in exactly this order and never reorders them.
 Git is last on purpose: until step 9 completes, nothing the transaction has done
 can stop a commit, so an abandoned or failed activation cannot leave a
 repository that refuses to work.
+
+Steps 1, 2, 4, and 6 are decided by observing the clone and the machine, and
+`inspectActivation` asks exactly those (`OBSERVABLE_ACTIVATION_STEPS`) without
+activating: it resolves what the transaction resolves, builds the same preview,
+and applies the same refusals — one function per refusal, called by both — in
+the same order, reporting the first. It reads no consent and writes nothing.
+The other five steps are `STEPS_ANSWERED_BY_ACTIVATION`: only performing them
+answers them, so they are named and never simulated. `gate doctor` is its one
+caller (`TB-063`, [lifecycle command contract](lifecycle-command-contract.md)).
 
 ## The receipt
 
@@ -232,7 +241,7 @@ required separately: a flag never implies it.
 | Step | Reason code |
 | --- | --- |
 | `repository-identity` | `activation-scope-global`, `activation-scope-unsupported`, `activation-trigger-prohibited`, `non-interactive-identity-missing`, `repository-identity-mismatch`, `configuration-identity-mismatch`, `resume-repository-mismatch`, `resume-configuration-mismatch`, `resume-adapter-mismatch` |
-| `preview` | `resume-preview-mismatch`, `resume-transaction-mismatch` |
+| `preview` | `resume-preview-mismatch`, `resume-transaction-mismatch`, `feedback-channel-unobserved` — a selected preflight surface declares no feedback channel because none has been observed; the whole selection registers nothing, before consent (`TB-048`) |
 | `consent` | `consent-missing`, `consent-preview-mismatch`, `consent-identity-mismatch` |
 | `runner-resolution` | `runner-unresolved` |
 | `trust` | `trust-not-established`, `trust-pending` (a **pause**, not a failure) |

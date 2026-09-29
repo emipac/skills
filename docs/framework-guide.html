@@ -1760,6 +1760,23 @@ Diagnostics:
         change and writes nothing; the second performs that exact preview:
       </p>
 
+      <p class="cmd-label">0 — Ask whether this machine can run it <span class="who w-auto">read-only</span></p>
+      <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs doctor</code></pre>
+
+      <p>
+        Worth running first on any machine other than the one that configured the Gate — a
+        colleague's clone, another operating system. It asks activation's own questions without
+        activating: which runners resolve and the executable each would be pinned to (one that does
+        not is named with its command), whether each dependency root would be cloned, byte-copied, or
+        linked here, whether each declared sensitive input is found and where (never its value), and
+        whether your existing hook chain would be accepted. The last line is the verdict from
+        activation's own preview — proceed, or the first step and reason that would stop it — and
+        it lists what only activation can answer: consent, trust, the self-tests, the receipt, and
+        the hook itself. It installs and fixes nothing, writes nothing in the repository, and
+        prints no token; its only trace is a probe directory in the temporary directory, removed
+        before it returns.
+      </p>
+
       <p class="cmd-label">1 — Preview, and read it</p>
       <pre><code>node .agents/skills/change-evaluation-gate/scripts/gate.mjs activate</code></pre>
 
@@ -1797,11 +1814,19 @@ The declared registration file .cursor/hooks.json is not on disk.</code></pre>
             <tbody>
               <tr><td>Git</td><td><code>git</code> (default)</td><td>— this clone's own hook chain</td></tr>
               <tr><td>Cursor</td><td><code>cursor</code></td><td><code>.cursor/hooks.json</code>, carrying <code>"version": 1</code></td></tr>
-              <tr><td>Codex Desktop</td><td><code>codex-desktop</code></td><td><code>.codex/hooks.json</code></td></tr>
-              <tr><td>Claude Code Desktop</td><td><code>claude-code-desktop</code></td><td><code>.claude/settings.local.json</code></td></tr>
+              <tr><td>Codex Desktop</td><td><code>codex-desktop</code></td><td>— refused today: <code>feedback-channel-unobserved</code></td></tr>
+              <tr><td>Claude Code Desktop</td><td><code>claude-code-desktop</code></td><td>— refused today: <code>feedback-channel-unobserved</code></td></tr>
             </tbody>
           </table>
         </div>
+        <p>
+          Only a client that can answer is activated. Nobody has yet observed how Codex Desktop or
+          Claude Code Desktop takes an answer back, so neither declares a feedback channel, and a
+          registration would evaluate every turn and say nothing. Activating either is refused with
+          <code>feedback-channel-unobserved</code> before anything is previewed or written — no
+          token, no receipt, not a byte of that client's file. Both stay declared, and become
+          activatable once a real client invocation shows how each one answers.
+        </p>
         <p class="cmd-label">A minimum Cursor file, if you have none</p>
         <pre><code>mkdir -p .cursor
 printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></pre>
@@ -1942,7 +1967,27 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
       </p>
 
       <p>
-        Every command follows one rule: <strong>it previews and writes nothing</strong> until you
+        If you never committed <code>.agent-framework.yaml</code> — or a script a check runs — status
+        lists it as <code>grader-surface-unversioned</code>, for information only: health does not
+        move, and its <code>next:</code> line says to commit it when you choose to. Until you do, that
+        file has no history and nothing to diff an edit against. The Gate never stages or commits it
+        for you, and running this way is allowed indefinitely.
+      </p>
+
+      <p class="cmd-label">Does it pass right now?</p>
+      <pre><code>git gate check                           # the working tree, as your desktop client's preflight sees it
+git gate check --staged                  # what the next commit would grade</code></pre>
+
+      <p>
+        It runs the same evaluation the hooks run — the same snapshot, the same pinned programs —
+        and prints the decision: every check with its reason code, the outcome, and
+        <code>authorization: not-authoritative</code>. No commit, no client, no loop budget spent,
+        and no hand-written client payload. A passing check records nothing; one that did not
+        pass appends its decision to the evidence store and prints where.
+      </p>
+
+      <p>
+        Every other command follows one rule: <strong>it previews and writes nothing</strong> until you
         run it again naming the token the preview printed. No flag previews and performs in one
         invocation, and there is no <code>--yes</code> or <code>--force</code>.
       </p>
@@ -1962,6 +2007,8 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
           <thead><tr><th>Operation</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><strong>status</strong></td><td>Reports <span class="pill p-pass">healthy</span>, <span class="pill p-warn">degraded</span>, or <span class="pill p-deny">broken</span>, checking everything the receipt pinned — your configuration included — exactly as the next commit will. Ends with a <code>next:</code> line. Repairs nothing and writes nothing — observation never mutates.</td></tr>
+            <tr><td><strong>doctor</strong></td><td>Reports, before or after activation, whether this machine can run the configured Gate: runners and the executables they would pin, how each dependency root would be provided, which sensitive inputs are found (names and sources only), whether the hook chain would be accepted, and one verdict from activation's own preview. Exit <code>0</code> activation would proceed, <code>1</code> it would stop. Writes nothing in the repository; no token.</td></tr>
+            <tr><td><strong>check</strong></td><td>Evaluates the working tree — or with <code>--staged</code>, what the next commit would grade — exactly as the hook would, and prints every check's outcome and reason, the outcome, and <code>not-authoritative</code>. Exit <code>0</code> passed, <code>1</code> failed or unverified. Authorizes nothing; a passing check records nothing, a failing one appends its decision and says where. No token, because it changes nothing.</td></tr>
             <tr><td><strong>repair</strong></td><td>Restores drifted Gate-owned <em>Git hook</em> registrations to what the receipt already pinned. It covers three findings and nothing else — <code>hook-absent</code>, <code>hook-block-tampered</code>, <code>hook-receipt-mismatch</code>. Everything else is reported as unrepairable: a lost desktop client is a reinstall, and a changed policy is Section 12. With nothing to restore, its <code>next:</code> line names what does recover the clone.</td></tr>
             <tr><td><strong>sync</strong></td><td>Re-pins a changed <code>.agent-framework.yaml</code> under the adapters this clone already has, keeping every registration byte for byte. Its preview says whether the new policy is weaker than the one it replaces. Section 12.</td></tr>
             <tr><td><strong>update</strong></td><td>Switches to a newer Gate <em>release</em> atomically. Installing a newer version only makes a candidate available; nothing changes until you update deliberately. It does <strong>not</strong> re-pin your policy — see Section 12.</td></tr>
@@ -1986,9 +2033,9 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         <p>
           <code>gate fix</code> is a separate contract and is refused here by name — an evaluation
           never rewrites your code, so applying a formatter's rewrite is its own explicit
-          operation. And there is no subcommand that evaluates the tree on demand: to find out
-          what the Gate thinks of your work right now, commit, or read the preflight your desktop
-          client sends.
+          operation. And <code>gate check</code> is not a decision: it tells you what the hook
+          would say about the tree as it is now, but only the commit's own hook decides, and it
+          evaluates the commit again whatever the check said.
         </p>
       </div>
     </section>
@@ -2111,9 +2158,10 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
 
       <p>
         A check passes when you run it by hand and fails or reports
-        <span class="pill p-unver">unverified</span> under the Gate. Almost always this is the
-        evaluation environment, not your code. Work down this list in order — it is ordered by how
-        often each one turns out to be the answer.
+        <span class="pill p-unver">unverified</span> under the Gate. Usually this is the evaluation
+        environment rather than your code — but not always, and the note at the end of this section
+        is the case where your own terminal is the one to distrust. Work down this list in order —
+        it is ordered by how often each one turns out to be the answer.
       </p>
 
       <div class="table-wrap">
@@ -2134,6 +2182,11 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
               <td>Tests fail on a missing key, token, or connection string that works in your shell</td>
               <td>The evaluation does not inherit your shell. A check receives only its <code>allowed_environment</code>, plus any name you approved.</td>
               <td>Name it in <code>evidence.sensitive_inputs</code>, and name the file it lives in — usually <code>.env</code> — in <code>evidence.environment_files</code>. Then re-pin.</td>
+            </tr>
+            <tr>
+              <td>A check flags files you never wrote — generated caches, compiled containers, build output</td>
+              <td>The tool's own paths include a generated directory. Yours is git-ignored, so it never enters the snapshot; the tool then boots the project, the directory is written fresh, and the tool grades what it has just caused to exist. Laravel's <code>bootstrap/cache</code> is the common one; so are <code>.next</code>, <code>dist</code>, <code>target</code>, and <code>__pycache__</code>.</td>
+              <td>Exclude the directory in that tool's own configuration — not in Gate policy. Nothing re-pins.</td>
             </tr>
             <tr>
               <td><span class="pill p-unver">unverified</span>, no output, right around the time limit</td>
@@ -2157,11 +2210,46 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             </tr>
             <tr>
               <td>Your desktop client is silent</td>
-              <td>Either it was never activated, or its registration file was missing at activation, or it has no feedback channel at all.</td>
+              <td>Either it was never activated, or its registration file was missing at activation, or it is a client with no observed feedback channel — activation refuses those now, and one registered before that refusal existed evaluates nothing.</td>
               <td>Check Step 4's prerequisite box. Silence from Claude Code Desktop or Codex Desktop is never a pass.</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="note note-caution">
+        <span class="note-tag">When your terminal is the one that is wrong</span>
+        <p>
+          A local pass is not automatically the truth. Your working copy carries state a clean
+          clone does not: a <code>.env</code>, generated directories in whatever shape your last
+          command left them, caches, and artifacts some tool rewrote on an earlier run. The
+          snapshot has none of it — which is precisely what a colleague's fresh clone and your CI
+          runner also have none of.
+        </p>
+        <p>
+          One measured example. A project's static-analysis check gave three different answers for
+          the same unchanged tree, decided entirely by when the developer had last run a command
+          that boots the application:
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>The generated cache directory held…</th><th>The check said</th></tr></thead>
+            <tbody>
+              <tr><td>Files an earlier run of that same tool had already rewritten</td><td>passed</td></tr>
+              <tr><td>Nothing — cleared, and not yet regenerated</td><td>passed</td></tr>
+              <tr><td>Freshly generated stock files — the snapshot, and any clean clone</td><td>two files would change</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Nothing about the code differed across those three runs. So when the Gate reports
+          <span class="pill p-deny">failed</span> — a grader ran and returned a verdict — and your
+          terminal reports a pass, find out what your tree is carrying that a clean one would not,
+          before concluding the Gate is wrong.
+          <span class="pill p-unver">unverified</span> is the outcome that usually points at the
+          evaluation environment; <span class="pill p-deny">failed</span> usually points at the
+          check.
+        </p>
       </div>
 
       <div class="note">
@@ -2219,8 +2307,9 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
         in front of the agent. A clean turn is left alone. That message is not the decision a
         commit would receive: preflight grades the working tree, including unstaged edits;
         <code>git commit</code> still grades the isolated snapshot. Claude Code Desktop and Codex
-        Desktop do not currently send a follow-up — they have no declared channel to answer
-        through — so silence from those clients is not a pass.
+        Desktop cannot be activated yet: how either takes an answer back has not been observed, so
+        the Gate refuses to register them rather than wire in a hook that grades every turn and
+        says nothing. Silence from those clients is never a pass.
       </p>
       <p>
         The follow-up carries the whole decision, not just its failing checks: the outcome, each
@@ -2243,6 +2332,19 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
         checks and eight other diagnostics, cuts any entry past 400 characters with
         <code>…</code>, and says what it left out by count and reason code. Drift and changed
         Grader surfaces are never left out.
+      </p>
+      <p>
+        A file Git does not track is not a file the work changed. If your configuration was never
+        committed, the follow-up says so once, as a fact about the clone rather than the change:
+      </p>
+      <pre><code>Unversioned Grader surfaces (Git does not track these, so they have no history to review or diff; …):
+- gate-configuration .agent-framework.yaml
+Remedy, the maintainer's and not this agent's: commit each unversioned Grader surface to version control, …</code></pre>
+      <p>
+        It is not repeated on later turns — whether or not they change anything else — until the
+        set of unversioned files changes, and a turn with nothing else to report stays quiet again.
+        Once you commit the file, an edit to it is reported as a changed Grader surface on every
+        evaluation, as above.
       </p>
 
       <h3>The snapshot is not your terminal</h3>
@@ -2268,9 +2370,13 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
 
       <h3>Some things you have to find out by doing them</h3>
       <p>
-        There is no command that reports what this machine can do before you commit to anything, and
-        no command that evaluates the tree on demand. You learn that a runner does not resolve here
-        when an activation preview refuses, and that a check fails when a commit is denied.
+        What this machine can do you can ask before activating: <code>gate doctor</code> names a
+        runner that does not resolve, a dependency root that would be byte-copied rather than cloned,
+        or a sensitive input it cannot find, and says whether activation would proceed. What it
+        cannot see — the self-tests, and a desktop client's registration — you still learn by
+        activating. Whether a check fails you can ask before committing, once the clone is activated:
+        <code>git gate check</code> evaluates the tree as the hook would, and the commit is still
+        evaluated by the hook afterwards.
       </p>
 
       <h3>Two risks stay open</h3>
@@ -2302,7 +2408,7 @@ Changed Grader surfaces (this change edits what grades it; stated for visibility
         <div><dt>Re-pin</dt><dd><code>git gate sync</code>, so the receipt pins the configuration as it now reads, under the adapters it already has. The only way a policy change takes effect.</dd></div>
         <div><dt>Dependency root</dt><dd>A directory a check needs that Git does not track. Provided beside the snapshot, never graded.</dd></div>
         <div><dt><code>git gate</code></dt><dd>A clone-local Git alias activation writes into this clone's own <code>.git/config</code>. Never committed, never inherited, and left in place by deactivation.</dd></div>
-        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure, a diagnostic such as drift, or an edited Grader surface returns as a follow-up; a clean turn stays quiet.</dd></div>
+        <div><dt>Preflight</dt><dd>Non-authoritative early feedback from a desktop client. Never grants or denies a commit. In Cursor, a required failure, a diagnostic such as drift, or an edited Grader surface returns as a follow-up, and an uncommitted configuration is mentioned once; a clean turn stays quiet.</dd></div>
       </dl>
     </section>
 

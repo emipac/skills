@@ -21,12 +21,13 @@
  *    trust leaves no integration active, refuses to resume once the
  *    configuration identity changes, and completes only when every transaction
  *    identity is identical (AC-LIFE-009, FR-LIFE-016).
- * 5. `desktop-registration` — two adapters declaring different registration
- *    files and different block schemas both register through their own
- *    declarations into real client configuration files, every unrelated key and
- *    entry in those files survives, drift is reported and never repaired, and
- *    removal returns both files byte for byte to what their owners wrote
- *    (AC-ADAPT-003, FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
+ * 5. `desktop-registration` — a desktop adapter registers through its own
+ *    declaration into a real client configuration file beside another client's
+ *    file with a different block schema, every unrelated key and entry in both
+ *    files survives, drift is reported and never repaired, and removal returns
+ *    both files byte for byte to what their owners wrote. Only a surface that
+ *    can answer is registered (`TB-048`), so the other file is never selected
+ *    and never touched (AC-ADAPT-003, FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
  * 6. `settled-turn` — a real clean clone driven through the real packaged
  *    preflight program leaves no execution root, and cannot have made one: the
  *    child is given a temporary directory it may read and not write, so a run
@@ -41,6 +42,21 @@
  *    `integrity-drift` and the drifted surface, the unprovided root, and the
  *    changed Grader surface, and lists no check as a result (AC-SEC-001,
  *    NFR-OPER-001, FR-EVAL-009, FR-ADAPT-005, TB-064).
+ * 8. `operator-check` — on a real activated clone, the packaged `gate check`
+ *    program and the real packaged preflight agree about one working tree:
+ *    the same check outcomes and the same snapshot identity, `not-authoritative`,
+ *    exit `1` for the failing tree; `gate check --staged` and the real
+ *    authoritative runner agree about the index the same way; and a passing
+ *    check appends no Evidence (AC-EVAL-001, AC-EVAL-006, NFR-REL-001,
+ *    SG-EVAL-001, RISK-010, TB-061).
+ * 9. `unversioned-channel` — a real activated clone whose configuration and
+ *    check script were never committed, driven through the real packaged
+ *    preflight program over consecutive turns: the first names each as an
+ *    unversioned Grader surface with the maintainer's remedy, no turn calls
+ *    either a changed Grader surface, an unchanged turn and a turn that edits
+ *    ordinary work are both silent, and once the maintainer commits the
+ *    configuration an edit to it is reported as changed on the next
+ *    evaluation (AC-SEC-001, RISK-008, FR-EVAL-009, NFR-OPER-001, TB-066).
  *
  * It is non-interactive and offline, requires no external toolchain beyond Git
  * and this Node runtime — in particular no hook manager and no desktop client
@@ -792,13 +808,19 @@ const trustPauseAndResume = async () => {
 };
 
 /**
- * Two desktop registration surfaces, in real client configuration files.
+ * A desktop registration surface, in a real client configuration file, beside
+ * another client's file with a different block schema.
  *
  * This is the scenario `AC-ADAPT-003` exists for: not "an entry was written"
- * but "each entry was written in ITS OWN declared file and block schema, every
- * unrelated key and entry in those files survived registration, reconciliation
- * reported the truth without repairing it, and removal gave the files back
+ * but "the entry was written in ITS OWN declared file and block schema, every
+ * unrelated key and entry in that file survived registration, reconciliation
+ * reported the truth without repairing it, and removal gave the file back
  * byte for byte".
+ *
+ * Since `TB-048` only a desktop surface that can answer is registered, so the
+ * general settings file beside it is never selected: it is proved untouched at
+ * every step instead. Its own matcher-group schema is proved at the
+ * registration seam in `gate-adapter-registration.test.mjs`.
  *
  * No desktop client is installed or executed. The files are fixtures in the
  * shapes real captures recorded (FR-ADAPT-008, SG-HOOK-001, SG-LIFE-001).
@@ -830,7 +852,6 @@ const desktopRegistration = async () => {
   const request = activationRequest(root, {
     adapters: [
       { id: 'git', version: '1.0.0', authoritative: true },
-      { id: 'claude-code-desktop', version: '1.0.0', authoritative: false },
       { id: 'cursor', version: '1.0.0', authoritative: false },
     ],
   });
@@ -848,36 +869,25 @@ const desktopRegistration = async () => {
     '--adapter',
     adapterId,
   ].map((value) => `"${value}"`).join(' ');
-  const registered = { general: await readJson(general), dedicated: await readJson(dedicated) };
+  const registered = await readJson(dedicated);
 
   check(
     findings,
-    JSON.stringify(registered.general.hooks.Stop.at(-1))
-      === JSON.stringify({
-        matcher: '',
-        hooks: [{ type: 'command', command: commandFor('claude-code-desktop') }],
-      }),
-    'The general settings surface was not registered in its own declared block schema.',
-  );
-  check(
-    findings,
-    JSON.stringify(registered.dedicated.hooks.stop.at(-1))
-      === JSON.stringify({ command: commandFor('cursor') }),
+    JSON.stringify(registered.hooks.stop.at(-1)) === JSON.stringify({ command: commandFor('cursor') }),
     'The dedicated versioned surface was not registered in its own declared block schema.',
   );
 
-  // Survivors: every unrelated key and every unrelated entry, in both files.
+  // Survivors: every unrelated key and every unrelated entry, and the whole of
+  // the file that was never selected.
   check(
     findings,
-    JSON.stringify(registered.general.permissions) === JSON.stringify({ allow: ['Bash(ls:*)'], deny: [] })
-      && registered.dedicated.version === 1,
+    registered.version === 1 && registered.hooks.stop[0].command === 'somebody-elses-hook',
     'Registration rewrote a part of a client configuration file the adapter does not own.',
   );
   check(
     findings,
-    registered.general.hooks.Stop[0].hooks[0].command === 'somebody-elses-hook'
-      && registered.dedicated.hooks.stop[0].command === 'somebody-elses-hook',
-    'Registration disturbed an unrelated hook entry in the same client file.',
+    (await readFile(general, 'utf8')) === pristine.general,
+    'Registration touched a client configuration file no selected adapter declares.',
   );
 
   const healthy = await statusGate({ evidenceStore: store, repositoryRoot: root });
@@ -885,12 +895,12 @@ const desktopRegistration = async () => {
   check(findings, healthy.status === 'healthy', `A registered clone reported ${healthy.status}.`);
 
   // Somebody edits the Gate's own entry. Health reports it and repairs nothing.
-  const drifted = await readJson(general);
+  const drifted = await readJson(dedicated);
 
-  drifted.hooks.Stop.at(-1).matcher = '*';
-  await writeJson(general, drifted);
+  drifted.hooks.stop.at(-1).timeout = 5;
+  await writeJson(dedicated, drifted);
 
-  const beforeStatus = await readFile(general, 'utf8');
+  const beforeStatus = await readFile(dedicated, 'utf8');
   const degraded = await statusGate({ evidenceStore: store, repositoryRoot: root });
 
   check(
@@ -901,7 +911,7 @@ const desktopRegistration = async () => {
   );
   check(
     findings,
-    degraded.repaired === false && (await readFile(general, 'utf8')) === beforeStatus,
+    degraded.repaired === false && (await readFile(dedicated, 'utf8')) === beforeStatus,
     'Observing a drifted registration changed it.',
   );
 
@@ -915,14 +925,14 @@ const desktopRegistration = async () => {
   );
   check(
     findings,
-    refused.removed.length === 0 && (await readFile(dedicated, 'utf8')) === JSON.stringify(registered.dedicated, null, 2) + '\n',
+    refused.removed.length === 0 && (await readFile(dedicated, 'utf8')) === beforeStatus,
     'A refused deactivation still removed something.',
   );
 
-  // The operator puts their edit back; removal then takes exactly the two Gate
-  // entries and gives both files back byte for byte.
-  drifted.hooks.Stop.at(-1).matcher = '';
-  await writeJson(general, drifted);
+  // The operator puts their edit back; removal then takes exactly the Gate
+  // entry and gives both files back byte for byte.
+  delete drifted.hooks.stop.at(-1).timeout;
+  await writeJson(dedicated, drifted);
 
   const removal = await deactivateGate({ evidenceStore: store, repositoryRoot: root });
 
@@ -930,8 +940,8 @@ const desktopRegistration = async () => {
   check(
     findings,
     JSON.stringify(removal.removed.filter((entry) => entry.kind === 'adapter-registration').map((entry) => entry.adapter))
-      === JSON.stringify(['claude-code-desktop', 'cursor']),
-    'Deactivation did not withdraw both declared registrations.',
+      === JSON.stringify(['cursor']),
+    'Deactivation did not withdraw exactly the declared registration.',
   );
   check(
     findings,
@@ -1208,6 +1218,222 @@ const driftedChannel = async () => {
   return { name: 'drifted-channel', ok: findings.length === 0, findings };
 };
 
+/** The packaged operator command a maintainer runs. */
+const PACKAGED_OPERATOR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gate.mjs');
+
+/** Run `gate check` as a maintainer does: a real child process, answering in `--json`. */
+const runPackagedCheck = async (root, args = []) => {
+  const run = await runFile(process.execPath, [PACKAGED_OPERATOR, 'check', ...args, '--json'], {
+    cwd: root,
+    env: gitEnvironment(),
+  }).then(
+    ({ stdout }) => ({ exitCode: 0, stdout }),
+    (error) => ({ exitCode: error.code, stdout: error.stdout ?? '' }),
+  );
+
+  return { exitCode: run.exitCode, document: JSON.parse(run.stdout || 'null') };
+};
+
+/** The decision the last Evidence append recorded, as a runner left it. */
+const lastRecordedDecision = async (root) => {
+  const store = await storeFor(root);
+  const log = await store.readLog();
+
+  return log.length === 0 ? null : (await store.readEnvelope(log.at(-1).evidenceId))?.decision ?? null;
+};
+
+const outcomes = (checks) => JSON.stringify((checks ?? []).map((entry) => [entry.id, entry.outcome, entry.reasonCode]));
+
+/**
+ * TB-061 — the terminal answer is the hook's answer.
+ *
+ * A maintainer who wanted to know whether the tree passed used to forge a
+ * client payload into the preflight program. `gate check` asks through the one
+ * evaluation both call, so on one tree the two must agree — proved here by
+ * running both real programs against the same real clone, and the staged
+ * scope against the real authoritative runner.
+ */
+const operatorCheck = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-hook-conformance-check-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), settledConfiguration(), 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'activated');
+  await publishReceipt(root);
+
+  // The working tree, both ways.
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await runPackagedPreflight({ root, temporaryRoot: await temporaryDirectory('gate-hook-conformance-check-tmp-') });
+
+  const preflight = await lastRecordedDecision(root);
+  const worktree = await runPackagedCheck(root);
+  const observed = worktree.document?.observation ?? null;
+
+  check(findings, preflight !== null, 'The real preflight recorded no decision for a failing tree.');
+  check(findings, worktree.exitCode === 1, `gate check did not exit 1 for a failing tree: ${worktree.exitCode}.`);
+  check(findings, observed?.authorization === 'not-authoritative', `gate check claimed ${observed?.authorization}.`);
+  check(
+    findings,
+    outcomes(observed?.checks) === outcomes(preflight?.checks),
+    `gate check and the preflight disagree about the worktree: ${outcomes(observed?.checks)} against ${outcomes(preflight?.checks)}.`,
+  );
+  check(
+    findings,
+    typeof observed?.snapshot?.id === 'string' && observed.snapshot.id === preflight?.snapshot?.id,
+    `gate check graded snapshot ${observed?.snapshot?.id}, the preflight ${preflight?.snapshot?.id}.`,
+  );
+
+  // The index, both ways: the check's answer is the commit runner's.
+  await git(root, ['add', '--all']);
+
+  const staged = await runPackagedCheck(root, ['--staged']);
+  const hook = await runHook({ cwd: root, environment: gitEnvironment() });
+  const committed = await lastRecordedDecision(root);
+
+  check(findings, hook.reasonCode === 'denied', `The authoritative runner did not deny the staged breakage: ${hook.reasonCode}.`);
+  check(findings, staged.exitCode === 1, `gate check --staged did not exit 1: ${staged.exitCode}.`);
+  check(findings, staged.document?.observation?.snapshot?.kind === 'git-index', 'gate check --staged did not grade the index.');
+  check(
+    findings,
+    staged.document?.observation?.snapshot?.id === committed?.snapshot?.id
+      && outcomes(staged.document?.observation?.checks) === outcomes(committed?.checks),
+    `gate check --staged and the commit runner disagree: ${staged.document?.observation?.snapshot?.id} against ${committed?.snapshot?.id}.`,
+  );
+
+  // A passing check appends nothing (RISK-010).
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+
+  const appended = (await (await storeFor(root)).readLog()).length;
+  const passing = await runPackagedCheck(root);
+
+  check(findings, passing.exitCode === 0, `gate check did not exit 0 for a passing tree: ${passing.exitCode}.`);
+  check(
+    findings,
+    (await (await storeFor(root)).readLog()).length === appended,
+    'A passing gate check appended Evidence.',
+  );
+
+  return { name: 'operator-check', ok: findings.length === 0, findings };
+};
+
+/**
+ * TB-066 — an untracked configuration is unversioned, and is said once.
+ *
+ * A real project's `.agent-framework.yaml` is untracked until somebody commits
+ * it, and `git status` reports it on every turn. The channel used to call it a
+ * changed Grader surface on every one of them, so the line was identical on the
+ * turn somebody did edit it. Repetition is only observable across real
+ * consecutive runs, so this drives the packaged program turn after turn.
+ */
+const unversionedChannel = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-hook-conformance-unversioned-');
+  const temporaryRoot = await temporaryDirectory('gate-hook-conformance-unversioned-tmp-');
+  const { field, none } = describeAdapter('cursor').capabilities.feedback;
+  const messageOf = (result) => {
+    try {
+      return result.stdout === none ? null : JSON.parse(result.stdout)[field];
+    } catch (error) {
+      check(findings, false, `A turn was not answered through the declared channel (${error.message}): ${result.stdout}${result.stderr}`);
+
+      return null;
+    }
+  };
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+  // Written and never committed, exactly as `framework-setup` leaves them.
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, '.agent-framework.yaml'), settledConfiguration(), 'utf8');
+  await publishReceipt(root);
+
+  const first = await runPackagedPreflight({ root, temporaryRoot });
+  const unchanged = await runPackagedPreflight({ root, temporaryRoot });
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nordinary work\n', 'utf8');
+
+  const ordinary = await runPackagedPreflight({ root, temporaryRoot });
+  const said = messageOf(first);
+
+  check(findings, typeof said === 'string', `The first turn did not state the unversioned surfaces: ${first.stdout}${first.stderr}`);
+
+  if (typeof said === 'string') {
+    for (const [pattern, detail] of [
+      [/^Preflight \(not a commit decision\): passed\./, 'the passed outcome'],
+      [/Unversioned Grader surfaces/, 'that the surfaces are unversioned'],
+      [/- gate-configuration \.agent-framework\.yaml/, 'the unversioned configuration'],
+      [/- verification-script tools\/check\.mjs/, 'the unversioned check script'],
+      [/the maintainer's and not this agent's/, 'whose remedy it is'],
+      [/never stages or commits anything/, 'that the Gate commits nothing'],
+    ]) {
+      check(findings, pattern.test(said), `The first turn did not state ${detail}: ${said}`);
+    }
+
+    check(
+      findings,
+      !/tamper|malicious|suspicious|hostile|attack|cheat|weaken|sabotag|evad|circumvent/i.test(said),
+      `The unversioned statement implied intent: ${said}`,
+    );
+  }
+
+  for (const [label, result] of [['first', first], ['unchanged', unchanged], ['ordinary', ordinary]]) {
+    check(findings, result.exitCode === 0, `The ${label} turn exited ${result.exitCode}.`);
+    check(findings, !result.stdout.includes('Changed Grader surfaces'), `The ${label} turn called an untouched, untracked file changed: ${result.stdout}`);
+  }
+
+  check(findings, unchanged.stdout === none, `An unchanged turn repeated the unversioned statement: ${unchanged.stdout}`);
+  check(findings, ordinary.stdout === none, `A turn that edited ordinary work repeated the unversioned statement: ${ordinary.stdout}`);
+
+  const recorded = await lastRecordedDecision(root);
+
+  check(
+    findings,
+    recorded?.integrity?.controlSurfaceChanged === false
+      && (recorded?.integrity?.changedGraderSurfaces ?? []).length === 0
+      && JSON.stringify((recorded?.integrity?.unversionedGraderSurfaces ?? []).map((surface) => surface.path))
+        === JSON.stringify(['.agent-framework.yaml', 'tools/check.mjs']),
+    `The silent turn's decision did not record the unversioned surfaces as the fact they are: ${JSON.stringify(recorded?.integrity)}`,
+  );
+
+  // The maintainer commits the configuration; an edit to it is now a change.
+  await git(root, ['add', '.agent-framework.yaml', 'tools/check.mjs', SOURCE]);
+  await commit(root, 'versioned');
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    `# edited after it was versioned\n${settledConfiguration()}`,
+    'utf8',
+  );
+
+  const edited = await runPackagedPreflight({ root, temporaryRoot });
+  const changed = messageOf(edited);
+
+  check(
+    findings,
+    typeof changed === 'string' && /Changed Grader surfaces[^\n]*\n- gate-configuration \.agent-framework\.yaml/.test(changed),
+    `An edit to the committed configuration was not reported as changed: ${edited.stdout}${edited.stderr}`,
+  );
+  check(findings, !edited.stdout.includes('Unversioned'), `A committed configuration was still called unversioned: ${edited.stdout}`);
+  check(
+    findings,
+    (await lastRecordedDecision(root))?.integrity?.controlSurfaceChanged === true,
+    'A tracked control surface moved and the decision did not say so.',
+  );
+
+  return { name: 'unversioned-channel', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1221,6 +1447,8 @@ const main = async () => {
       await desktopRegistration(),
       await settledTurn(),
       await driftedChannel(),
+      await operatorCheck(),
+      await unversionedChannel(),
     ];
   } finally {
     for (const root of temporaryRoots) {

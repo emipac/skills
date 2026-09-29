@@ -36,6 +36,8 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | candidate release | `inspectRelease({ receipt, distribution })` | nothing |
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
 | `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
+| `gate check` | `evaluateActivatedTree(...)` (`preflight-runner.mjs`), the one evaluation the preflight calls | nothing under the clone; one Evidence append when the decision did not pass |
+| `gate doctor` | `inspectActivation(...)` (`activation.mjs`), `probeDependencyProvisioning(...)` (`snapshot.mjs`), `resolveSensitiveInputs(...)` (`hook-runner.mjs`) | nothing under the clone; one probe directory under the temporary directory, removed |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
 | `gate deactivate` | `deactivateGate(...)` | withdraws registrations and the receipt |
 | `gate uninstall` | `uninstallGate(...)` | unchanged project assets only |
@@ -68,6 +70,8 @@ Every lifecycle operation is reached here:
 
 ```
 gate status     [--json]
+gate check      [--staged] [--json]
+gate doctor     [--json]
 gate locks      [--recover <token>] [--json]
 gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
 gate repair     [--hook-script <path>] [--confirm <token>] [--json]
@@ -85,7 +89,9 @@ preview printed. There is no flag that does both: `--confirm` with no token, and
 `--preview` given alongside a confirmation, are both refused as
 `preview-and-confirm-refused` and say why. That does not stop a caller running
 both commands back to back, and it is not meant to — it means no single command
-destroys anything. `status` has no confirmed form at all.
+destroys anything. `status`, `check`, and `doctor` have no confirmed form at
+all: none of them mutates anything under the clone, so none has anything to
+confirm.
 
 **The preview is re-derived, never carried.** Every invocation rebuilds the
 preview from the filesystem as it is right now, and the operator's token is
@@ -190,6 +196,20 @@ pinned program is started and nothing is written. A trusted-configuration
 finding names `.agent-framework.yaml` as its `path`; the receipt pins an
 identity, not a document, so which key moved is not reported.
 
+**Unversioned Grader surfaces** (`TB-066`). On an activated clone `gate
+status` also states every declared Grader surface Git does not track — the
+configuration file and each `repository-script` a configured check invokes —
+as one `grader-surface-unversioned` finding per surface, `area:
+grader-surface`, `severity: informational`, with the relative `path`. It asks
+the same single `git status` parse (`listPathChanges`) and the same
+classification (`unversionedGraderSurfaces`) every evaluation uses, so status
+and the next decision name the same surfaces; Git is asked with
+`--no-optional-locks`, so status still writes nothing. An informational finding
+moves no grade: a clone may run with an unversioned configuration indefinitely,
+and nothing about it is a fault or an accusation (`SG-TRUST-001`,
+`AC-SEC-001`). This is where that standing fact is stated; the preflight channel
+says it once, and every decision records it (`FR-EVAL-009`).
+
 A supporting adapter the installed gate no longer declares is therefore both an
 `adapter-lost` finding (still `supporting`) and drift of the pinned `adapters`
 surface, which the runners deny every commit for — so that clone is `broken`,
@@ -218,6 +238,7 @@ the Gate tells a maintainer what to run renders through it (`TB-065`, below):
 | `activation-absent` | `gate activate` |
 | `gate-policy-invalid`, `configuration-unreadable` | correct `.agent-framework.yaml` |
 | `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
+| `grader-surface-unversioned` (`TB-066`) | the maintainer commits it to version control, when they choose to — the Gate never stages or commits anything, and running unversioned stays allowed; named last, after any recovery |
 
 A finding with no entry fails the unit suite, which enumerates every code
 `statusGate` can emit from its source. Deactivation leaves the `git gate` alias
@@ -512,6 +533,156 @@ here: that is the commit-time evaluation of a policy-changing commit under the
 old policy, a separate seam in the runners and its own contract. And like
 every surface here, it resists nobody (`SG-TRUST-001`).
 
+## `gate check` (`TB-061`)
+
+A maintainer asks the Gate what the working tree — or, with `--staged`, the
+staged index — would evaluate to, and reads the decision a hook would produce,
+without committing and without composing a client payload by hand. Until this,
+the only ways to ask were a real commit, the client's own hook on the client's
+schedule, or a forged client payload piped into `gate-preflight.mjs`, which
+claimed to be a client that was not running, spent that client's loop guard,
+and answered through its feedback channel (for Cursor, an empty string on a
+pass).
+
+**It is an operator act, not a client event.** No payload, no adapter, no
+session, no loop guard, and no feedback channel. It calls
+`evaluateActivatedTree` — the evaluation the preflight has always run, lifted
+out of `runPreflight` so both call it: it resolves the configuration, the
+receipt, the pinned runners, and the Evidence store through the authoritative
+runner's helpers, observes the control surface, answers an empty change set
+without materializing anything, and otherwise materializes the snapshot and
+calls `evaluate`. `runPreflight` is now payload → adapter → that function →
+feedback, byte-identical in what it answers; `gate check` is selectors → that
+function → this surface's rendering. The function takes the request (the
+caller owns its snapshot kind, purpose, and invoking identity), the identity
+the store records, the seams `runPreflight` always accepted, and
+`recordPassing`, and returns the decision, the store, the contract's findings
+about the decision, and the redaction summary — or the reason code and detail
+the authoritative runner would deny with.
+
+**Two scopes, explicit.** `gate check` asks the preflight's question — the
+working tree against `HEAD`, purpose `regression-only`. `gate check --staged`
+asks the commit's — the index against `HEAD`, purpose
+`change-acceptance-and-regression`. Neither is inferred from the other, the
+rendering names which was asked, and a tree whose index and worktree differ
+yields two snapshot identities.
+
+**Not authoritative, and never allows anything** (`FR-EVAL-001`). Its role is
+`preflight`, so its decision is `not-authoritative` by construction. It reads
+no bypass grant and consumes none, and nothing it writes is consulted by any
+hook. Its invoking identity is `gate-check` on surface `operator-terminal`,
+which no adapter declares; a client's loop guard counts its own evaluation
+identity, and a check's identity is never one, so a check can neither consume
+nor reset a client's budget (`FR-ADAPT-005`).
+
+**What it prints.** The scope, the snapshot identity and kind, the evaluation
+identity, the outcome, `authorization: not-authoritative`, every check with its
+policy, outcome, reason code, and the summary the hook prints for it, every
+diagnostic, every changed Grader surface, the dependency record (which declared
+roots were provided, by which strategy, and which were missing or refused), the
+declared Sensitive input names the redactor was armed for or could not arm
+(names and sources only), elapsed time, whether evidence was appended and
+where, and a `limit:` line stating that it authorizes nothing. `--json` is the
+same document. It prints no `preview:` sentence: it is not a preview of a
+write, and the `evidence:` line states what it did.
+
+**Evidence.** A passing check appends nothing (`evidence: not appended — a
+passing check records nothing`); a check that did not pass appends its
+decision through the store's own append, with the `evaluation` Lifecycle event
+every append records, and prints the evidence identity and store root
+(`RISK-010`). An empty change set records nothing when it passes, exactly as the
+preflight's does. `--staged` follows the same rule rather than the commit
+runner's record-everything rule: the commit runner records every decision
+because its authorization rests on that record, and a check authorizes
+nothing. This differs from the preflight in one respect, stated rather than
+hidden: the preflight records every decision about a changed tree, passing
+ones included, because that record is what bounds its client's loop; a check
+has no loop to bound, so it records only what did not pass.
+
+**Exit status.** `0` passed, `1` failed or unverified, `2` could not run — an
+unactivated clone, an unreadable policy, a runner pin that drifted (named with
+its remedy), a store that cannot be opened, an evaluation that crashed
+(`runner-failed`), or a decision the evaluation contract rejects
+(`decision-malformed`).
+
+**Footprint.** It writes nothing under the clone but that append. Like the
+preflight, it creates and removes an execution root under the operating
+system's temporary directory and may reclaim abandoned ones there. It takes no
+`--confirm`, and `--confirm` is refused as a selector it does not take.
+
+**Honest limits.** It evaluates under no client's invocation timeout — the
+policy's total budget bounds its checks, as it bounds the commit's. It answers
+for the tree as it is now; a tree that changes before the commit is graded
+again by the hook, and a passing check is never evidence that a commit will
+pass.
+
+## `gate doctor` (`TB-063`)
+
+A maintainer — or a colleague who just cloned the repository on another
+machine — asks, before activating anything, whether this machine can run the
+Gate the clone configured. Until this, every one of those questions was asked
+only inside an operation that also did something: runner resolution inside
+activation, the clone probe inside a capture's first copied root, Sensitive
+input resolution inside `openStore`, hook-chain validation inside activation.
+The first sign a machine differed was a paused activation or a denied commit.
+
+**One implementation per question.** `doctor` asks each question of the seam
+that answers it for activation or the runners, so its answer cannot disagree
+with theirs:
+
+| Section | Seam | What is reported |
+| --- | --- | --- |
+| configuration | `activationRequestFor` (this surface), through `resolveConfiguration` — `readRepositoryConfiguration` and `validateGatePolicy` | resolved, or the reason code and detail `gate activate` refuses with |
+| runners | `inspectActivation` → `resolveExecutables` with `createRunnerResolver` | each resolved runner with the executable and interpreter activation would pin; each unresolved one with its check, role, runner, and declared arguments |
+| dependency roots | `probeDependencyProvisioning` → `unavailableDependencyRoots`, `probeCloneCapability`, `clonesInto`, the `link` provisioner | the copy program and whether it clones into the temporary directory; whether a directory link can be created there; whether the repository and each root share its volume; each declared root's strategy, availability, and the mechanism a capture would use |
+| sensitive inputs | `resolveSensitiveInputs`, the resolution `openStore` performs, for the names an activation would pin | each name `resolved` or `unresolved` with its source, and each declared environment file's status — never a value |
+| hooks | `inspectActivation` → the hook-chain validation activation performs | the hook path, the strategy's action and ownership, the hooks path and hook manager, and `valid` or the refusal code |
+
+**The verdict is activation's own.** `inspectActivation` builds the same
+preview `gate activate` builds, from the same request, and applies the refusals
+of steps 1, 2, 4, and 6 — the functions the transaction calls — in the
+transaction's order. Step 2's is a selected preflight surface whose feedback
+channel has not been observed (`feedback-channel-unobserved`, `TB-048`);
+doctor inspects the default activation, whose selection is authoritative Git
+alone, so it never meets that refusal, but it would stop there by the same
+function if it did. The last line is either that activation would proceed past
+every step doctor can see (`repository-identity`, `preview`,
+`runner-resolution`, `hook-chain-validation`) or the first step and reason code
+that stops it, which a confirmed `gate activate` then stops at with the same
+reason. A configuration that does not resolve stops activation before its first
+step, and the verdict says so. The identities reported are the repository and
+configuration identities the receipt would pin. The preview's own identity is
+not reported: it is the token that confirms an activation, and doctor confirms
+nothing.
+
+**What it cannot see, it names.** `consent`, `trust`, `self-test`, `receipt`,
+and `git-enablement` are listed as answered by activation, each with its
+question (`STEPS_ANSWERED_BY_ACTIVATION`). The hook-program self-test executes a
+registered program, and desktop client registration happens at activation; both
+are named, never simulated. A green doctor is not an activation.
+
+**Facts, not platforms** (`NFR-PORT-002`). No line says which operating system
+this is. A clone is attempted by the copy program and measured, a directory link
+is attempted, and a volume is compared by device number, all in the probe
+directory. The clone probe measures free space, so concurrent disk activity can
+make it under-report cloning: doctor may say `byte-copy` where a later capture
+clones. The fallback is the byte copy, correct but slower; the probe never
+reports a clone it did not measure.
+
+**Footprint** (`SG-LIFE-001`, `FR-LIFE-009`). Nothing under the clone or its
+Evidence store is written: no store is opened, no receipt, registration, alias,
+or lifecycle event is written, and no preview token is printed. Its one
+footprint is a probe directory created under the temporary directory with the
+`gate-doctor-probe-` prefix and removed before it returns (an interrupted one is
+reclaimed by the execution-root sweep); the rendering's `footprint:` line and
+`dependencies.probe` state it. It installs, fixes, and suggests nothing: a
+runner that does not resolve is named, and the report stops there.
+
+**Exit status.** `0` activation would proceed past every step doctor can see,
+`1` it would stop (or would not start), `2` the command could not run. It takes
+no selector and no `--confirm`. `--json` is the same document, and like `check`
+it prints no `preview:` sentence.
+
 ## Recovery
 
 Drift changes only through a confirmed `gate repair` or a new Activation
@@ -571,6 +742,57 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   a foreign `gate` alias is never named; every control surface and runner-pin
   reason code has a remedy entry; no module but the table names a recovery
   inline; and repair's scope is unchanged beside configuration drift.
+- `tests/gate-check-command.test.mjs` (`TB-061`) — `gate check` against real
+  clones: the check outcomes and snapshot identity the preflight recorded for
+  the same working tree, `not-authoritative`, and the exit status; `--staged`
+  distinguishable, sharing no snapshot identity with a differing worktree, and
+  matching the snapshot and check summaries the commit runner produced; a
+  missing prerequisite rendered `unverified` with the hook's own line; three
+  runs on an unchanged tree giving three full answers while the preflight's
+  loop budget stays untouched; a passing check appending nothing and a failing
+  one appending exactly its decision and naming it; an unactivated clone and a
+  `--confirm` refused; `--json` mirroring the rendering; and a commit after a
+  passing check still graded by the hook, with nothing the check wrote read by
+  it.
+- `npm run gate-hook-conformance-smoke`, scenario `operator-check` (`TB-061`) —
+  the real packaged `gate check` and the real packaged preflight agree on one
+  working tree's check outcomes and snapshot identity, `gate check --staged`
+  and the real authoritative runner agree on the index, and a passing check
+  appends nothing. `npm run gate-activation-smoke`, scenario
+  `check-then-commit` — on a clone the packaged command activated, a commit
+  after a passing `gate check --staged` is still evaluated by the registered
+  hook against the snapshot the check previewed, and a commit after a failing
+  one is really blocked.
+- `tests/gate-doctor-command.test.mjs` (`TB-063`) — `gate doctor` against real
+  clones: an unresolved PHP runner named with its check and arguments before
+  anything is activated, and the confirmed activation that follows stopping at
+  `runner-resolution` for `runner-unresolved`; a resolved runner reported at the
+  executable and interpreter the receipt then pins, under the repository and
+  configuration identities it pins, with no confirmation token printed; clone,
+  directory-link, and volume capability probed under the temporary directory,
+  the copy prediction following the `copy` rule from doctor's own probe result
+  and agreeing with a capture given the same probe input, with no
+  operating-system branch in the code; declared Sensitive inputs reported by
+  name, source, and file status while stdout, stderr, and `--json` are scanned
+  for known values; a refusing hook chain named `hook-exists` as activation
+  names it; the whole clone, `.git` and its Evidence store included,
+  byte-identical before and after on a configured and an activated clone, with
+  no probe left behind; the unanswerable steps listed, and every activation
+  step accounted for once; an unconfigured clone; and `--json` mirroring the
+  rendering. Only the capability and footprint tests run the real clone probe;
+  the rest pass `runOperatorCommand` a `copyProgram` of `null`, so they add no
+  8 MiB write to other suites' free-space measurements.
+- `npm run gate-activation-smoke`, scenario `doctor-then-activate` (`TB-063`) —
+  the packaged `gate doctor` on a real configured clone reports the runners the
+  packaged activation then pins, and on a clone whose PHP runner cannot resolve
+  names it while the confirmed activation refuses at the same step for the same
+  reason; neither doctor run changes a byte of the clone. `npm run
+  gate-runtime-portability`, fixture `dependency-provisioning-realpath` — the
+  mechanism `probeDependencyProvisioning` predicts for a copied root follows
+  the `copy` rule from its own probe result and agrees with a capture given
+  the same probe input; the prediction and the capture's own mechanism are
+  both recorded in the manifest, not compared, since each clone probe is a
+  separate free-space measurement.
 - `tests/gate-coordination.test.mjs` — that opening and inspecting the
   coordination lock creates no file and no directory, and that acquisition does.
 - `npm run gate-lifecycle-smoke` — the packaged update and removal lifecycle

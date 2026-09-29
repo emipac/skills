@@ -28,7 +28,7 @@ import {
   registerAdapterSurface,
   withdrawAdapterRegistration,
 } from './adapter-registration.mjs';
-import { describeAdapter } from './adapters.mjs';
+import { describeAdapter, unreportableSurface } from './adapters.mjs';
 import { createRunnerResolver, resolveExecutables } from './command-descriptor.mjs';
 import { contentIdentity, resolveGitCommonDirectory } from './evidence-store.mjs';
 import { validateGatePolicy } from './policy.mjs';
@@ -1310,6 +1310,181 @@ export const previewActivation = async (request, dependencies = {}) => {
   return { ...body, previewId: contentIdentity(body) };
 };
 
+/**
+ * The refusal step 1 makes of a request's scope and trigger, or `null`.
+ *
+ * v1 activation is always clone-local: there is no global activation to opt
+ * into, so there is nothing for a machine-wide install to switch on. And
+ * installing assets or running setup is not consent: a package or plugin
+ * lifecycle can never activate the gate (FR-LIFE-004).
+ */
+const entryRefusal = (request) => {
+  const scope = request.scope ?? 'repository';
+
+  if (scope !== 'repository') {
+    return {
+      step: 'repository-identity',
+      reasonCode: scope === 'global' ? 'activation-scope-global' : 'activation-scope-unsupported',
+      errors: [{ scope }],
+    };
+  }
+
+  if ((request.trigger ?? 'explicit') !== 'explicit') {
+    return {
+      step: 'repository-identity',
+      reasonCode: 'activation-trigger-prohibited',
+      errors: [{ trigger: request.trigger }],
+    };
+  }
+
+  return null;
+};
+
+/**
+ * The refusal step 2 makes: a selected preflight surface that could not answer
+ * anything it evaluated (`TB-048`).
+ *
+ * Whether a surface can answer is the adapter's own declared data, asked of
+ * `unreportableSurface`; this names no client. It is asked of the whole
+ * selection at the preview, before consent is read and long before anything is
+ * registered, so a selection holding one such surface registers nothing at all
+ * and offers nothing to confirm (`AC-LIFE-009`, `SG-HOOK-001`). Authoritative
+ * Git is never refused here: it answers by blocking.
+ */
+export const unreportableAdapterRefusal = (adapters = []) => {
+  const refused = adapters
+    .map((adapter) => unreportableSurface(adapter?.id ?? null))
+    .filter((entry) => entry !== null);
+
+  return refused.length === 0
+    ? null
+    : {
+      step: 'preview',
+      reasonCode: refused[0].reasonCode,
+      errors: refused.map((entry) => ({
+        adapter: entry.adapterId,
+        absence: entry.absence,
+        message: `${entry.detail} It is not registered; it stays declared and testable until a real client invocation shows how it answers.`,
+      })),
+    };
+};
+
+/** The refusal step 4 makes: a logical runner no platform executable was found for (FR-CFG-004). */
+const runnerResolutionRefusal = (described) => (described.runners.unresolved.length > 0
+  ? { step: 'runner-resolution', reasonCode: 'runner-unresolved', errors: described.runners.unresolved }
+  : null);
+
+/**
+ * The refusal step 6 makes: the existing hook chain decides whether activation
+ * may proceed at all. Nothing here rewrites, relocates, or takes over a hook.
+ */
+const hookChainRefusal = (described) => (described.hook.reasonCode !== null
+  ? { step: 'hook-chain-validation', reasonCode: described.hook.reasonCode, errors: described.hook.errors }
+  : null);
+
+/**
+ * The steps of one Activation transaction that are decided by observing this
+ * clone and this machine, in the order the transaction takes them (`TB-063`).
+ * `inspectActivation` asks exactly these, through the refusals above, which
+ * are the ones `runActivation` makes.
+ */
+export const OBSERVABLE_ACTIVATION_STEPS = Object.freeze([
+  'repository-identity',
+  'preview',
+  'runner-resolution',
+  'hook-chain-validation',
+]);
+
+/**
+ * The steps nothing can answer without performing them, and what each one
+ * asks. They are reported as answered by activation, never simulated: consent
+ * is the operator's act, trust is the client's, a self-test executes a
+ * registered program, and the receipt and the Git registration are the writes
+ * activation makes (`TB-063`, `SG-TRUST-001`).
+ */
+export const STEPS_ANSWERED_BY_ACTIVATION = Object.freeze([
+  Object.freeze({
+    step: 'consent',
+    question: 'the operator confirms the exact activation preview, in a separate invocation; consent is never implied',
+  }),
+  Object.freeze({
+    step: 'trust',
+    question: "each selected client's declared trust model is satisfied",
+  }),
+  Object.freeze({
+    step: 'self-test',
+    question: 'the evaluation process denies a change it must deny, the registered hook program is executed against such a change, and each selected adapter registers its declared surface and proves it',
+  }),
+  Object.freeze({
+    step: 'receipt',
+    question: 'the Activation receipt is published and read back',
+  }),
+  Object.freeze({
+    step: 'git-enablement',
+    question: 'the pre-commit registration is written, last',
+  }),
+]);
+
+/**
+ * Ask every question activation asks of this clone and machine before it asks
+ * for consent, without activating (`TB-063`).
+ *
+ * It resolves exactly what `runActivation` resolves — the same identities, the
+ * same runner resolution, the same hook-chain validation — and builds the same
+ * preview `previewActivation` builds, which writes nothing (`FR-LIFE-004`). It
+ * then applies the refusals `runActivation` applies at steps 1, 2, 4, and 6,
+ * in that order, and reports the first — step 2's being a selected preflight
+ * surface that could not answer (`TB-048`). No consent is read, no trust is sought,
+ * nothing is self-tested, and nothing is written; the steps that only
+ * performing them could answer are `STEPS_ANSWERED_BY_ACTIVATION`.
+ *
+ * A policy the preview refuses stops the inspection at `preview`, with the
+ * reason code the operator surface refuses an activation preview with.
+ */
+export const inspectActivation = async (request, dependencies = {}) => {
+  const entry = entryRefusal(request);
+
+  if (entry !== null) {
+    return { reached: ['repository-identity'], stop: entry, preview: null, described: null };
+  }
+
+  const described = await describeActivation(request, dependencies);
+  let preview;
+
+  try {
+    preview = await previewActivation(request, dependencies);
+  } catch (error) {
+    return {
+      reached: ['repository-identity', 'preview'],
+      stop: { step: 'preview', reasonCode: 'activation-unpreviewable', errors: [{ message: error.message }] },
+      preview: null,
+      described,
+    };
+  }
+
+  const unreportable = unreportableAdapterRefusal(described.adapters);
+
+  if (unreportable !== null) {
+    return { reached: ['repository-identity', 'preview'], stop: unreportable, preview, described };
+  }
+
+  const refusals = [
+    ['runner-resolution', runnerResolutionRefusal(described)],
+    ['hook-chain-validation', hookChainRefusal(described)],
+  ];
+  const reached = ['repository-identity', 'preview'];
+
+  for (const [step, refused] of refusals) {
+    reached.push(step);
+
+    if (refused !== null) {
+      return { reached, stop: refused, preview, described };
+    }
+  }
+
+  return { reached, stop: null, preview, described };
+};
+
 /** What a receipt pins about each resolved runner. */
 const pinnedRunnerEntries = (resolved) => resolved.map((entry) => ({
   check_id: entry.check_id,
@@ -1639,22 +1814,10 @@ const runActivation = async (request, dependencies, transaction) => {
   // 1. Repository identity, and the entry points that may never reach it.
   order.push('repository-identity');
 
-  const scope = request.scope ?? 'repository';
+  const entry = entryRefusal(request);
 
-  if (scope !== 'repository') {
-    // v1 activation is always clone-local. There is no global activation to opt
-    // into, so there is nothing for a machine-wide install to switch on.
-    return fail(
-      'repository-identity',
-      scope === 'global' ? 'activation-scope-global' : 'activation-scope-unsupported',
-      [{ scope }],
-    );
-  }
-
-  if ((request.trigger ?? 'explicit') !== 'explicit') {
-    // Installing assets and running setup are not consent. A package or plugin
-    // lifecycle can never activate the gate (FR-LIFE-004).
-    return fail('repository-identity', 'activation-trigger-prohibited', [{ trigger: request.trigger }]);
+  if (entry !== null) {
+    return fail(entry.step, entry.reasonCode, entry.errors);
   }
 
   const described = await describeActivation(request, dependencies);
@@ -1748,6 +1911,15 @@ const runActivation = async (request, dependencies, transaction) => {
     }
   }
 
+  // A selected preflight surface that could not answer anything it evaluated
+  // is refused here, before consent, so the whole selection registers nothing
+  // (`TB-048`, `AC-LIFE-009`).
+  const unreportable = unreportableAdapterRefusal(described.adapters);
+
+  if (unreportable !== null) {
+    return fail(unreportable.step, unreportable.reasonCode, unreportable.errors);
+  }
+
   // 3. Consent, bound to this repository and this preview. Consent is never
   //    implied by configuration, never reusable, and never for another clone.
   order.push('consent');
@@ -1777,8 +1949,10 @@ const runActivation = async (request, dependencies, transaction) => {
   //    whose identity and version are pinned, or the transaction stops.
   order.push('runner-resolution');
 
-  if (described.runners.unresolved.length > 0) {
-    return fail('runner-resolution', 'runner-unresolved', described.runners.unresolved);
+  const unresolvedRunners = runnerResolutionRefusal(described);
+
+  if (unresolvedRunners !== null) {
+    return fail(unresolvedRunners.step, unresolvedRunners.reasonCode, unresolvedRunners.errors);
   }
 
   // 5. Trust: client-controlled, never granted on the operator's behalf.
@@ -1819,8 +1993,10 @@ const runActivation = async (request, dependencies, transaction) => {
   //    proceed at all. Nothing here rewrites, relocates, or takes over a hook.
   order.push('hook-chain-validation');
 
-  if (described.hook.reasonCode !== null) {
-    return fail('hook-chain-validation', described.hook.reasonCode, described.hook.errors);
+  const hookChain = hookChainRefusal(described);
+
+  if (hookChain !== null) {
+    return fail(hookChain.step, hookChain.reasonCode, hookChain.errors);
   }
 
   // 7. Self-test: the evaluation process and every selected adapter.

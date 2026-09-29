@@ -477,9 +477,11 @@ test('the health command grades degraded and broken, and every grade leaves the 
 
   assert.equal(degraded.document.observation.health, 'degraded');
   assert.equal(degraded.exitCode, EXIT_UNHEALTHY);
+  // TB-066: this fixture never committed its configuration, which status
+  // states beside the loss as information; it moves no grade.
   assert.deepEqual(
     degraded.document.observation.findings.map((finding) => finding.code),
-    ['adapter-registration-absent'],
+    ['adapter-registration-absent', 'grader-surface-unversioned'],
   );
   assert.equal(await wholeCloneSnapshot(root), before);
 
@@ -493,7 +495,11 @@ test('the health command grades degraded and broken, and every grade leaves the 
   assert.equal(retiredStatus.document.observation.health, 'broken');
   assert.deepEqual(
     retiredStatus.document.observation.findings.map((finding) => [finding.code, finding.severity, finding.surface ?? null]),
-    [['adapter-lost', 'supporting', null], ['control-surface-drift', 'authoritative', 'adapters']],
+    [
+      ['adapter-lost', 'supporting', null],
+      ['control-surface-drift', 'authoritative', 'adapters'],
+      ['grader-surface-unversioned', 'informational', null],
+    ],
   );
 
   // Losing the authoritative registration means the gate enforces nothing it
@@ -838,14 +844,16 @@ test('the surface refuses every mutating selector, flag, and confirmation token,
   assert.equal(CONFIRMED_COMMANDS.activate, undefined);
   assert.deepEqual(
     [...COMMANDS],
-    ['activate', 'status', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup', 'bypass', 'sync'],
+    ['activate', 'status', 'check', 'doctor', 'locks', 'prune', 'repair', 'update', 'deactivate', 'uninstall', 'cleanup', 'bypass', 'sync'],
   );
 
-  // Exactly one command has no confirmed form, and it is the one that must go
-  // on recording nothing at all.
+  // Exactly three commands have no confirmed form: `status`, which must go on
+  // recording nothing at all, `check`, which mutates nothing under the clone
+  // and so has nothing to confirm (`TB-061`), and `doctor`, which writes
+  // nothing under the clone at all (`TB-063`).
   assert.deepEqual(
     COMMANDS.filter((command) => !(command in CONFIRMABLE_COMMANDS)),
-    ['status'],
+    ['status', 'check', 'doctor'],
   );
 
   // Every refusal above ran against a real activated clone and left it alone.
@@ -2538,7 +2546,12 @@ test('TB-060: next: uses git gate only where the shortcut activation records is 
   const broken = await observe(root, ['status']);
 
   assert.equal(broken.document.observation.health, 'broken');
-  assert.equal(nextLineOf(broken), remedyInstruction('repair', 'gate'));
+  // TB-066: this fixture never committed its configuration, so after the
+  // repair status also names the maintainer's own remedy for that, last.
+  assert.equal(
+    nextLineOf(broken),
+    `${remedyInstruction('repair', 'gate')}; then ${remedyInstruction('version-control')}`,
+  );
   assert.match(nextLineOf(broken), /^gate repair — /);
 
   // A `gate` alias somebody else owns is not the shortcut activation records,
@@ -3226,4 +3239,49 @@ test('TB-065 AC-LIFE-010: repair still restores exactly its three findings and r
     ['control-surface-drift:command-descriptors'],
   );
   assert.deepEqual(observation.next.remedies.map((remedy) => remedy.remedy), ['sync']);
+});
+
+/**
+ * TB-066 — `gate status` is where the standing fact lives. A configuration Git
+ * does not track is stated once per status as an informational finding with
+ * the maintainer's remedy on the `next:` line; health does not move, and
+ * status still writes nothing.
+ */
+test('TB-066 NFR-OPER-001 / SG-TRUST-001: status states an unversioned configuration as an informational finding, names the maintainer\'s remedy, and stays healthy', async (t) => {
+  const root = await commandActivatedClone(t);
+
+  // The state a clone is in when its configuration was never committed: on
+  // disk, identical to what activation pinned, and untracked.
+  await runGit(root, ['rm', '--cached', '--quiet', '.agent-framework.yaml']);
+  await runGit(root, ['-c', 'user.email=gate@example.test', '-c', 'user.name=Gate', 'commit', '--quiet', '--no-verify', '--message', 'unversion']);
+  assert.match(await runGit(root, ['status', '--porcelain']), /^\?\? \.agent-framework\.yaml$/m);
+
+  const before = await cloneFingerprint(root);
+  const status = await observe(root, ['status']);
+
+  assert.equal(await cloneFingerprint(root), before, 'status wrote something.');
+  assert.equal(status.document.observation.health, 'healthy', 'an unversioned configuration is not a fault.');
+  assert.equal(status.exitCode, EXIT_OBSERVED);
+
+  const unversioned = status.document.observation.findings.filter((finding) => finding.code === 'grader-surface-unversioned');
+
+  assert.deepEqual(unversioned.map((finding) => [finding.severity, finding.path]), [['informational', '.agent-framework.yaml']]);
+  assert.match(unversioned[0].detail, /\.agent-framework\.yaml is a declared Grader surface \(gate-configuration\) that Git does not track/);
+  assert.equal(REMEDIES['grader-surface-unversioned'], 'version-control');
+  assert.equal(nextLineOf(status), remedyInstruction('version-control'));
+  assert.match(nextLineOf(status), /never stages or commits anything/);
+  // What status says about it — the finding and the remedy — implies nobody
+  // did anything (`AC-SEC-001`).
+  assert.doesNotMatch(
+    JSON.stringify({ unversioned, next: status.document.observation.next }),
+    /tamper|malicious|suspicious|hostile|attack|weaken/i,
+  );
+
+  // Once the maintainer stages it, it is tracked, and there is nothing to say.
+  await runGit(root, ['add', '.agent-framework.yaml']);
+
+  const versioned = await observe(root, ['status']);
+
+  assert.equal(versioned.document.observation.findings.some((finding) => finding.code === 'grader-surface-unversioned'), false);
+  assert.equal(nextLineOf(versioned), 'nothing');
 });

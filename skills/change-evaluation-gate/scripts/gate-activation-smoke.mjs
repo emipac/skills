@@ -26,6 +26,18 @@
  *    receipt's trust record claims only what a command surface can prove, and
  *    the convenience shortcut lands in that clone's own `.git/config` and no
  *    tracked file (`AC-LIFE-002`, `FR-LIFE-003`, `FR-LIFE-006`, `SG-TRUST-001`).
+ *    `check-then-commit` — on a clone the packaged command activated, the
+ *    packaged `gate check --staged` answers what the hook then decides: a
+ *    passing check appends no Evidence and the commit after it is still
+ *    evaluated by the registered hook, which records its own decision; a
+ *    failing check is followed by a commit the hook really blocks
+ *    (FR-EVAL-001, AC-EVAL-001, SG-EVAL-001, RISK-010, TB-061).
+ *    `doctor-then-activate` — the packaged `gate doctor` on a real
+ *    configured clone reports the runners the packaged activation then pins,
+ *    and on a clone whose PHP runner cannot resolve names it while the
+ *    confirmed activation refuses at the same step for the same reason; no
+ *    doctor run changes a byte of either clone (AC-PORT-001, AC-LIFE-008,
+ *    FR-LIFE-004, SG-LIFE-001, TB-063).
  * 4. `command-driven-activation-failure` — the same command against a clone
  *    whose `pre-commit` the gate can neither own nor compose into refuses at
  *    `hook-chain-validation`, writes no receipt, registers no shortcut, changes
@@ -97,7 +109,10 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import {
+  lstat, mkdtemp, mkdir, readdir, readFile, readlink, realpath, rm, stat, symlink, utimes, writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,7 +141,7 @@ import {
   selfTestAdapterSurface,
   selfTestEvaluationDenial,
 } from './lib/activation-seams.mjs';
-import { describeAdapter } from './lib/adapters.mjs';
+import { describeAdapter, unreportableSurface } from './lib/adapters.mjs';
 import {
   CONFIGURATION_FILE,
   gateChecksFromConfiguration,
@@ -589,11 +604,11 @@ const PACKAGED_COMMAND = path.join(
   'gate.mjs',
 );
 
-const runPackagedCommand = async (root, args) => {
+const runPackagedCommand = async (root, args, environment = {}) => {
   try {
     const { stdout, stderr } = await runFile(process.execPath, [PACKAGED_COMMAND, ...args], {
       cwd: root,
-      env: gitEnvironment(),
+      env: { ...gitEnvironment(), ...environment },
     });
 
     return { exitCode: 0, stdout, stderr };
@@ -778,6 +793,231 @@ const commandDrivenActivation = async () => {
 };
 
 /**
+ * TB-061 — asking is not committing.
+ *
+ * `gate check` must never be the thing that decides a commit: nothing it
+ * produces is consulted by the hook, and a commit after a passing check is
+ * graded again, by the registered program, against the index it grades
+ * (`FR-EVAL-001`). This proves that against real registered hooks and real
+ * `git commit`, on a clone the packaged command activated.
+ */
+const checkThenCommit = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const preview = JSON.parse((await runPackagedCommand(root, ['activate', '--json'])).stdout || '{}');
+  const confirmed = JSON.parse((await runPackagedCommand(root, [
+    'activate', '--confirm', preview.observation?.confirmationToken ?? '', '--json',
+  ])).stdout || '{}');
+
+  check(findings, confirmed.mutation?.performed === true, `The fixture did not activate: ${JSON.stringify(confirmed.mutation)}.`);
+
+  const store = await storeFor(root);
+  const logLength = async () => (await store.readLog()).length;
+  const checkStaged = async () => {
+    const run = await runPackagedCommand(root, ['check', '--staged', '--json']);
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || 'null') };
+  };
+
+  // A passing check, then the commit: the check appends nothing, and the
+  // commit is still evaluated by the hook, which appends its own decision.
+  await writeFile(path.join(root, SOURCE), 'baseline\nrepaired\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const beforeCheck = await logLength();
+  const passing = await checkStaged();
+
+  check(findings, passing.exitCode === 0, `A passing staged check exited ${passing.exitCode}.`);
+  check(
+    findings,
+    passing.document?.observation?.authorization === 'not-authoritative',
+    `gate check claimed ${passing.document?.observation?.authorization}.`,
+  );
+  check(findings, await logLength() === beforeCheck, 'A passing gate check appended Evidence.');
+
+  const allowed = await attemptCommit(root, 'a change gate check said would pass');
+
+  check(findings, allowed.failed === false, `The commit after a passing check was blocked: ${allowed.output}`);
+  check(
+    findings,
+    await logLength() === beforeCheck + 1,
+    'The commit after a passing check was not evaluated by the hook: it recorded no decision.',
+  );
+
+  const committed = await store.readEnvelope((await store.readLog()).at(-1).evidenceId);
+
+  check(
+    findings,
+    committed?.decision?.authorization === 'allow'
+      && committed?.decision?.snapshot?.id === passing.document?.observation?.snapshot?.id,
+    `The hook did not grade the snapshot gate check previewed: ${committed?.decision?.snapshot?.id} against ${passing.document?.observation?.snapshot?.id}.`,
+  );
+
+  // A failing check, then the commit: the hook blocks what the check said fails.
+  const before = (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim();
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const failing = await checkStaged();
+  const blocked = await attemptCommit(root, 'a change gate check said would fail');
+
+  check(findings, failing.exitCode === 1, `A failing staged check exited ${failing.exitCode}.`);
+  check(findings, blocked.failed === true, 'The hook allowed a commit gate check said would fail.');
+  check(
+    findings,
+    (await runGit(root, ['rev-list', '--count', 'HEAD'])).trim() === before,
+    'A blocked commit still moved HEAD.',
+  );
+
+  return { name: 'check-then-commit', ok: findings.length === 0, findings };
+};
+
+/**
+ * Every byte under one clone, `.git` and its Evidence store included, as one
+ * digest per path: what `gate doctor` must leave exactly as it found it.
+ */
+const treeDigest = async (root) => {
+  const entries = {};
+  const walk = async (directory) => {
+    for (const name of (await readdir(directory)).sort()) {
+      const absolute = path.join(directory, name);
+      // eslint-disable-next-line no-await-in-loop
+      const entry = await lstat(absolute);
+
+      if (entry.isSymbolicLink()) {
+        // eslint-disable-next-line no-await-in-loop
+        entries[path.relative(root, absolute)] = `link:${await readlink(absolute)}`;
+      } else if (entry.isDirectory()) {
+        entries[path.relative(root, absolute)] = 'directory';
+        // eslint-disable-next-line no-await-in-loop
+        await walk(absolute);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        entries[path.relative(root, absolute)] = createHash('sha256').update(await readFile(absolute)).digest('hex');
+      }
+    }
+  };
+
+  await walk(root);
+
+  return JSON.stringify(entries);
+};
+
+/** A PHP-runner configuration, for a machine on which no `php` can be found. */
+const PHP_MIGRATION_MAPPINGS = {
+  profiles: { backend: 'express-typescript' },
+  commands: {
+    'verification.commands.test.both[0]': {
+      runner: 'php-script',
+      args: ['artisan', 'test'],
+      timeout_seconds: 60,
+      allowed_environment: ['PATH'],
+    },
+  },
+};
+
+/**
+ * TB-063 — `gate doctor` says, before activation, what activation then does.
+ *
+ * On a real configured clone the packaged `gate doctor` reports the runners
+ * the packaged activation then pins, and changes nothing. On a clone whose
+ * configured PHP runner cannot resolve on this search path, doctor names it,
+ * and the confirmed packaged activation refuses at the step, for the reason,
+ * doctor named. Agreement between the two is only observable across both, on
+ * a real clone (`AC-PORT-001`, `AC-LIFE-008`, `FR-LIFE-004`, `SG-LIFE-001`).
+ */
+const doctorThenActivate = async () => {
+  const findings = [];
+  const root = await fixtureRepository();
+
+  await assertThrowawayRepository(root);
+
+  const before = await treeDigest(root);
+  const doctorRun = await runPackagedCommand(root, ['doctor', '--json']);
+  const doctor = JSON.parse(doctorRun.stdout || '{}');
+
+  check(findings, doctorRun.exitCode === 0, `gate doctor exited ${doctorRun.exitCode} on a runnable clone: ${doctorRun.stdout}${doctorRun.stderr}`);
+  check(findings, await treeDigest(root) === before, 'gate doctor changed the configured clone.');
+  check(
+    findings,
+    doctor.observation?.verdict?.proceeds === true && doctor.observation?.dependencies?.probe?.removed === true,
+    `gate doctor did not report a proceeding activation and a removed probe: ${JSON.stringify(doctor.observation?.verdict)}.`,
+  );
+
+  const preview = JSON.parse((await runPackagedCommand(root, ['activate', '--json'])).stdout || '{}');
+  const confirmed = JSON.parse((await runPackagedCommand(root, [
+    'activate', '--confirm', preview.observation?.confirmationToken ?? '', '--json',
+  ])).stdout || '{}');
+
+  check(findings, confirmed.mutation?.performed === true, `The activation doctor cleared did not activate: ${JSON.stringify(confirmed.mutation)}.`);
+  check(
+    findings,
+    !doctorRun.stdout.includes(preview.observation?.confirmationToken ?? 'no-token'),
+    'gate doctor printed the token that confirms an activation.',
+  );
+
+  const receipt = JSON.parse(await readFile(
+    path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'activation', 'receipt.json'),
+    'utf8',
+  ).catch(() => '{}'));
+  const pinned = (receipt.runtime?.runners ?? []).map((entry) => [entry.check_id, entry.executable, entry.interpreter]);
+  const reported = (doctor.observation?.runners?.resolved ?? []).map((entry) => [entry.checkId, entry.executable, entry.interpreter]);
+
+  check(
+    findings,
+    pinned.length > 0 && JSON.stringify(pinned) === JSON.stringify(reported),
+    `gate doctor reported ${JSON.stringify(reported)}, and activation pinned ${JSON.stringify(pinned)}.`,
+  );
+  check(
+    findings,
+    receipt.repository?.identity === doctor.observation?.identities?.repository
+      && receipt.configuration?.identity === doctor.observation?.identities?.configuration,
+    'gate doctor reported identities the receipt does not pin.',
+  );
+
+  // A search path with Git on it and no PHP: the PHP runner cannot resolve here.
+  const unresolvable = await fixtureRepository({ mappings: PHP_MIGRATION_MAPPINGS });
+  const bin = await temporaryDirectory('gate-activation-smoke-git-only-');
+  const gitProgram = (await runFile('sh', ['-c', 'command -v git'])).stdout.trim();
+
+  await assertThrowawayRepository(unresolvable);
+  await symlink(gitProgram, path.join(bin, 'git'));
+
+  const narrowed = { PATH: bin };
+  const beforeUnresolvable = await treeDigest(unresolvable);
+  const namedRun = await runPackagedCommand(unresolvable, ['doctor'], narrowed);
+  const named = JSON.parse((await runPackagedCommand(unresolvable, ['doctor', '--json'], narrowed)).stdout || '{}');
+
+  check(findings, await treeDigest(unresolvable) === beforeUnresolvable, 'gate doctor changed the clone whose runner cannot resolve.');
+  check(findings, namedRun.exitCode === 1, `gate doctor exited ${namedRun.exitCode} for an unresolvable runner.`);
+  check(
+    findings,
+    /configuration\.broad-tests\.test \(evaluate\): php-script artisan test — unresolved \(runner-unresolved\)/.test(namedRun.stdout),
+    `gate doctor did not name the unresolved runner and its descriptor: ${namedRun.stdout}`,
+  );
+
+  const refusedPreview = JSON.parse((await runPackagedCommand(unresolvable, ['activate', '--json'], narrowed)).stdout || '{}');
+  const refused = JSON.parse((await runPackagedCommand(unresolvable, [
+    'activate', '--confirm', refusedPreview.observation?.confirmationToken ?? '', '--json',
+  ], narrowed)).stdout || '{}');
+
+  check(
+    findings,
+    refused.mutation?.performed === false
+      && refused.mutation?.step === named.observation?.verdict?.stop?.step
+      && refused.mutation?.reasonCode === named.observation?.verdict?.stop?.reasonCode
+      && refused.mutation?.step === 'runner-resolution',
+    `Activation refused at ${refused.mutation?.step} (${refused.mutation?.reasonCode}); doctor named ${JSON.stringify(named.observation?.verdict?.stop)}.`,
+  );
+
+  return { name: 'doctor-then-activate', ok: findings.length === 0, findings };
+};
+
+/**
  * A real clone activated for a DESKTOP client through the packaged command.
  *
  * Until `TB-046` this could not happen at all: two of the three desktop
@@ -787,31 +1027,92 @@ const commandDrivenActivation = async () => {
  * because every fixture injected its own trust implementation — the declared
  * model never selected anything.
  *
- * So this drives the packaged command, for two surfaces with different declared
- * block schemas, and requires each to complete, register exactly its own
- * declared entry, and publish a receipt (`AC-LIFE-009`, `FR-LIFE-004`,
- * `AC-ADAPT-003`).
+ * Since `TB-048` only a desktop surface that can answer is registered. So this
+ * drives the packaged command on ONE clone holding all three desktop client
+ * files: each surface whose feedback channel has not been observed is refused
+ * with a reason naming it, offers no token, and leaves the clone byte for byte
+ * as it was; the surface that answers then activates on that same clone,
+ * registers exactly its own declared entry, and publishes a receipt, and the
+ * refused surfaces' files are still untouched (`AC-LIFE-009`, `FR-LIFE-004`,
+ * `AC-ADAPT-002`, `AC-ADAPT-003`, `SG-HOOK-001`).
  */
 const commandDrivenDesktopActivation = async () => {
   const findings = [];
+  const unobserved = ['claude-code-desktop', 'codex-desktop'];
+  const answering = ['cursor'];
+  const ownerOf = (declared) => (declared.registration.schemaVersion === null
+    ? { hooks: {} }
+    : {
+      [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
+      hooks: {},
+    });
+  // The Gate never CREATES a client's configuration file, so a clone that
+  // proves a real registration is one where the client already has one.
+  const root = await fixtureRepository({
+    files: Object.fromEntries([...unobserved, ...answering].map((adapterId) => {
+      const declared = describeAdapter(adapterId);
 
-  for (const adapterId of ['cursor', 'codex-desktop']) {
+      return [declared.registration.file, { contents: `${JSON.stringify(ownerOf(declared), null, 2)}\n` }];
+    })),
+  });
+
+  await assertThrowawayRepository(root);
+
+  const snapshot = async () => JSON.stringify({
+    config: await readFile(path.join(root, '.git', 'config'), 'utf8'),
+    hook: await readFile(path.join(root, '.git', 'hooks', AUTHORITATIVE_HOOK), 'utf8').catch(() => null),
+    files: await Promise.all([...unobserved, ...answering].map((adapterId) => (
+      readFile(path.join(root, describeAdapter(adapterId).registration.file), 'utf8')
+    ))),
+  });
+  const pristine = await snapshot();
+
+  for (const adapterId of unobserved) {
+    check(
+      findings,
+      unreportableSurface(adapterId)?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId} is expected to be a surface whose feedback channel has not been observed.`,
+    );
+
+    const refused = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
+    const document = JSON.parse(refused.stdout || '{}');
+    const rendered = await runPackagedCommand(root, ['activate', '--client', adapterId]);
+    const confirmation = await runPackagedCommand(root, ['activate', '--client', adapterId, '--confirm', `sha256:${'0'.repeat(64)}`, '--json']);
+    const confirmed = JSON.parse(confirmation.stdout || '{}');
+
+    check(
+      findings,
+      refused.exitCode === 2 && document.failure?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId} was not refused for its unobserved feedback channel: ${refused.exitCode} ${refused.stdout}${refused.stderr}`,
+    );
+    check(
+      findings,
+      new RegExp(`${adapterId} declares no feedback channel`).test(document.failure?.detail ?? '')
+        && /not been observed/.test(document.failure?.detail ?? ''),
+      `${adapterId}'s refusal does not say what is missing and why: ${JSON.stringify(document.failure?.detail)}.`,
+    );
+    check(
+      findings,
+      (document.observation ?? null) === null
+        && !/--confirm/.test(rendered.stdout)
+        && /declares no feedback channel/.test(`${rendered.stdout}${rendered.stderr}`),
+      `${adapterId}'s refusal offered something to confirm, or did not say why: ${rendered.stdout}${rendered.stderr}`,
+    );
+    check(
+      findings,
+      confirmation.exitCode === 2 && confirmed.failure?.reasonCode === 'feedback-channel-unobserved',
+      `${adapterId}: a confirmation was not refused for the same reason: ${confirmation.stdout}${confirmation.stderr}`,
+    );
+    check(
+      findings,
+      await snapshot() === pristine,
+      `${adapterId}'s refusal changed the clone: its Git configuration, its hook, or a client file.`,
+    );
+  }
+
+  for (const adapterId of answering) {
     const declared = describeAdapter(adapterId);
     const surface = declared.registration.file;
-    const owner = declared.registration.schemaVersion === null
-      ? { hooks: {} }
-      : {
-        [declared.registration.schemaVersion.key]: declared.registration.schemaVersion.value,
-        hooks: {},
-      };
-    // The Gate never CREATES a client's configuration file, so a clone that
-    // proves a real registration is one where the client already has one.
-    const root = await fixtureRepository({
-      files: { [surface]: { contents: `${JSON.stringify(owner, null, 2)}\n` } },
-    });
-
-    await assertThrowawayRepository(root);
-
     const preview = await runPackagedCommand(root, ['activate', '--client', adapterId, '--json']);
     const previewDocument = JSON.parse(preview.stdout || '{}');
 
@@ -875,6 +1176,18 @@ const commandDrivenDesktopActivation = async () => {
         ? !/review/i.test(document.mutation?.summary ?? '')
         : (document.mutation?.summary ?? '').includes(review.detail),
       `${adapterId} did not report its declared post-registration review: ${JSON.stringify(document.mutation?.summary)}.`,
+    );
+  }
+
+  // The refused surfaces' files are exactly as their owners wrote them, after
+  // the answering surface activated beside them.
+  for (const adapterId of unobserved) {
+    const declared = describeAdapter(adapterId);
+
+    check(
+      findings,
+      await readFile(path.join(root, declared.registration.file), 'utf8') === `${JSON.stringify(ownerOf(declared), null, 2)}\n`,
+      `${adapterId}'s ${declared.registration.file} was written although it was never registered.`,
     );
   }
 
@@ -3107,6 +3420,8 @@ const main = async () => {
           findings: ['Skipped: the packaged activation did not succeed.'],
         },
       await commandDrivenActivation(),
+      await checkThenCommit(),
+      await doctorThenActivate(),
       await commandDrivenDesktopActivation(),
       await printedInstructionStillBindsTheClone(),
       await commandDrivenActivationFailure(),

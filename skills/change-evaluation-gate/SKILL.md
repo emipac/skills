@@ -138,9 +138,9 @@ that executable is on the path, or run this installed skill's own
 `scripts/gate.mjs` with Node. Resolve that script beside the `SKILL.md` you are
 reading rather than assuming a path: an installed skill sits wherever the client
 placed it, so the same literal path does not hold across projects. The command
-is `activate`, `status`, `locks`, `prune`, `repair`, `update`, `deactivate`,
-`uninstall`, `cleanup`, `bypass`, or `sync`. Add `--json` for the same document
-a person is shown.
+is `activate`, `status`, `check`, `doctor`, `locks`, `prune`, `repair`,
+`update`, `deactivate`, `uninstall`, `cleanup`, `bypass`, or `sync`. Add
+`--json` for the same document a person is shown.
 
 `git gate status` reconciles every control surface the receipt pinned — the
 configuration included, through the same observation the commit runner makes —
@@ -158,11 +158,46 @@ table, so follow the command a denial names: `gate repair` is named only for a
 gate-owned hook registration, and a changed configuration, descriptor, or runner
 pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
 historical Evidence.
+
+A declared Grader surface Git does not track — typically an
+`.agent-framework.yaml` nobody committed — is **unversioned**, not changed. Every
+decision records it in `integrity.unversionedGraderSurfaces`, never in
+`changedGraderSurfaces`, and it never sets `controlSurfaceChanged`. `git gate
+status` states it as an informational finding that moves no health, and its
+`next:` line names the remedy, which is the maintainer's: commit it. Never
+stage or commit it on the maintainer's behalf; the Gate does neither, and a
+clone may run this way indefinitely.
 Exit status is `0` when nothing is wrong or the confirmed operation was
 performed, `1` when the clone needs attention — including a confirmation it
 refused — and `2` when the command could not run.
 
-**Every command previews and writes nothing.** To perform one, run it again
+To learn whether the work passes now, run `git gate check` for the working tree
+or `git gate check --staged` for what the next commit would grade — never forge
+a client payload into `gate-preflight.mjs`. It runs the evaluation the hooks
+run and prints every check's outcome and reason code, the outcome, and
+`authorization: not-authoritative`; exit status is `0` passed, `1` failed or
+unverified, `2` could not run. It is a preview of a hook's answer, not a
+decision: it authorizes nothing, spends no bypass grant or client loop budget,
+and the commit is still graded by its hook. A passing check records nothing; one
+that did not pass appends its decision and prints where.
+
+To learn, before activating, whether this machine can run the configured Gate —
+on a fresh clone, or on a machine other than the one that configured it — run
+`gate doctor`. It asks activation's own questions without activating: which
+configured runners resolve and the executable each would be pinned to (an
+unresolved one named with its descriptor), whether each declared dependency
+root would be cloned, byte-copied, or linked here, whether each declared
+Sensitive input is found and in which source (never its value), each declared
+environment file's status, and whether the existing hook chain would be
+accepted. It ends with one `verdict:` line from activation's own preview —
+proceed, or the first step and reason code that would stop it — and lists the
+steps only activation answers (consent, trust, self-test, receipt, Git
+enablement). Report what it names; it installs, fixes, and suggests nothing,
+writes nothing under the clone, prints no token, and its only footprint is a
+probe directory under the temporary directory that it removes. Exit status is
+`0` activation would proceed, `1` it would stop, `2` could not run.
+
+**Every other command previews and writes nothing.** To perform one, run it again
 naming the token the preview printed: `gate repair --confirm <token>`,
 `gate locks --recover <token>`, and so on. No flag previews and confirms in one
 invocation, no `--yes` or `--force` exists, and a confirmation naming a preview
@@ -177,8 +212,12 @@ what the transaction would change and writes nothing; `gate activate --confirm
 not authoritative Git; a desktop client that has not granted trust pauses the
 transaction, leaves no integration active, and prints the
 `gate activate --resume <transaction-id> --confirm <token>` that resumes it.
-A configured clone is a prerequisite: activation never configures one on the way
-past. `--actor <name>` is carried into the receipt as **self-declared** and
+A desktop client whose feedback channel has not been observed — today
+`claude-code-desktop` and `codex-desktop` — is refused with
+`feedback-channel-unobserved` before anything is previewed or written: a
+preflight that cannot answer would evaluate every turn and say nothing. Do not
+work around the refusal. A configured clone is a prerequisite: activation never
+configures one on the way past. `--actor <name>` is carried into the receipt as **self-declared** and
 never as proven — this command cannot see who ran it, and its receipt does not
 pretend otherwise.
 
@@ -236,10 +275,12 @@ declared feedback channel — never through its exit status. The channel carries
 the decision, not a summary of its checks: the outcome, each failing check's
 summary, every diagnostic by reason code (control-surface drift, an unprovided
 dependency root, an invalid configuration), and every changed Grader surface,
-bounded and with any truncation stated. A turn is silent only when it passed
-with no diagnostic and no changed Grader surface. When the channel reports
-drift or an environment reason, report it to the maintainer; do not edit the
-project to make it go away.
+bounded and with any truncation stated. Unversioned Grader surfaces are named
+once, with the maintainer's remedy, and not again until that set changes. A turn
+is silent only when it passed with no diagnostic, no changed Grader surface,
+and no unversioned surface still to state. When the channel reports drift, an
+environment reason, or an unversioned surface, report it to the maintainer; do
+not edit, stage, or commit anything to make it go away.
 
 Only authoritative Git authorizes a change. A desktop surface presents the same
 decision as structured `not-authoritative` preflight feedback and blocks
@@ -261,6 +302,11 @@ offline baseline, but none has been driven end to end by a real client
 invocation, and a baseline whose fixtures came from the declaration under test
 cannot establish support. Report those three as declared, never as supported.
 Git's tier reflects baseline provenance only; it is authoritative regardless.
+The two desktop surfaces also declare no feedback channel, because how either
+takes an answer back has not been observed (`absence: not-observed`), so neither
+is registered; Git declares none because it needs none (`absence: not-needed`):
+it answers by blocking. A runner started for a surface that cannot answer
+evaluates nothing.
 
 A tier is always derived from the evidence beside it, never declared. Read the
 current tiers from `npm run gate-runtime-portability` rather than from prose —

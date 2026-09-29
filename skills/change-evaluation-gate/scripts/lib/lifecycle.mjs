@@ -409,6 +409,7 @@ export const statusGate = async ({
   evidenceStore = null,
   adapters = null,
   controlSurface = null,
+  unversionedGraderSurfaces = null,
   repositoryRoot = null,
 } = {}, dependencies = {}) => {
   const {
@@ -600,6 +601,21 @@ export const statusGate = async ({
   // nothing; this reports and repairs exactly as much as everything above it.
   if (controlSurface !== null) {
     findings.push(...reconcileControlSurface({ receipt, observed: controlSurface }).findings);
+  }
+
+  // A declared Grader surface Git does not track: the standing statement of a
+  // fact every evaluation records, made here where durable facts live rather
+  // than on every agent turn. It is informational, so it never moves health:
+  // a clone may run this way indefinitely, and nothing here is a fault or an
+  // accusation (`FR-EVAL-009`, `SG-TRUST-001`, `AC-SEC-001`, `TB-066`).
+  for (const surface of unversionedGraderSurfaces ?? []) {
+    findings.push({
+      area: 'grader-surface',
+      severity: 'informational',
+      code: 'grader-surface-unversioned',
+      path: surface.path,
+      detail: `${surface.path} is a declared Grader surface (${surface.kind}) that Git does not track, so it has no history, no review, and nothing to diff an edit against. Every evaluation records it as unversioned and none reports it as changed.`,
+    });
   }
 
   const authoritativeLoss = findings.some((finding) => finding.severity === 'authoritative');
