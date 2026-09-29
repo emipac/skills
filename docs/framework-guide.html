@@ -1163,6 +1163,18 @@ protected_files:
         the only one that changes your machine rather than your repository.
       </p>
 
+      <div class="note">
+        <span class="note-tag">Not sure which step you are on?</span>
+        <p>
+          Ask <code>agent-framework setup</code> (or
+          <code>node .agents/skills/framework-setup/scripts/agent-framework.mjs setup</code>).
+          It reports where this clone stands, every remaining step in order, and the exact next
+          command — draft paths included. It writes and confirms nothing, and without the Gate
+          module installed it says the Gate steps are unavailable. Add <code>--json</code> for
+          the same plan as a document.
+        </p>
+      </div>
+
       <h3>Step 1 — Install the module <span class="who w-you">your decision</span></h3>
       <p>
         Select <strong>change-evaluation-gate</strong> during installation. It is independently

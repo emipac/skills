@@ -10,6 +10,7 @@
   },
   "license": "MIT",
   "bin": {
+    "agent-framework": "skills/framework-setup/scripts/agent-framework.mjs",
     "change-evaluation-gate": "skills/change-evaluation-gate/scripts/gate.mjs",
     "change-evaluation-gate-precommit": "skills/change-evaluation-gate/scripts/gate-precommit.mjs"
   },

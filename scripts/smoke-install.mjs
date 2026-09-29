@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { accessSync, constants } from 'node:fs';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -12,11 +13,28 @@ import process from 'node:process';
 // command run through the path it was installed at.
 const installedCommands = [
   { skill: 'framework-setup', script: 'configure.mjs', argv: ['--discover'] },
+  // The Framework command (TB-067) lives in framework-setup and finds the Gate
+  // beside it, so it is compared through the link like every other command.
+  { skill: 'framework-setup', script: 'agent-framework.mjs', argv: ['setup', '--json'] },
   { skill: 'srs-modeling', script: 'audit-srs.mjs', argv: [] },
   { skill: 'to-spec', script: 'audit-feature-spec.mjs', argv: [] },
   { skill: 'to-tickets', script: 'audit-ticket-contracts.mjs', argv: [] },
   { skill: 'verify-change', script: 'verification-plan.mjs', argv: [] },
 ];
+
+// A `change-evaluation-gate` a developer linked globally would be found on the
+// path before the installed skill, so the installed commands run without one.
+const pathWithoutGlobalGate = (process.env.PATH ?? '').split(path.delimiter)
+  .filter((directory) => {
+    try {
+      accessSync(path.join(directory, 'change-evaluation-gate'), constants.X_OK);
+
+      return false;
+    } catch {
+      return true;
+    }
+  })
+  .join(path.delimiter);
 
 const runInstalledCommand = (scriptPath, argv, cwd) => {
   try {
@@ -25,6 +43,7 @@ const runInstalledCommand = (scriptPath, argv, cwd) => {
       stdout: execFileSync(process.execPath, [scriptPath, ...argv], {
         cwd,
         encoding: 'utf8',
+        env: { ...process.env, PATH: pathWithoutGlobalGate },
         stdio: ['ignore', 'pipe', 'pipe'],
       }),
       stderr: '',
@@ -43,6 +62,28 @@ const runInstalledCommand = (scriptPath, argv, cwd) => {
 };
 
 const sourceRoot = process.cwd();
+
+const assertNoAdoptionState = async (actor) => {
+  for (const dormantPath of [
+    '.agent-framework.yaml',
+    '.git/hooks/pre-commit',
+    '.git/ai-skills-framework/gate.json',
+    // Adapters are self-tested and registered by the Activation transaction,
+    // which pins this receipt. Installing the plugin must never create it:
+    // an installed adapter is a dormant asset, not a registered integration
+    // (SG-DIST-001, FR-ADAPT-002).
+    '.git/change-evaluation-gate/evidence/activation/receipt.json',
+  ]) {
+    try {
+      await access(path.join(temporaryRoot, dormantPath));
+      throw new Error(`${actor} created Gate adoption state: ${dormantPath}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+};
 const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'ai-skills-framework-install-'));
 const agents = [
   'codex',
@@ -92,25 +133,7 @@ try {
     },
   );
 
-  for (const dormantPath of [
-    '.agent-framework.yaml',
-    '.git/hooks/pre-commit',
-    '.git/ai-skills-framework/gate.json',
-    // Adapters are self-tested and registered by the Activation transaction,
-    // which pins this receipt. Installing the plugin must never create it:
-    // an installed adapter is a dormant asset, not a registered integration
-    // (SG-DIST-001, FR-ADAPT-002).
-    '.git/change-evaluation-gate/evidence/activation/receipt.json',
-  ]) {
-    try {
-      await access(path.join(temporaryRoot, dormantPath));
-      throw new Error(`Skill installation created Gate adoption state: ${dormantPath}`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-    }
-  }
+  await assertNoAdoptionState('Skill installation');
 
   const installedRootsByAgent = new Map([
     ['codex', '.agents/skills'],
@@ -510,8 +533,35 @@ try {
           + `what it does through the path it was installed at`,
         );
       }
+
+      // The Framework command names base setup for this unconfigured project
+      // and reaches the Gate installed beside it, never the source checkout.
+      if (script === 'agent-framework.mjs') {
+        const plan = JSON.parse(throughInstalledPath.stdout);
+        // Node reports a module's resolved path, and the temporary directory
+        // may itself sit behind a link (`/var` on macOS).
+        const installedGate = await realpath(path.join(
+          temporaryRoot,
+          installedRoot,
+          'change-evaluation-gate',
+          'scripts',
+          'gate.mjs',
+        ));
+
+        if (
+          plan.state !== 'no-configuration'
+          || plan.next?.step !== 'configure-project'
+          || plan.gate?.located !== 'sibling'
+          || !plan.gate.detail.includes(installedGate)
+        ) {
+          throw new Error(`${agent}: installed agent-framework setup did not plan from the installed skills`);
+        }
+      }
     }
   }
+
+  // Running the installed commands changed nothing either (SG-GUIDE-001).
+  await assertNoAdoptionState('Running the installed commands');
 
   console.log(`Smoke-installed ${smokeSkills.join(', ')} for ${agents.join(', ')}.`);
 } finally {

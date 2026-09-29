@@ -8,6 +8,34 @@ description: Discover and configure a Laravel or Express/TypeScript repository f
 Create or update `.agent-framework.yaml`, the repository-local contract consumed
 by the lifecycle skills. Discovery is deterministic; decisions remain human.
 
+## Where the clone stands: `agent-framework setup`
+
+Before choosing a step, ask the Framework command, which ships in this skill
+and as the `agent-framework` package bin:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs setup [--json] [--project <directory>]
+```
+
+It reports the adoption state — `no-configuration`, `schema-v3`,
+`gate-unconfigured`, `configured`, or `activated` with the Gate's health — every
+remaining step in order with the command that owns it, and the exact next
+command, including the draft path to use. It writes, confirms, and registers
+nothing, and it never prompts. Each boundary is the owning command's own
+answer: this skill's schema reading, migration preview, and policy preview;
+`gate status --json` for the Gate state and its named remedy; `gate doctor
+--json` for whether activation would stop. A step the owning command would
+refuse carries that refusal verbatim.
+
+It reaches the Gate only by running `change-evaluation-gate` on the path, else
+the installed `change-evaluation-gate` skill beside this one. When neither
+exists it names only this skill's steps and says the Gate steps are
+unavailable. Exit status is `0` with nothing further to do, `1` when steps
+remain, and `2` when it could not run.
+
+Completion criterion: the next step and its owning command are known. Perform
+it through the section below that owns it.
+
 ## Process
 
 ### 1. Discover

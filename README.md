@@ -54,7 +54,7 @@ The `skills/` directory contains only released skills. Experimental, personal, m
 ### Explicitly invoked workflows
 
 - **[framework-router](./skills/framework-router/SKILL.md)** — Route a situation to the appropriate lifecycle branch.
-- **[framework-setup](./skills/framework-setup/SKILL.md)** — Discover project instructions and write the protected, idempotent lifecycle configuration.
+- **[framework-setup](./skills/framework-setup/SKILL.md)** — Discover project instructions and write the protected, idempotent lifecycle configuration; `agent-framework setup` names where a clone stands in Gate adoption and the exact next command.
 - **[change-evaluation-gate](./skills/change-evaluation-gate/SKILL.md)** — Install and configure the Change Evaluation Gate module, activate a configured clone through its two-invocation command, and diagnose, repair, or recover an activated one.
 - **[setup-laravel-development](./skills/setup-laravel-development/SKILL.md)** — Install and configure the locked Pest 5 quality toolchain for a fresh Laravel application, with Boost handed off last.
 - **[grill-with-docs](./skills/grill-with-docs/SKILL.md)** — Sharpen a plan while maintaining domain terminology and ADRs.
