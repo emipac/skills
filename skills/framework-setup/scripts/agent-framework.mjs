@@ -35,6 +35,15 @@
  * with the source `gate doctor --json` resolves them from, never a value
  * (`SG-GUIDE-002`). A clone with no Gate section names setup's next step.
  *
+ * `config suggest` lists what the repository already implies the section should
+ * declare and does not (`FR-GUIDE-007`, `TB-071`): dependency roots, Sensitive
+ * runtime input names from an example environment file, and environment files
+ * Git ignores, as `framework-setup`'s `discoverGateConfigurationFacts` reads
+ * them from its own tables (`SG-OWNER-001`). Each proposal names its evidence
+ * and the `config <revision>` command that previews it, and is proved by
+ * previewing that revision; an already-declared item is left out. It reads key
+ * names, never values (`SG-GUIDE-002`), and applies nothing (`SG-GUIDE-001`).
+ *
  * `config <revision>` revises the Gate configuration section by one named
  * revision (`FR-GUIDE-006`, `TB-069`, `TB-070`) — in `execution`
  * `add-dependency-root`, `remove-dependency-root`,
@@ -66,13 +75,14 @@
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]
  *   agent-framework config show [--json] [--project <directory>]
+ *   agent-framework config suggest [--json] [--project <directory>]
  *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
- * value that differs from the pinned one; for a revision: its confirmation, or
- * the re-pin it continued into), `2` the command could not run or the revision
- * was refused.
+ * value that differs from the pinned one; for `config suggest`: no Gate
+ * section, or proposals; for a revision: its confirmation, or the re-pin it
+ * continued into), `2` the command could not run or the revision was refused.
  */
 
 import { createHash } from 'node:crypto';
@@ -83,6 +93,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  discoverGateConfigurationFacts,
   discoverProject,
   draftGatePolicy,
   gatePolicyKeys,
@@ -102,6 +113,9 @@ export const DOCUMENT_VERSION = 'agent-framework/setup/1';
 /** The `config show` document, versioned the same way. */
 export const CONFIG_DOCUMENT_VERSION = 'agent-framework/config-show/1';
 
+/** The `config suggest` document, versioned the same way. */
+export const SUGGEST_DOCUMENT_VERSION = 'agent-framework/config-suggest/1';
+
 /** The `config <revision>` document, versioned the same way. */
 export const REVISION_DOCUMENT_VERSION = 'agent-framework/config-revision/1';
 
@@ -114,6 +128,7 @@ export const EXIT_UNRUNNABLE = 2;
 const USAGE = [
   'usage: agent-framework setup [--json] [--project <directory>]',
   '       agent-framework config show [--json] [--project <directory>]',
+  '       agent-framework config suggest [--json] [--project <directory>]',
   ...Object.entries(gateRevisions).map(([name, { argument, options }]) => [
     `       agent-framework config ${name} <${argument}>`,
     ...options.map((option) => `[--${option} <${option}>]`),
@@ -131,6 +146,18 @@ const GATE_STEPS = Object.freeze(['configure-gate', 'doctor', 'activate']);
 const LIMIT = 'setup wrote nothing, confirmed nothing, and registered nothing; each step is performed only by the command it names, which previews first where it writes.';
 
 const CONFIG_LIMIT = 'config show wrote nothing and changed nothing; a Sensitive runtime input is shown by name and the source it resolves from, never by value.';
+
+const SUGGEST_LIMIT = 'config suggest wrote nothing and applied nothing; a proposal is applied only by running its command, reading the preview it prints, and confirming that preview with its own token. An example environment file is read for key names only, and an environment file not at all.';
+
+/**
+ * The one revision each kind of proposal names. None binds a check or touches
+ * a Verification profile command (`SG-OWNER-001`).
+ */
+const PROPOSAL_REVISIONS = Object.freeze({
+  'dependency-root': Object.freeze({ operation: 'add-dependency-root', fact: 'dependencyRoots', value: 'root' }),
+  'sensitive-input': Object.freeze({ operation: 'add-sensitive-input', fact: 'sensitiveInputs', value: 'name' }),
+  'environment-file': Object.freeze({ operation: 'add-environment-file', fact: 'environmentFiles', value: 'file' }),
+});
 
 const REVISION_LIMIT = 'a config revision writes only the Gate configuration section of .agent-framework.yaml, only with the token of the preview that showed the change, and keeps every other byte; it confirms no re-pin — the Gate confirms its own preview with its own token.';
 
@@ -462,9 +489,9 @@ const planSetup = async ({ projectRoot, environment, status = null }) => {
 const parseArguments = (argv) => {
   const [first, second] = argv;
   const revision = first === 'config' && Object.hasOwn(gateRevisions, second ?? '') ? gateRevisions[second] : null;
-  const subcommand = first === 'config' && (second === 'show' || revision !== null) ? `config ${second}` : first;
+  const subcommand = first === 'config' && (['show', 'suggest'].includes(second) || revision !== null) ? `config ${second}` : first;
 
-  if (subcommand !== 'setup' && subcommand !== 'config show' && revision === null) {
+  if (!['setup', 'config show', 'config suggest'].includes(subcommand) && revision === null) {
     return null;
   }
 
@@ -695,8 +722,15 @@ const unconfiguredSection = async ({ projectRoot, environment, status = null }) 
   return plan.failure ? plan : { state: plan.state, gate: plan.gate, section: null, next: nextOf(plan.steps) };
 };
 
-/** The Gate configuration section this clone runs, and what its receipt pinned. */
-const showConfiguration = async ({ projectRoot, environment }) => {
+/**
+ * The Gate configuration section as `gate status --json` observes it, for the
+ * `config` subcommand named `reader`.
+ *
+ * Returns `{ gate, status, observation }` for a clone that has a section; a
+ * clone with none is answered as `unconfiguredSection` answers it, and a Gate
+ * that cannot be asked, or that predates the observed section, as a failure.
+ */
+const observeSection = async ({ projectRoot, environment, reader }) => {
   const discovery = await discoverProject(projectRoot);
 
   if (discovery.existingConfiguration.schemaVersion !== 4) {
@@ -732,16 +766,28 @@ const showConfiguration = async ({ projectRoot, environment }) => {
       gate,
       ...failure(
         'gate-configuration-unobserved',
-        `\`${[...gate.display, 'status', '--json'].join(' ')}\` reports no configuration section: the installed Gate (${release}, ${gate.detail}) predates it. Update the Gate module; config show reads the section only through the Gate's own command.`,
+        `\`${[...gate.display, 'status', '--json'].join(' ')}\` reports no configuration section: the installed Gate (${release}, ${gate.detail}) predates it. Update the Gate module; ${reader} reads the section only through the Gate's own command.`,
       ),
     };
   }
 
-  const { working, pinned } = configuration;
-
-  if (pinned === null && working.reasonCode === 'gate-policy-missing') {
+  if (configuration.pinned === null && configuration.working.reasonCode === 'gate-policy-missing') {
     return unconfiguredSection({ projectRoot, environment, status });
   }
+
+  return { gate, status, observation };
+};
+
+/** The Gate configuration section this clone runs, and what its receipt pinned. */
+const showConfiguration = async ({ projectRoot, environment }) => {
+  const observed = await observeSection({ projectRoot, environment, reader: 'config show' });
+
+  if (observed.observation === undefined) {
+    return observed;
+  }
+
+  const { gate, status, observation } = observed;
+  const { working, pinned } = observation.configuration;
 
   const declaresInputs = (working.policy?.evidence?.sensitive_inputs ?? []).length > 0;
   const inputs = declaresInputs ? await observeRuntimeInputs({ projectRoot, gate, environment }) : { runtimeInputs: null };
@@ -1237,6 +1283,195 @@ const renderRevision = (document) => {
 };
 
 /**
+ * Every proposal the repository's facts imply, each proved against
+ * `framework-setup`'s own revision preview (`FR-GUIDE-007`, `TB-071`).
+ *
+ * A fact becomes a proposal only when the named revision previews: one that
+ * would change nothing is already declared and is left out, and a key the Gate
+ * policy validator refuses as a name is counted, never shown, because such a
+ * line may hold a value (`SG-GUIDE-002`). Any other refusal is the section's
+ * own, so no proposal could apply, and it is reported as the operation gives
+ * it. Each preview's token is discarded: nothing is applied by suggesting
+ * (`SG-GUIDE-001`).
+ */
+const provenProposals = async ({ projectRoot, facts }) => {
+  const proposals = [];
+  const refusedNames = [];
+
+  for (const [kind, { operation, fact, value }] of Object.entries(PROPOSAL_REVISIONS)) {
+    for (const entry of facts[fact]) {
+      const revision = { operation, [gateRevisions[operation].argument]: entry[value] };
+
+      try {
+        await previewGateRevision({ projectRoot, revision });
+      } catch (error) {
+        if (error.reasonCode === 'nothing-to-revise') {
+          continue;
+        }
+
+        if (error.reasonCode === 'candidate-invalid' && kind === 'sensitive-input') {
+          refusedNames.push(entry.evidence[0].path);
+          continue;
+        }
+
+        return failure(error.reasonCode ?? 'revision-refused', error.message);
+      }
+
+      proposals.push({
+        kind,
+        subcontract: gateRevisions[operation].subcontract,
+        value: entry[value],
+        evidence: entry.evidence,
+        revision,
+        command: revisionCommand(projectRoot, revision),
+      });
+    }
+  }
+
+  return { proposals, refusedNames };
+};
+
+/**
+ * What this repository implies the Gate configuration section should declare
+ * and does not, with evidence and the command that previews each. A clone with
+ * no section names setup's next step and proposes nothing.
+ */
+const suggestConfiguration = async ({ projectRoot, environment }) => {
+  const observed = await observeSection({ projectRoot, environment, reader: 'config suggest' });
+
+  if (observed.observation === undefined) {
+    return observed;
+  }
+
+  const { gate, observation } = observed;
+  const facts = await discoverGateConfigurationFacts({ projectRoot, environment });
+  const proven = await provenProposals({ projectRoot, facts });
+
+  if (proven.failure) {
+    return { ...proven, gate, state: observation.state };
+  }
+
+  const skipped = [
+    ...facts.unassigned.map(({ path: file, count }) => ({ path: file, reason: 'not-an-assignment', count })),
+    ...[...new Set(proven.refusedNames)].map((file) => ({
+      path: file,
+      reason: 'name-refused',
+      count: proven.refusedNames.filter((refused) => refused === file).length,
+    })),
+  ];
+
+  return {
+    state: observation.state,
+    gate,
+    section: { resolved: observation.configuration.working.resolved, identity: observation.configuration.working.identity },
+    proposals: proven.proposals,
+    skipped,
+    next: proven.proposals.length === 0 ? null : {
+      step: 'choose-proposal',
+      command: null,
+      instruction: 'choose a proposal and run its command: it previews that one change and prints the token that applies it; nothing is applied by suggesting.',
+    },
+  };
+};
+
+const PROPOSAL_NOUNS = Object.freeze({
+  'dependency-root': 'dependency root',
+  'sensitive-input': 'Sensitive runtime input',
+  'environment-file': 'environment file',
+});
+
+/** One piece of evidence as a maintainer reads it. */
+const describeEvidence = (evidence) => ({
+  manifest: `${evidence.path} (manifest)`,
+  'lock-file': `${evidence.path} (lock file)`,
+  'install-directory': `${evidence.path}/ (installed directory)`,
+  'example-name': `${evidence.path} line ${evidence.line} names it`,
+  'git-ignored': `${evidence.path} is present and Git ignores it`,
+}[evidence.fact]);
+
+const SKIPPED_REASONS = Object.freeze({
+  'not-an-assignment': 'assigns no NAME=',
+  'name-refused': 'names a key the Gate policy validator refuses as a Sensitive runtime input name',
+});
+
+const renderSuggestion = (document) => {
+  const lines = [
+    'agent-framework config suggest',
+    `project: ${document.project}`,
+  ];
+
+  if (document.failure !== null) {
+    lines.push(`failed: ${document.failure.reasonCode} — ${document.failure.detail}`, SUGGEST_LIMIT, '');
+
+    return lines.join('\n');
+  }
+
+  lines.push(`state: ${document.state}`);
+
+  if (document.gate !== null) {
+    lines.push(document.gate.available
+      ? `gate: ${document.gate.command} — ${document.gate.detail}`
+      : `gate: unavailable — ${document.gate.detail}`);
+  }
+
+  if (document.section === null) {
+    lines.push('section: none — .agent-framework.yaml has no Gate configuration section, so nothing is proposed.');
+  }
+
+  lines.push(`proposals: ${document.proposals.length}`);
+
+  for (const [index, proposal] of document.proposals.entries()) {
+    lines.push(
+      `  ${index + 1}. ${PROPOSAL_NOUNS[proposal.kind]} ${proposal.value} (${proposal.subcontract})`,
+      `     evidence: ${proposal.evidence.map(describeEvidence).join('; ')}`,
+      `     $ ${proposal.command.run}`,
+    );
+  }
+
+  for (const skipped of document.skipped) {
+    lines.push(`skipped: ${skipped.count} ${skipped.count === 1 ? 'line' : 'lines'} of ${skipped.path} that ${SKIPPED_REASONS[skipped.reason]} (${skipped.reason}) — not shown, since such a line may hold a value.`);
+  }
+
+  lines.push(
+    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `run every command from ${document.project}.`,
+    SUGGEST_LIMIT,
+    '',
+  );
+
+  return lines.join('\n');
+};
+
+const runConfigSuggest = async ({ projectRoot, environment }) => {
+  const suggested = (await exists(projectRoot))
+    ? await suggestConfiguration({ projectRoot, environment })
+    : failure('project-missing', `${projectRoot} does not exist.`);
+  const proposals = suggested.proposals ?? [];
+  const exitStatus = suggested.failure
+    ? EXIT_UNRUNNABLE
+    : (suggested.section === null || proposals.length > 0 ? EXIT_STEPS_REMAIN : EXIT_DONE);
+
+  return {
+    document: {
+      document: SUGGEST_DOCUMENT_VERSION,
+      command: 'config suggest',
+      ok: !suggested.failure,
+      exitStatus,
+      project: projectRoot,
+      state: suggested.state ?? null,
+      gate: suggested.gate === undefined ? null : describeGate(suggested.gate),
+      section: suggested.section ?? null,
+      proposals,
+      skipped: suggested.skipped ?? [],
+      next: suggested.next ?? null,
+      failure: suggested.failure ?? null,
+      limit: SUGGEST_LIMIT,
+    },
+    render: renderSuggestion,
+  };
+};
+
+/**
  * Run one Framework command invocation and return what it printed, without
  * touching the process — the seam tests and later subcommands drive.
  */
@@ -1251,6 +1486,7 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
   const run = {
     setup: runSetup,
     'config show': runConfigShow,
+    'config suggest': runConfigSuggest,
   }[options.subcommand] ?? runConfigRevision;
   const { document, render: rendered } = await run({
     projectRoot,

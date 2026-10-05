@@ -1171,10 +1171,11 @@ const CONFIGURED_POLICY = Object.freeze({
 });
 
 /** A clone whose Gate section `configure-gate` wrote, committed and never activated. */
-const configuredClone = async (t, { policy = CONFIGURED_POLICY, configuration } = {}) => {
+const configuredClone = async (t, { policy = CONFIGURED_POLICY, configuration, prepare = async () => {} } = {}) => {
   const root = await throwawayRepository(t);
 
   await configuredThroughConfigureGate(root, policy, configuration === undefined ? {} : { configuration });
+  await prepare(root);
   await commit(root);
 
   return root;
@@ -2104,4 +2105,364 @@ test('TB-070 SG-GUIDE-002: a value typed as NAME=value is refused as value-suppl
 
   assert.equal(await cloneHash(root), before);
   assert.equal(await cloneHash(unconfigured), unconfiguredBefore);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-071: `agent-framework config suggest`.
+ *
+ * What the repository already implies the Gate configuration section should
+ * declare and does not — dependency roots from a manifest or lock file present
+ * with the directory it installs into, Sensitive runtime input names from an
+ * example environment file, and environment files Git ignores — each with its
+ * evidence and the exact `config` command that previews it. Nothing is
+ * applied by suggesting (`FR-GUIDE-007`, `AC-GUIDE-003`, `SG-GUIDE-001`,
+ * `SG-GUIDE-002`, `SG-OWNER-001`, `RISK-006`).
+ * ------------------------------------------------------------------------- */
+
+/** The revisions a proposal may name: never a Verification profile command (`SG-OWNER-001`). */
+const PROPOSED_REVISIONS = ['add-dependency-root', 'add-sensitive-input', 'add-environment-file'];
+
+/** The Framework command that previews one revision, as `config suggest` names it. */
+const previewArgv = (root, operation, value) => ['node', ENTRY, 'config', operation, value, '--project', root];
+
+/**
+ * THE FIRST RED TEST OF TB-071.
+ *
+ * A configured clone holding `composer.lock` and an installed `vendor/`, with
+ * no dependency root declared, is proposed `vendor` with the command that adds
+ * it — and pasting that command previews exactly that revision, writing
+ * nothing (`AC-GUIDE-003`, `FR-GUIDE-007`).
+ */
+test('TB-071 AC-GUIDE-003: composer.lock and an installed vendor/ propose vendor with the command that adds it', async (t) => {
+  const root = await configuredClone(t, {
+    prepare: async (clone) => {
+      await writeFile(path.join(clone, '.gitignore'), '/vendor\n', 'utf8');
+      await writeFile(path.join(clone, 'composer.lock'), '{}\n', 'utf8');
+      await mkdir(path.join(clone, 'vendor'), { recursive: true });
+      await writeFile(path.join(clone, 'vendor', 'autoload.php'), '<?php\n', 'utf8');
+    },
+  });
+  const before = await cloneHash(root);
+  const json = await agentFramework(root, ['config', 'suggest', '--json']);
+  const suggested = json.document;
+
+  assert.equal(json.stderr, '', json.stderr);
+  assert.equal(suggested.document, 'agent-framework/config-suggest/1');
+  assert.equal(suggested.command, 'config suggest');
+  assert.equal(suggested.failure, null);
+  assert.equal(suggested.exitStatus, 1);
+  assert.equal(json.status, 1);
+  assert.deepEqual(suggested.proposals.map((proposal) => proposal.revision), [{ operation: 'add-dependency-root', root: 'vendor' }]);
+
+  const [proposal] = suggested.proposals;
+
+  assert.equal(proposal.kind, 'dependency-root');
+  assert.equal(proposal.subcontract, 'execution');
+  assert.deepEqual(proposal.evidence, [
+    { fact: 'lock-file', path: 'composer.lock' },
+    { fact: 'install-directory', path: 'vendor' },
+  ]);
+  assert.deepEqual(proposal.command.argv, previewArgv(root, 'add-dependency-root', 'vendor'));
+
+  // The command is exact: pasted into a shell it previews that revision, and only previews it.
+  const pasted = await pasteIntoShell(root, `${proposal.command.run} --json`);
+  const preview = JSON.parse(pasted.stdout);
+
+  assert.equal(pasted.status, 1, pasted.stderr);
+  assert.deepEqual(preview.revision, { operation: 'add-dependency-root', root: 'vendor' });
+  assert.equal(preview.applied, false);
+  assert.equal(preview.changes[0].after, sectionLine('execution', { budget_skippable: [], dependency_roots: ['vendor'] }));
+  assert.equal(await cloneHash(root), before, 'config suggest or its proposal wrote a byte under the clone or .git.');
+});
+
+/**
+ * The text rendering names the same state, proposals, evidence, commands,
+ * skipped counts, and next step as the document (`--json` mirrors text).
+ */
+const assertSuggestMirror = (stdout, suggested) => {
+  const lines = stdout.split('\n');
+
+  assert.equal(lines[0], 'agent-framework config suggest');
+  assert.ok(lines.includes(`project: ${suggested.project}`));
+
+  if (suggested.failure !== null) {
+    assert.ok(lines.some((line) => line.startsWith(`failed: ${suggested.failure.reasonCode} — `)));
+
+    return;
+  }
+
+  assert.ok(lines.includes(`state: ${suggested.state}`), `text does not name state ${suggested.state}.`);
+  assert.ok(lines.includes(`proposals: ${suggested.proposals.length}`));
+
+  for (const [index, proposal] of suggested.proposals.entries()) {
+    const heading = lines.findIndex((line) => line.startsWith(`  ${index + 1}. `));
+
+    assert.notEqual(heading, -1, `text does not list proposal ${index + 1}.`);
+    assert.ok(lines[heading].endsWith(` ${proposal.value} (${proposal.subcontract})`), lines[heading]);
+    assert.ok(lines[heading + 1].startsWith('     evidence: '), lines[heading + 1]);
+
+    for (const evidence of proposal.evidence) {
+      assert.ok(lines[heading + 1].includes(evidence.path), `text does not name ${evidence.path} as evidence.`);
+    }
+
+    assert.equal(lines[heading + 2], `     $ ${proposal.command.run}`);
+  }
+
+  for (const skipped of suggested.skipped) {
+    assert.ok(
+      lines.some((line) => line.startsWith(`skipped: ${skipped.count} line`) && line.includes(`of ${skipped.path} `) && line.includes(`(${skipped.reason})`)),
+      `text does not count the ${skipped.reason} lines of ${skipped.path}.`,
+    );
+  }
+
+  const next = lines.filter((line) => line.startsWith('next: '));
+
+  assert.equal(next.length, 1);
+  assert.equal(next[0], `next: ${suggested.next === null ? 'nothing' : (suggested.next.command ?? suggested.next.instruction)}`);
+};
+
+/**
+ * Run `config suggest` and `config suggest --json` twice each against `root`,
+ * and prove the four runs changed nothing under the clone or `.git`, printed
+ * byte-identical output on repeat, and that the text carries what the
+ * document carries (`SG-GUIDE-001`).
+ */
+const observeSuggest = async (root, options = {}) => {
+  const before = await cloneHash(root);
+  const text = await agentFramework(root, ['config', 'suggest'], options);
+  const json = await agentFramework(root, ['config', 'suggest', '--json'], options);
+  const textAgain = await agentFramework(root, ['config', 'suggest'], options);
+  const jsonAgain = await agentFramework(root, ['config', 'suggest', '--json'], options);
+
+  assert.equal(await cloneHash(root), before, 'config suggest changed a byte under the clone or .git.');
+  assert.equal(text.stderr, '', text.stderr);
+  assert.equal(json.stderr, '', json.stderr);
+  assert.equal(textAgain.stdout, text.stdout, 'a repeated config suggest printed different text.');
+  assert.equal(jsonAgain.stdout, json.stdout, 'a repeated config suggest --json printed a different document.');
+  assert.equal(text.status, json.status);
+  assert.equal(json.document.exitStatus, json.status);
+  assert.equal(json.document.document, 'agent-framework/config-suggest/1');
+  assert.equal(json.document.command, 'config suggest');
+  assertSuggestMirror(text.stdout, json.document);
+
+  return { text, json, suggested: json.document };
+};
+
+const SUGGEST_CANARY = `suggest-canary-${createHash('sha256').update('TB-071').digest('hex').slice(0, 20)}`;
+
+/**
+ * A Laravel-like checkout: Composer and npm manifests and lock files with
+ * their installed directories, a `.env.example` naming its keys, and a `.env`
+ * Git ignores (or tracks). The canary is the value of `APP_KEY` and
+ * `DB_PASSWORD` in both environment files, and it also opens one example line
+ * that assigns nothing and one whose key the Gate refuses as a name, so a
+ * printed skipped line would print it.
+ */
+const laravelLikeCheckout = ({ trackedEnvironment = false } = {}) => async (clone) => {
+  await writeFile(path.join(clone, '.gitignore'), ['/vendor', '/node_modules', ...(trackedEnvironment ? [] : ['.env']), ''].join('\n'), 'utf8');
+  await writeFile(path.join(clone, 'composer.json'), `${JSON.stringify({ require: { 'laravel/framework': '^11.0' } })}\n`, 'utf8');
+  await writeFile(path.join(clone, 'composer.lock'), '{}\n', 'utf8');
+  await mkdir(path.join(clone, 'vendor'), { recursive: true });
+  await writeFile(path.join(clone, 'vendor', 'autoload.php'), '<?php\n', 'utf8');
+  await writeFile(path.join(clone, 'package-lock.json'), '{}\n', 'utf8');
+  await mkdir(path.join(clone, 'node_modules'), { recursive: true });
+  await writeFile(path.join(clone, 'node_modules', '.package-lock.json'), '{}\n', 'utf8');
+  await writeFile(path.join(clone, '.env.example'), [
+    '# Application',
+    'APP_NAME=Laravel',
+    `APP_KEY=${SUGGEST_CANARY}`,
+    '',
+    `export DB_PASSWORD=${SUGGEST_CANARY}-db`,
+    'app_debug=true',
+    'APP_NAME=duplicate',
+    `${SUGGEST_CANARY}-unassigned`,
+    `${SUGGEST_CANARY} refused-key=${SUGGEST_CANARY}-refused`,
+    '',
+  ].join('\n'), 'utf8');
+  await writeFile(path.join(clone, '.env'), `APP_KEY=${SUGGEST_CANARY}\nDB_PASSWORD=${SUGGEST_CANARY}-db\n`, 'utf8');
+};
+
+/** Each proposal as `<operation> <value>`. */
+const proposed = (suggested) => suggested.proposals.map((proposal) => `${proposal.revision.operation} ${proposal.value}`);
+
+test('TB-071 AC-GUIDE-003 / FR-GUIDE-007: a Laravel-like clone is proposed its roots, example names, and ignored .env, each with evidence and its command', async (t) => {
+  const root = await configuredClone(t, { prepare: laravelLikeCheckout() });
+  const agents = await readFile(path.join(root, 'AGENTS.md'));
+  const { suggested, text } = await observeSuggest(root);
+
+  assert.equal(suggested.failure, null);
+  assert.equal(suggested.exitStatus, 1);
+  assert.equal(suggested.state, 'configured');
+  assert.deepEqual(proposed(suggested), [
+    'add-dependency-root vendor',
+    'add-dependency-root node_modules',
+    'add-sensitive-input APP_NAME',
+    'add-sensitive-input APP_KEY',
+    'add-sensitive-input DB_PASSWORD',
+    // The Gate policy validator accepts any environment variable name, lowercase included.
+    'add-sensitive-input app_debug',
+    'add-environment-file .env',
+  ]);
+  assert.deepEqual(suggested.proposals.map((proposal) => proposal.evidence), [
+    [{ fact: 'manifest', path: 'composer.json' }, { fact: 'lock-file', path: 'composer.lock' }, { fact: 'install-directory', path: 'vendor' }],
+    [{ fact: 'manifest', path: 'package.json' }, { fact: 'lock-file', path: 'package-lock.json' }, { fact: 'install-directory', path: 'node_modules' }],
+    [{ fact: 'example-name', path: '.env.example', line: 2 }],
+    [{ fact: 'example-name', path: '.env.example', line: 3 }],
+    [{ fact: 'example-name', path: '.env.example', line: 5 }],
+    [{ fact: 'example-name', path: '.env.example', line: 6 }],
+    [{ fact: 'git-ignored', path: '.env' }],
+  ]);
+  assert.deepEqual(suggested.skipped, [
+    { path: '.env.example', reason: 'not-an-assignment', count: 1 },
+    { path: '.env.example', reason: 'name-refused', count: 1 },
+  ]);
+
+  // Every proposal names one of the three revisions and previews it: no Verification profile command (`SG-OWNER-001`).
+  for (const proposal of suggested.proposals) {
+    const argument = { 'add-dependency-root': 'root', 'add-sensitive-input': 'name', 'add-environment-file': 'file' }[proposal.revision.operation];
+
+    assert.ok(PROPOSED_REVISIONS.includes(proposal.revision.operation), proposal.revision.operation);
+    assert.deepEqual(proposal.revision, { operation: proposal.revision.operation, [argument]: proposal.value });
+    assert.equal(proposal.subcontract, proposal.kind === 'dependency-root' ? 'execution' : 'evidence');
+    assert.deepEqual(proposal.command.argv, previewArgv(root, proposal.revision.operation, proposal.value));
+    assert.equal(proposal.command.role, 'preview');
+  }
+
+  assert.equal(suggested.next.step, 'choose-proposal');
+  assert.equal(suggested.next.command, null);
+  assert.match(text.stdout, /^ {5}evidence: composer\.json \(manifest\); composer\.lock \(lock file\); vendor\/ \(installed directory\)$/m);
+  assert.match(text.stdout, /^ {5}evidence: \.env\.example line 3 names it$/m);
+  assert.match(text.stdout, /^ {5}evidence: \.env is present and Git ignores it$/m);
+  assert.match(text.stdout, /^skipped: 1 line of \.env\.example that assigns no NAME= \(not-an-assignment\) — not shown/m);
+  assert.deepEqual(await readFile(path.join(root, 'AGENTS.md')), agents);
+});
+
+/**
+ * `SG-GUIDE-002`, `RISK-006`. The canary is the value of `APP_KEY` and
+ * `DB_PASSWORD` in `.env.example`, in the git-ignored `.env`, and in the
+ * environment, and it opens the two example lines that are skipped. It appears
+ * in no output, text or `--json`, on an activated clone.
+ */
+test('TB-071 SG-GUIDE-002 / RISK-006: no canary value from .env, .env.example, or the environment appears in any output', async (t) => {
+  const env = environment({ APP_KEY: SUGGEST_CANARY, DB_PASSWORD: `${SUGGEST_CANARY}-environment` });
+  const root = await activatedClone(t, { policy: CONFIGURED_POLICY, env, prepare: laravelLikeCheckout() });
+  const { suggested, text, json } = await observeSuggest(root, { env });
+
+  assert.equal(suggested.state, 'activated');
+  assert.equal(suggested.failure, null);
+  assert.ok(proposed(suggested).includes('add-sensitive-input APP_KEY'));
+
+  for (const output of [text.stdout, text.stderr, json.stdout, json.stderr]) {
+    assert.equal(output.includes(SUGGEST_CANARY), false, 'a canary value was printed.');
+  }
+});
+
+test('TB-071 AC-GUIDE-003: a root, name, or environment file already declared is not proposed', async (t) => {
+  const partly = await configuredClone(t, {
+    prepare: laravelLikeCheckout(),
+    policy: {
+      ...CONFIGURED_POLICY,
+      execution: { budget_skippable: [], dependency_roots: ['vendor'] },
+      evidence: { sensitive_inputs: ['APP_KEY', 'DB_PASSWORD'], environment_files: ['.env'] },
+    },
+  });
+
+  assert.deepEqual(proposed((await observeSuggest(partly)).suggested), [
+    'add-dependency-root node_modules',
+    'add-sensitive-input APP_NAME',
+    'add-sensitive-input app_debug',
+  ]);
+
+  const declared = await configuredClone(t, {
+    prepare: laravelLikeCheckout(),
+    policy: {
+      ...CONFIGURED_POLICY,
+      execution: { budget_skippable: [], dependency_roots: ['vendor', 'node_modules'] },
+      evidence: { sensitive_inputs: ['APP_NAME', 'APP_KEY', 'DB_PASSWORD', 'app_debug'], environment_files: ['.env'] },
+    },
+  });
+  const { suggested, text } = await observeSuggest(declared);
+
+  assert.deepEqual(suggested.proposals, []);
+  assert.equal(suggested.exitStatus, 0);
+  assert.equal(suggested.next, null);
+  assert.match(text.stdout, /^proposals: 0$/m);
+  assert.match(text.stdout, /^next: nothing$/m);
+});
+
+test('TB-071: a tracked .env, a directory with no manifest or lock file, and a lock file with no directory propose nothing', async (t) => {
+  const root = await configuredClone(t, {
+    prepare: async (clone) => {
+      await laravelLikeCheckout({ trackedEnvironment: true })(clone);
+      await rm(path.join(clone, 'node_modules'), { recursive: true });
+      await rm(path.join(clone, 'composer.json'));
+      await rm(path.join(clone, 'composer.lock'));
+      await rm(path.join(clone, '.env.example'));
+    },
+  });
+  const { suggested } = await observeSuggest(root);
+
+  assert.equal((await git(root, ['ls-files', '.env'])).stdout, '.env\n', 'the fixture does not track .env.');
+  assert.deepEqual(suggested.proposals, []);
+  assert.deepEqual(suggested.skipped, []);
+});
+
+test('TB-071 AC-GUIDE-003: a clone with no Gate section names setup\'s next step and proposes nothing', async (t) => {
+  for (const clone of [() => schemaV4Clone(t, { gate: false }), () => schemaV3Clone(t), () => noConfigurationClone(t)]) {
+    const root = await clone();
+
+    await laravelLikeCheckout()(root);
+
+    const { suggested, text } = await observeSuggest(root);
+    const setup = await agentFramework(root, ['setup', '--json']);
+
+    assert.equal(suggested.exitStatus, 1);
+    assert.equal(suggested.failure, null);
+    assert.equal(suggested.state, setup.document.state);
+    assert.equal(suggested.section, null);
+    assert.deepEqual(suggested.proposals, []);
+    assert.notEqual(suggested.next, null);
+    assert.deepEqual(suggested.next, setup.document.next);
+    assert.match(text.stdout, /^section: none — \.agent-framework\.yaml has no Gate configuration section, so nothing is proposed\.$/m);
+  }
+});
+
+test('TB-071 FR-GUIDE-009: without the Gate module a clone with no section names setup\'s step, and a configured clone is refused', async (t) => {
+  const { entry } = await setupOnlyInstall(t);
+  const schemaV3 = await schemaV3Clone(t);
+  const unconfigured = (await observeSuggest(schemaV3, { entry })).suggested;
+
+  assert.equal(unconfigured.gate.available, false);
+  assert.equal(unconfigured.next.step, 'migrate-schema-v4');
+  assert.deepEqual(unconfigured.proposals, []);
+
+  const configured = await configuredClone(t, { prepare: laravelLikeCheckout() });
+  const { suggested } = await observeSuggest(configured, { entry });
+
+  assert.equal(suggested.exitStatus, 2);
+  assert.equal(suggested.failure.reasonCode, 'gate-unavailable');
+  assert.deepEqual(suggested.proposals, []);
+});
+
+test('TB-071 RISK-012: a hand-written section no revision can apply to is refused with the owning operation\'s reason', async (t) => {
+  const root = await schemaV4Clone(t);
+
+  await laravelLikeCheckout()(root);
+
+  const { suggested, text } = await observeSuggest(root);
+
+  assert.equal(suggested.exitStatus, 2);
+  assert.equal(suggested.failure.reasonCode, 'section-unrevisable');
+  assert.deepEqual(suggested.proposals, []);
+  assert.match(text.stdout, /^failed: section-unrevisable — \.agent-framework\.yaml line \d+ /m);
+  assert.equal(text.stdout.includes(SUGGEST_CANARY), false);
+});
+
+test('TB-071: config suggest is in the usage and takes no value', async (t) => {
+  const root = await configuredClone(t);
+  const refused = await agentFramework(root, ['config', 'suggest', 'vendor']);
+
+  assert.equal(refused.status, 2);
+  assert.equal(refused.stdout, '');
+  assert.match(refused.stderr, /^ {7}agent-framework config suggest \[--json\] \[--project <directory>\]$/m);
 });

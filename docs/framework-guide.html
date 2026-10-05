@@ -2169,6 +2169,31 @@ agent-framework config set-bypass false</code></pre>
         refused by line and left alone — it is never reformatted. Edit that one by hand.
       </p>
 
+      <p class="cmd-label">Ask what the project already tells you — proposals, never changes</p>
+      <pre><code>agent-framework config suggest           # what the repository implies the Gate section lacks, with evidence</code></pre>
+      <p>
+        It looks at what is already in the checkout: an installed <code>vendor/</code> next to
+        <code>composer.json</code> or <code>composer.lock</code>, an installed
+        <code>node_modules/</code> next to <code>package.json</code> or a lock file, the key names in
+        <code>.env.example</code>, and a <code>.env</code> that Git ignores. For each one the
+        section does not declare yet, it prints the evidence and the exact command that previews
+        adding it — <code>add-dependency-root</code>, <code>add-sensitive-input</code>, or
+        <code>add-environment-file</code>:
+      </p>
+      <pre><code>  1. dependency root vendor (execution)
+     evidence: composer.json (manifest); composer.lock (lock file); vendor/ (installed directory)
+     $ node …/agent-framework.mjs config add-dependency-root vendor --project …
+  2. Sensitive runtime input APP_KEY (evidence)
+     evidence: .env.example line 3 names it
+     $ node …/agent-framework.mjs config add-sensitive-input APP_KEY --project …</code></pre>
+      <p>
+        Nothing is applied: run the commands you agree with, read each preview, and confirm it with
+        its own token. Only key names are taken from <code>.env.example</code>, never values, and
+        <code>.env</code> is never opened; a line whose key is not a valid name is counted, not
+        shown. Anything already declared is left out, and no check or verification command is ever
+        proposed.
+      </p>
+
       <p class="cmd-label">Re-pin the changed policy — edit, then one preview and one confirmation</p>
       <pre><code>git gate sync                            # what the policy was, what it is now, and whether it is weaker
 git gate sync --confirm &lt;token&gt;          # pins exactly that preview</code></pre>

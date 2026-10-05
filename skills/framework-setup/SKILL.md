@@ -159,6 +159,40 @@ prints `{ "status": "refused", "reasonCode", "detail" }` and exits `2`.
 Exit status is `0` when the revision is written and nothing follows, `1` when a
 confirmation or a re-pin remains, and `2` when it was refused.
 
+## What the repository already implies: `agent-framework config suggest`
+
+To find what the Gate section should declare and does not, ask:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs config suggest [--json] [--project <directory>]
+```
+
+It proposes, each with its evidence and the exact revision command above that
+previews it:
+
+- a dependency root (`add-dependency-root`) for each installed directory present
+  together with its manifest or a lock file — `vendor/` with `composer.json` or
+  `composer.lock`, `node_modules/` with `package.json` or a Node lock file. This
+  skill's own table records which directory each one installs into;
+- a Sensitive runtime input name (`add-sensitive-input`) for each key
+  `.env.example` assigns, with its line. Only the text before `=` is kept; a
+  value is never read into any output. A line that assigns nothing, or whose
+  key the Gate policy validator refuses as a name, is counted and never shown;
+- an environment file (`add-environment-file`) for `.env` when it is present
+  and `git check-ignore` says Git ignores it. Its contents are never read.
+
+Anything already declared — the revision would change nothing — is not
+proposed, and every proposal is proved by previewing its revision, whose token
+is discarded. It applies nothing, offers no "apply all", and never proposes a
+check or a Verification profile command: run a proposal's command to see its
+preview and token, then confirm that preview. It writes nothing under the clone
+or `.git`. A clone with no Gate section proposes nothing and names setup's next
+step; without the Gate module a configured clone is refused with
+`gate-unavailable`, and a section no revision can rewrite with that revision's
+own refusal (`section-unrevisable`). Exit status is `0` with nothing to propose,
+`1` when proposals remain or there is no Gate section, and `2` when it could not
+run.
+
 ## Process
 
 ### 1. Discover

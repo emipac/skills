@@ -60,3 +60,14 @@ named and no token, and the next command is the Gate's own
 `gate sync --acknowledge-weakening` preview; a revision given
 `--acknowledge-weakening` passes it through to that preview, which then offers
 its token. `configure.mjs --revise-gate` takes each value as its own option.
+
+`agent-framework config suggest` (with `--json` for a versioned document) lists
+what the repository already implies the Gate configuration section should
+declare and does not: a dependency root for each installed `vendor/` or
+`node_modules/` present with its manifest or a lock file, a Sensitive runtime
+input name for each key `.env.example` assigns, and `.env` when Git ignores it.
+Each proposal names its evidence and the exact `config` revision command that
+previews it. Anything already declared is left out; key names are read without
+their values, `.env` is never read, and a line whose key is not a valid name is
+counted, not shown. It applies nothing and never proposes a check or a
+Verification profile command.
