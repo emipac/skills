@@ -1021,6 +1021,182 @@ test('exposes dormant Gate configuration through an explicit previewed command',
   assert.match(await readFile(configurationPath, 'utf8'), /^evaluation_gate:$/m);
 });
 
+/** A tooling schema v4 configuration whose Gate section `configure-gate` wrote. */
+const configuredGateFixture = async (context, prefix) => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), prefix));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  const policy = {
+    checks: { required: ['unit'], advisory: ['lint'] },
+    budget: { total_seconds: 300 },
+    bypass: { enabled: false },
+    execution: { budget_skippable: [] },
+    evidence: {},
+  };
+  await writeFile(path.join(projectRoot, 'AGENTS.md'), 'maintainer-owned\n');
+  await writeFile(
+    path.join(projectRoot, '.agent-framework.yaml'),
+    'schema_version: 4\n# reviewed by hand\nhistory:\n  path: null # none yet\n  required: false\n',
+  );
+  const preview = await frameworkSetup.previewGateConfiguration({ projectRoot, policy });
+
+  await frameworkSetup.configureGate({ projectRoot, policy, confirmation: preview.previewHash });
+
+  return { projectRoot, policy, configurationPath: path.join(projectRoot, '.agent-framework.yaml') };
+};
+
+test('revises one Gate execution entry only after exact preview confirmation, keeping every other byte', async (context) => {
+  const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-');
+  const original = await readFile(configurationPath, 'utf8');
+  const agents = await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8');
+  const revision = { operation: 'add-dependency-root', root: 'vendor', provisioning: 'copy' };
+
+  assert.equal(typeof frameworkSetup.previewGateRevision, 'function');
+  const preview = await frameworkSetup.previewGateRevision({ projectRoot, revision });
+  const repeated = await frameworkSetup.previewGateRevision({ projectRoot, revision });
+
+  assert.equal(preview.status, 'ready');
+  assert.deepEqual(repeated, preview, 'a repeated preview differs.');
+  assert.match(preview.previewHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(preview.changes, [{
+    subcontract: 'execution',
+    line: original.split('\n').indexOf('  execution: {"budget_skippable":[]}') + 1,
+    before: '  execution: {"budget_skippable":[]}',
+    after: '  execution: {"budget_skippable":[],"dependency_roots":["vendor"],"dependency_provisioning":{"vendor":"copy"}}',
+  }]);
+  assert.equal(
+    preview.proposedConfiguration,
+    original.replace('  execution: {"budget_skippable":[]}', preview.changes[0].after),
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+  await assert.rejects(
+    frameworkSetup.reviseGate({ projectRoot, revision, confirmation: 'stale-preview' }),
+    (error) => error.reasonCode === 'preview-mismatch' && /does not match the current preview/.test(error.message),
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+  const result = await frameworkSetup.reviseGate({ projectRoot, revision, confirmation: preview.previewHash });
+
+  assert.equal(result.status, 'revised');
+  assert.deepEqual(result.changes, preview.changes);
+  assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  assert.equal(await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8'), agents);
+  assert.deepEqual(
+    (await readdir(projectRoot)).filter((entry) => entry.startsWith('.agent-framework.yaml.')),
+    [],
+  );
+
+  // Repeating the confirmed revision changes nothing: it is refused, and the file stays put.
+  await assert.rejects(
+    frameworkSetup.reviseGate({ projectRoot, revision, confirmation: preview.previewHash }),
+    (error) => error.reasonCode === 'nothing-to-revise',
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+});
+
+test('refuses a Gate revision outside execution, an unrevisable section, or an invalid candidate, writing nothing', async (context) => {
+  const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-invalid-');
+  const original = await readFile(configurationPath, 'utf8');
+  const refusals = [
+    [{ operation: 'set-allowed-environment', root: 'PATH' }, 'revision-unknown', /Unknown Gate revision "set-allowed-environment"/],
+    [{ operation: 'add-dependency-root' }, 'revision-incomplete', /add-dependency-root needs a non-empty root/],
+    [{ operation: 'add-budget-skippable', check: 'lint', root: 'vendor' }, 'revision-unknown', /does not take root/],
+    [{ operation: 'add-budget-skippable', check: 'unit' }, 'candidate-invalid', /evaluation_gate\.execution\.budget_skippable: Check "unit" is required/],
+    [{ operation: 'remove-dependency-root', root: 'vendor' }, 'nothing-to-revise', /dependency root vendor is not declared/],
+  ];
+
+  for (const [revision, reasonCode, message] of refusals) {
+    await assert.rejects(
+      frameworkSetup.previewGateRevision({ projectRoot, revision }),
+      (error) => error.reasonCode === reasonCode && message.test(error.message),
+      JSON.stringify(revision),
+    );
+  }
+
+  assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+  const handEdited = original.replace('  bypass: {"enabled":false}', '  bypass:\n    enabled: false');
+
+  await writeFile(configurationPath, handEdited);
+  await assert.rejects(
+    frameworkSetup.reviseGate({
+      projectRoot,
+      revision: { operation: 'add-dependency-root', root: 'vendor' },
+      confirmation: 'any',
+    }),
+    (error) => error.reasonCode === 'section-unrevisable' && /is not the `  bypass: <JSON>` line/.test(error.message),
+  );
+  assert.equal(await readFile(configurationPath, 'utf8'), handEdited);
+});
+
+test('revises Gate evidence, checks, budget, and bypass by name, deterministically and only with the preview token', async (context) => {
+  const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-tb070-');
+  const agents = await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8');
+  const revisions = [
+    [{ operation: 'add-sensitive-input', name: 'DB_PASSWORD', 'environment-file': '.env' }, '  evidence: {"sensitive_inputs":["DB_PASSWORD"],"environment_files":[".env"]}'],
+    [{ operation: 'demote-check', check: 'unit' }, '  checks: {"required":[],"advisory":["lint","unit"]}'],
+    [{ operation: 'promote-check', check: 'unit' }, '  checks: {"required":["unit"],"advisory":["lint"]}'],
+    [{ operation: 'remove-check', check: 'lint' }, '  checks: {"required":["unit"],"advisory":[]}'],
+    [{ operation: 'set-budget', seconds: '450' }, '  budget: {"total_seconds":450}'],
+    [{ operation: 'set-bypass', enabled: 'true', marker: 'Gate-Bypass' }, '  bypass: {"enabled":true,"marker":"Gate-Bypass"}'],
+    [{ operation: 'remove-environment-file', file: '.env' }, '  evidence: {"sensitive_inputs":["DB_PASSWORD"],"environment_files":[]}'],
+  ];
+
+  for (const [revision, line] of revisions) {
+    const original = await readFile(configurationPath, 'utf8');
+    const preview = await frameworkSetup.previewGateRevision({ projectRoot, revision });
+
+    assert.deepEqual(await frameworkSetup.previewGateRevision({ projectRoot, revision }), preview, `${revision.operation}: a repeated preview differs.`);
+    assert.deepEqual(preview.changes.map((change) => change.after), [line]);
+    assert.equal(preview.proposedConfiguration, original.replace(preview.changes[0].before, line));
+    await assert.rejects(
+      frameworkSetup.reviseGate({ projectRoot, revision, confirmation: 'stale-preview' }),
+      (error) => error.reasonCode === 'preview-mismatch',
+    );
+    assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+    await frameworkSetup.reviseGate({ projectRoot, revision, confirmation: preview.previewHash });
+
+    assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  }
+
+  assert.equal(await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8'), agents);
+
+  const refusals = [
+    [{ operation: 'set-bypass', enabled: 'true', marker: undefined, 'require-reference': 'yes' }, 'candidate-invalid', /evaluation_gate\.bypass\.require_reference: A required bypass reference must be stated as a boolean/],
+    [{ operation: 'set-bypass', enabled: 'true', value: 'x' }, 'revision-unknown', /does not take value/],
+    [{ operation: 'demote-check', check: 'absent' }, 'check-unbound', /check absent is not bound by the Gate policy/],
+    [{ operation: 'set-budget', seconds: '450' }, 'nothing-to-revise', /already 450 seconds/],
+  ];
+  const settled = await readFile(configurationPath, 'utf8');
+
+  for (const [revision, reasonCode, message] of refusals) {
+    await assert.rejects(
+      frameworkSetup.previewGateRevision({ projectRoot, revision }),
+      (error) => error.reasonCode === reasonCode && message.test(error.message),
+      JSON.stringify(revision),
+    );
+  }
+
+  assert.equal(await readFile(configurationPath, 'utf8'), settled);
+});
+
+test('exposes Gate revision through an explicit previewed command', async (context) => {
+  const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-cli-');
+  const original = await readFile(configurationPath, 'utf8');
+  const argv = [configureScript, '--project', projectRoot, '--revise-gate', 'add-budget-skippable', '--check', 'lint'];
+  const preview = JSON.parse((await execFileAsync(process.execPath, argv)).stdout);
+
+  assert.equal(preview.status, 'ready');
+  assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+  const result = JSON.parse((await execFileAsync(process.execPath, [...argv, '--confirm', preview.previewHash])).stdout);
+
+  assert.equal(result.status, 'revised');
+  assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  assert.match(await readFile(configurationPath, 'utf8'), /^ {2}execution: \{"budget_skippable":\["lint"\]\}$/m);
+});
+
 test('rejects unsafe source roots', async (context) => {
   const projectRoot = await createExpressFixture();
   context.after(() => rm(projectRoot, { recursive: true, force: true }));

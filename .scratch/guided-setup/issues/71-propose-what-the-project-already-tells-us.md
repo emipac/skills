@@ -1,14 +1,14 @@
 # TB-071 — Propose what the project already tells us
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: 70-declare-secrets-checks-and-budget-by-name
 Tracker ID: 71-propose-what-the-project-already-tells-us
 Draft key: TB-071
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -70,10 +70,10 @@ that adds it.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-003` (proposal half): fixtures produce the expected proposals
+- [x] `AC-GUIDE-003` (proposal half): fixtures produce the expected proposals
   with evidence and apply-commands; already-declared items are not proposed; a
   proposal never writes by itself.
-- [ ] No environment value appears in the output.
+- [x] No environment value appears in the output.
 
 ## Verification Matrix
 

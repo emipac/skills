@@ -21,7 +21,11 @@ import {
 } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
 import { openCoordinationLock } from '../skills/change-evaluation-gate/scripts/lib/coordination.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
-import { validateLifecycleEvent } from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
+import {
+  CONSENT_CHANNELS,
+  createLifecycleEvent,
+  validateLifecycleEvent,
+} from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
 import { inspectCoordination, statusGate } from '../skills/change-evaluation-gate/scripts/lib/lifecycle.mjs';
 import {
   COMMANDS,
@@ -35,7 +39,12 @@ import {
   quoteForShell,
   runOperatorCommand,
 } from '../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs';
-import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
+import {
+  nextRemedies,
+  REMEDIES,
+  remedyInstruction,
+  remedySubcommands,
+} from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 import { CONTROL_SURFACES } from '../skills/change-evaluation-gate/scripts/lib/security-control.mjs';
 
 const runFile = promisify(execFile);
@@ -2467,11 +2476,12 @@ test('TB-060: a healthy clone prints next: nothing and otherwise exactly what it
     '',
   ].join('\n'));
 
-  // `--json` keeps every field it had, in order, and gains two.
+  // `--json` keeps every field it had, in order, and gains two — and a third,
+  // the configuration section as values (`TB-068`).
   const machine = await observe(root, ['status', '--json']);
 
   assert.deepEqual(Object.keys(machine.document.observation), [
-    'state', 'health', 'release', 'receiptId', 'repaired', 'mutations', 'findings', 'controlSurface', 'next',
+    'state', 'health', 'release', 'receiptId', 'repaired', 'mutations', 'findings', 'controlSurface', 'configuration', 'next',
   ]);
   assert.deepEqual(machine.document.observation.next, {
     instruction: 'nothing',
@@ -3209,7 +3219,7 @@ test('TB-065: one remedy table serves every site, and no inline remedy string re
       assert.doesNotMatch(line, inline, `${source} names a remedy inline: ${line.trim()}`);
     }
 
-    assert.doesNotMatch(contents, /REMEDIES = |remedyInstruction = /, `${source} defines a second remedy table.`);
+    assert.doesNotMatch(contents, /REMEDIES = |remedyInstruction = |SUBCOMMANDS = |remedySubcommands = /, `${source} defines a second remedy table.`);
   }
 });
 
@@ -3239,6 +3249,119 @@ test('TB-065 AC-LIFE-010: repair still restores exactly its three findings and r
     ['control-surface-drift:command-descriptors'],
   );
   assert.deepEqual(observation.next.remedies.map((remedy) => remedy.remedy), ['sync']);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-074: the Gate names the subcommands that perform each remedy.
+ *
+ * A caller that renders a remedy as commands — the Framework command's
+ * `setup` — reads them from the next-step document instead of keeping its own
+ * copy of which remedy maps to which command (ADR 0004, `SG-OWNER-001`).
+ * ------------------------------------------------------------------------- */
+
+/** A remedy as `--json` carries it, reduced to what a caller renders commands from. */
+const remedyCommandsOf = (result) => result.document.observation.next.remedies
+  .map(({ remedy, subcommands }) => ({ remedy, subcommands }));
+
+/**
+ * THE FIRST RED TEST OF TB-074.
+ *
+ * On the configuration-drift, hook-drift, and runtime-drift fixtures every
+ * remedy `gate status --json` and `gate repair --json` name carries the Gate
+ * subcommands that perform it, in order — where before this slice a remedy
+ * carried no command at all.
+ */
+test('TB-074 AC-GUIDE-001: every remedy status and repair name carries the subcommands that perform it, in order', async (t) => {
+  const drifts = {
+    configuration: {
+      drift: async (root) => writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration({ totalSeconds: 900 }), 'utf8'),
+      expected: [{ remedy: 'sync', subcommands: ['sync'] }],
+    },
+    hook: {
+      drift: async (root) => rm((await receiptOf(root)).hooks[0].path, { force: true }),
+      expected: [{ remedy: 'repair', subcommands: ['repair'] }],
+      // Repair previews restoring it, so nothing remains for its own next step.
+      afterRepair: [],
+    },
+    runtime: {
+      // A gate speaking a protocol version this clone never activated against.
+      drift: async (root) => {
+        const receipt = await receiptOf(root);
+
+        await writeFile(
+          receiptPathOf(root),
+          `${JSON.stringify({ ...receipt, runtime: { ...receipt.runtime, gate: { ...receipt.runtime.gate, protocolVersion: '0.9' } } }, null, 2)}\n`,
+          'utf8',
+        );
+      },
+      expected: [{ remedy: 'activation-transaction', subcommands: ['deactivate', 'activate'] }],
+    },
+  };
+
+  for (const [name, { drift, expected, afterRepair = expected }] of Object.entries(drifts)) {
+    const root = await commandActivatedClone(t);
+
+    await drift(root);
+
+    const status = await observe(root, ['status', '--json']);
+    const repair = await observe(root, ['repair', '--json']);
+
+    assert.equal(status.document.observation.health, 'broken', `the ${name} fixture did not drift.`);
+    assert.deepEqual(remedyCommandsOf(status), expected, `status on ${name} drift`);
+    assert.deepEqual(remedyCommandsOf(repair), afterRepair, `repair on ${name} drift`);
+    // Additive: the document identifier and every earlier field are unchanged.
+    assert.equal(status.document.document, 'change-evaluation-gate/observation/1');
+
+    for (const remedy of [...status.document.observation.next.remedies, ...repair.document.observation.next.remedies]) {
+      assert.deepEqual(Object.keys(remedy), ['remedy', 'instruction', 'subcommands', 'findings']);
+    }
+  }
+});
+
+/**
+ * Every remedy the table can name records its subcommands beside its
+ * instruction; a remedy the maintainer performs records an empty list. Read
+ * from the table itself, so a remedy added without a command list fails here
+ * exactly as one without an instruction does.
+ */
+test('TB-074: every remedy in the table has a recorded subcommand list, and the maintainer\'s own acts have an empty one', () => {
+  const remedies = new Set(Object.values(REMEDIES)
+    .flatMap((entry) => (typeof entry === 'string' ? [entry] : Object.values(entry)))
+    .filter((remedy) => remedy !== 'informational'));
+
+  for (const remedy of remedies) {
+    const subcommands = remedySubcommands(remedy);
+
+    assert.ok(remedyInstruction(remedy) !== null, `${remedy} has no instruction.`);
+    assert.ok(Array.isArray(subcommands), `${remedy} has no recorded subcommand list.`);
+
+    // Each named subcommand is the one its instruction tells a maintainer to run.
+    for (const subcommand of subcommands) {
+      assert.ok(remedyInstruction(remedy, 'gate').includes(`gate ${subcommand}`), `${remedy} names ${subcommand}, which its instruction does not.`);
+    }
+  }
+
+  assert.deepEqual(
+    Object.fromEntries([...remedies].sort().map((remedy) => [remedy, remedySubcommands(remedy)])),
+    {
+      activate: ['activate'],
+      'activation-transaction': ['deactivate', 'activate'],
+      'correct-configuration': [],
+      'reconcile-client-registration': [],
+      repair: ['repair'],
+      sync: ['sync'],
+      'version-control': [],
+    },
+  );
+  assert.equal(remedySubcommands('no-such-remedy'), null);
+
+  // The document carries the list; an unrecorded code is the maintainer's to read.
+  assert.deepEqual(
+    nextRemedies([{ code: 'activation-absent' }, { code: 'grader-surface-unversioned' }]).remedies
+      .map(({ remedy, subcommands }) => [remedy, subcommands]),
+    [['activate', ['activate']], ['version-control', []]],
+  );
+  assert.deepEqual(nextRemedies([{ code: 'no-such-code' }]).remedies[0].subcommands, []);
 });
 
 /**
@@ -3284,4 +3407,182 @@ test('TB-066 NFR-OPER-001 / SG-TRUST-001: status states an unversioned configura
 
   assert.equal(versioned.document.observation.findings.some((finding) => finding.code === 'grader-surface-unversioned'), false);
   assert.equal(nextLineOf(versioned), 'nothing');
+});
+
+/* -------------------------------------------------------------------------
+ * TB-068: the Gate configuration section as values, not only as an identity.
+ *
+ * `gate status --json` gains `observation.configuration`: the section this
+ * clone declares, and on an activated clone the section the receipt pinned,
+ * recovered by the rule `gate sync` already judges transitions with — accepted
+ * only from a document that reproduces the pinned identity (`GAP-005`,
+ * `FR-GUIDE-005`, `FR-CFG-005`).
+ * ------------------------------------------------------------------------- */
+
+/** The Gate section of a configuration document, as the Gate's own reader parses it. */
+const sectionOf = (contents) => parseConfigurationDocument(contents).value.evaluation_gate;
+
+test('TB-068 FR-GUIDE-005: status reports the working section and the pinned section as values, recovered only from a document that reproduces the pinned identity', async (t) => {
+  const root = await commandActivatedClone(t);
+  const prior = await receiptOf(root);
+  const pinnedPolicy = sectionOf(activatableConfiguration());
+  const before = await cloneFingerprint(root);
+  const healthy = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  // Undrifted: the file itself reproduces the pinned identity.
+  assert.deepEqual(healthy, {
+    working: {
+      resolved: true,
+      reasonCode: null,
+      detail: null,
+      identity: prior.configuration.identity,
+      policy: pinnedPolicy,
+    },
+    pinned: { identity: prior.configuration.identity, source: 'configuration-file', policy: pinnedPolicy },
+  });
+
+  // Drifted and uncommitted: the committed file at HEAD is the pinned section.
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+
+  const drifted = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  assert.deepEqual(drifted.working.policy, sectionOf(tightenedConfiguration()));
+  assert.notEqual(drifted.working.identity, prior.configuration.identity);
+  assert.deepEqual(drifted.pinned, {
+    identity: prior.configuration.identity,
+    source: 'committed-configuration',
+    policy: pinnedPolicy,
+  });
+
+  // Observation is still observation: nothing but the edit moved.
+  await writeFile(path.join(root, '.agent-framework.yaml'), activatableConfiguration(), 'utf8');
+  assert.equal(await cloneFingerprint(root), before);
+
+  // A receipt `gate sync` wrote pins the policy itself, and is read first.
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+
+  const sync = await observe(root, ['sync']);
+
+  assert.equal((await observe(root, ['sync', '--confirm', tokenOf(sync)])).document.mutation.performed, true);
+
+  const synced = (await observe(root, ['status', '--json'])).document.observation.configuration;
+
+  assert.equal(synced.pinned.source, 'receipt');
+  assert.deepEqual(synced.pinned.policy, sectionOf(tightenedConfiguration()));
+  assert.equal(synced.pinned.identity, synced.working.identity);
+});
+
+test('TB-068: a pinned section no document reproduces is reported by identity alone, never guessed', async (t) => {
+  const root = await commandActivatedClone(t);
+  const prior = await receiptOf(root);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), tightenedConfiguration(), 'utf8');
+  await runGit(root, ['add', '--all']);
+  await runGit(root, ['-c', 'user.email=gate@example.test', '-c', 'user.name=Gate', 'commit', '--quiet', '--no-verify', '--message', 'past the gate']);
+  await writeFile(path.join(root, '.agent-framework.yaml'), demotedConfiguration(), 'utf8');
+
+  const { configuration } = (await observe(root, ['status', '--json'])).document.observation;
+
+  assert.deepEqual(configuration.pinned, { identity: prior.configuration.identity, source: null, policy: null });
+  assert.deepEqual(configuration.working.policy, sectionOf(demotedConfiguration()));
+});
+
+test('TB-068: a clone with no receipt reports its working section and no pinned one, and a missing section by its reason', async (t) => {
+  const configured = await configuredClone(t);
+  const configuredBefore = await wholeCloneSnapshot(configured);
+  const shown = (await observe(configured, ['status', '--json'])).document.observation;
+
+  assert.equal(shown.state, 'configured');
+  assert.equal(shown.configuration.working.resolved, true);
+  assert.deepEqual(shown.configuration.working.policy, sectionOf(SHARED_CONFIGURATION));
+  assert.equal(shown.configuration.pinned, null);
+  assert.equal(await wholeCloneSnapshot(configured), configuredBefore);
+
+  const installed = await installedClone(t);
+  const missing = (await observe(installed, ['status', '--json'])).document.observation.configuration;
+
+  assert.deepEqual(missing.working, {
+    resolved: false,
+    reasonCode: 'gate-policy-missing',
+    detail: missing.working.detail,
+    identity: null,
+    policy: null,
+  });
+  assert.match(missing.working.detail, /evaluation_gate/);
+  assert.equal(missing.pinned, null);
+});
+
+/**
+ * `RISK-011`, `TB-072`. A confirmation may declare the channel it arrived
+ * through. The channel is a closed vocabulary, is not part of any token, and
+ * is recorded — as self-declared — on every Lifecycle event the confirming
+ * invocation appends, refusals included; a confirmation that declares none
+ * records exactly what it recorded before the selector existed.
+ */
+test('TB-072 RISK-011: --consent-channel is recorded, as self-declared, on the events of the confirmation that declared it', async (t) => {
+  const [channel] = CONSENT_CHANNELS;
+  const root = await commandActivatedClone(t);
+  const eventsOf = async () => (await readFile(path.join(root, '.git/change-evaluation-gate/evidence/events.ndjson'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const before = await wholeCloneSnapshot(root);
+
+  assert.deepEqual(CONSENT_CHANNELS, ['interactive-guided-setup']);
+
+  // An unknown channel, and a command that confirms nothing, are refused before anything runs.
+  for (const argv of [['deactivate', '--consent-channel', 'terminal'], ['status', '--consent-channel', channel]]) {
+    const refused = await observe(root, argv);
+
+    assert.equal(refused.exitCode, EXIT_UNRUNNABLE, argv.join(' '));
+    assert.equal(refused.document.failure.reasonCode, argv[0] === 'status' ? 'unknown-selector' : 'selector-invalid');
+  }
+
+  assert.equal(await wholeCloneSnapshot(root), before);
+  assert.equal((await eventsOf()).some((event) => 'consent' in event), false, 'a direct activation recorded a channel.');
+
+  // The channel is not part of the token: a preview with it and one without offer the same.
+  await rm(JSON.parse(await readFile(path.join(root, '.git/change-evaluation-gate/evidence/activation/receipt.json'), 'utf8')).hooks[0].path);
+
+  const plain = await observe(root, ['repair']);
+  const declared = await observe(root, ['repair', '--consent-channel', channel]);
+
+  assert.equal(tokenOf(declared), tokenOf(plain));
+  assert.deepEqual(declared.document.invocation.selectors, ['--consent-channel', channel]);
+
+  // A refused confirmation records the refusal with the channel it declared.
+  const mismatched = await observe(root, ['deactivate', '--confirm', `sha256:${'0'.repeat(64)}`, '--consent-channel', channel]);
+
+  assert.equal(mismatched.document.mutation.performed, false);
+  assert.deepEqual((await eventsOf()).at(-1).consent, { channel, provenance: 'self-declared' });
+  assert.equal((await eventsOf()).at(-1).outcome, 'refused');
+
+  const repaired = await observe(root, ['repair', '--confirm', tokenOf(plain), '--consent-channel', channel]);
+  const repair = (await eventsOf()).at(-1);
+
+  assert.equal(repaired.document.mutation.performed, true, repaired.document.mutation.summary);
+  assert.equal(repair.type, 'repair');
+  assert.equal(repair.outcome, 'succeeded');
+  assert.deepEqual(repair.consent, { channel, provenance: 'self-declared' });
+  assert.deepEqual(validateLifecycleEvent(repair), []);
+
+  // Without the selector, nothing about a channel is recorded.
+  const deactivation = await observe(root, ['deactivate']);
+
+  await observe(root, ['deactivate', '--confirm', tokenOf(deactivation)]);
+  assert.equal((await eventsOf()).at(-1).type, 'removal');
+  assert.equal('consent' in (await eventsOf()).at(-1), false);
+
+  // The record refuses a channel outside the vocabulary.
+  const invented = createLifecycleEvent({
+    type: 'activation',
+    consentChannel: 'terminal',
+    client: { id: 'git' },
+    gate: { id: 'change-evaluation-gate' },
+    repository: { identity: `sha256:${'1'.repeat(64)}` },
+    outcome: 'succeeded',
+    reason: 'fixture',
+  });
+
+  assert.deepEqual(validateLifecycleEvent(invented).map((error) => error.path), ['event.consent']);
 });

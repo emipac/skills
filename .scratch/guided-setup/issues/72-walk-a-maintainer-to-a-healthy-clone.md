@@ -1,14 +1,14 @@
 # TB-072 — Walk a maintainer to a healthy clone
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
-Blocked by: 67-name-the-next-step-without-a-terminal
+Labels: done, enhancement
+Blocked by: 67-name-the-next-step-without-a-terminal, 74-let-the-gate-name-the-command-for-each-remedy
 Tracker ID: 72-walk-a-maintainer-to-a-healthy-clone
 Draft key: TB-072
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -83,17 +83,22 @@ direct command sequence. First red test: a schema v3 fixture with scripted
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-001`: from each adoption-state fixture of `TB-067`, scripted yes
+- [x] `AC-GUIDE-001`: from each adoption-state fixture of `TB-067`, scripted yes
   answers reach Gate status healthy with nothing further to do, or completed
   setup with Gate steps unavailable when the Gate module is absent; only
-  underivable decisions are asked.
-- [ ] `AC-GUIDE-002`: each yes confirms exactly the previewed identity; a no
+  underivable decisions are asked. (Every state `AC-GUIDE-001` lists in the
+  SRS. The `no-configuration` fixture stops at base setup and names its
+  command: `configureProject` has no preview or token, so `SG-GUIDE-001` rules
+  out performing it.)
+- [x] `AC-GUIDE-002`: each yes confirms exactly the previewed identity; a no
   stops with nothing further written; a weakening is refused until the typed
   acknowledgement; without the interactive flag nothing is confirmed.
-- [ ] `NFR-REL-004`: the guided run and the direct command sequence on twin
+- [x] `NFR-REL-004`: the guided run and the direct command sequence on twin
   fixtures produce byte-identical configuration and receipt and the same
-  Lifecycle event types, apart from the recorded consent channel.
-- [ ] Doctor predicting a stop ends the run at that step with the owning reason.
+  Lifecycle event types, apart from the recorded consent channel. (Receipts
+  compared apart from the instants they record and the random self-test
+  subject identifiers, which differ between any two activations.)
+- [x] Doctor predicting a stop ends the run at that step with the owning reason.
 
 ## Verification Matrix
 
@@ -107,6 +112,7 @@ Frontend build and browser evidence are inapplicable.
 ## Blocked By
 
 - `TB-067` — the plan this slice executes.
+- `TB-074` — recovery steps take their commands from the Gate.
 
 ## Unresolved Assumptions
 

@@ -1,5 +1,19 @@
 # Evaluation process contract
 
+## Contents
+
+- [Casing boundary](#casing-boundary)
+- [Request](#request)
+- [Decision](#decision)
+- [Snapshot isolation](#snapshot-isolation)
+- [What each snapshot kind contains](#what-each-snapshot-kind-contains)
+  - [Known limitations](#known-limitations)
+- [Delegation](#delegation)
+- [Attempts and reason codes](#attempts-and-reason-codes)
+- [Policy](#policy)
+- [Coordination](#coordination)
+- [Evidence persistence](#evidence-persistence)
+
 The gate exposes one versioned process operation: `evaluate(request) -> decision`.
 A returned decision is transport success even when authorization is denied.
 `gate fix` and installation are separate interfaces.

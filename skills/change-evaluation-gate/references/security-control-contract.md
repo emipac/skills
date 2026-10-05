@@ -1,5 +1,16 @@
 # Security control contract
 
+## Contents
+
+- [Trust boundary (`ASM-001`, `SG-TRUST-001`, `RISK-001`)](#trust-boundary-asm-001-sg-trust-001-risk-001)
+- [Protected policy transitions (`FR-CFG-005`, `AC-CFG-003`, `SG-CFG-001`)](#protected-policy-transitions-fr-cfg-005-ac-cfg-003-sg-cfg-001)
+  - [Reached by `gate sync` (`TB-062`)](#reached-by-gate-sync-tb-062)
+- [Sensitive runtime inputs (`FR-CFG-006`, `AC-CFG-004`, `SG-SECRET-001`)](#sensitive-runtime-inputs-fr-cfg-006-ac-cfg-004-sg-secret-001)
+- [Gate control-surface drift (`NFR-SEC-004`, `AC-SEC-001`)](#gate-control-surface-drift-nfr-sec-004-ac-sec-001)
+  - [Grader changes are visibility, not accusation](#grader-changes-are-visibility-not-accusation)
+- [Prohibited](#prohibited)
+- [Capability](#capability)
+
 The Change Evaluation Gate protects three things that a change could otherwise
 turn against the evidence judging it: the policy that authorizes a transition,
 the Sensitive values a check needs at runtime, and the identity of the Gate

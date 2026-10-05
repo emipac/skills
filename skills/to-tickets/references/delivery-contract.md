@@ -1,5 +1,11 @@
 # Delivery contract
 
+## Contents
+
+- [Claims and proposals](#claims-and-proposals)
+- [Readiness gate](#readiness-gate)
+- [Template](#template)
+
 A delivery contract is one independently implementable tracer bullet. It
 references durable intent rather than copying it and leaves private
 implementation choices to the red-green loop.

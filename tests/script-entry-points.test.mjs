@@ -17,6 +17,7 @@ const SKILLS_ROOT = path.join(FRAMEWORK_ROOT, 'skills');
 const commandScripts = [
   { skill: 'curate-upstream-skills', script: 'analyze-upstream.mjs', argv: [] },
   { skill: 'framework-setup', script: 'configure.mjs', argv: ['--discover'] },
+  { skill: 'framework-setup', script: 'agent-framework.mjs', argv: ['setup', '--json'] },
   { skill: 'srs-modeling', script: 'audit-srs.mjs', argv: [] },
   { skill: 'to-spec', script: 'audit-feature-spec.mjs', argv: [] },
   { skill: 'to-tickets', script: 'audit-ticket-contracts.mjs', argv: [] },

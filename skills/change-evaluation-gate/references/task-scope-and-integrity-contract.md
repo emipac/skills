@@ -1,5 +1,13 @@
 # Task scope and Grader integrity contract
 
+## Contents
+
+- [Evaluation scope](#evaluation-scope)
+- [Check assertions](#check-assertions)
+- [Changed Grader surfaces](#changed-grader-surfaces)
+- [Served-source binding](#served-source-binding)
+- [Capability](#capability)
+
 A decision states three things beyond its check results: what the evaluation was
 allowed to claim, what it changed about the things that judge it, and whether
 served evidence was tied to the snapshot it claims to be about.

@@ -2,6 +2,29 @@
 
 # Adapter conformance contract
 
+## Contents
+
+- [1. An adapter is thin](#1-an-adapter-is-thin)
+- [2. One decision, role-correct outcomes](#2-one-decision-role-correct-outcomes)
+- [3. Declared capabilities](#3-declared-capabilities)
+  - [No channel: not needed, or not observed](#no-channel-not-needed-or-not-observed)
+  - [What a feedback channel carries](#what-a-feedback-channel-carries)
+- [3a. Trust models](#3a-trust-models)
+  - [Adding a model](#adding-a-model)
+  - [Post-registration client review](#post-registration-client-review)
+- [4. Trigger normalization](#4-trigger-normalization)
+  - [Unverified triggers](#unverified-triggers)
+- [5. The native boundary](#5-the-native-boundary)
+  - [The repository root is resolved, never assumed](#the-repository-root-is-resolved-never-assumed)
+- [5a. Declared registration surfaces](#5a-declared-registration-surfaces)
+  - [What is owned, and what is never touched](#what-is-owned-and-what-is-never-touched)
+  - [Reconciled states](#reconciled-states)
+  - [Still unconfirmed](#still-unconfirmed)
+- [6. Failure handling](#6-failure-handling)
+- [7. The shared compatibility baseline](#7-the-shared-compatibility-baseline)
+- [8. Support tiers](#8-support-tiers)
+- [9. Distribution stays dormant](#9-distribution-stays-dormant)
+
 How the authoritative Git integration and the three declared v1 desktop
 preflight surfaces consume one decision, what each of them must declare about
 itself, and what has to be proved before any of them may be called *supported*.

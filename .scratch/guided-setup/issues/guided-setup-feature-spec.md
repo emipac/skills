@@ -78,8 +78,9 @@ Scenarios that materially apply:
 - **Gate module absent.** Setup and migration steps run; Gate steps are listed
   as unavailable, never attempted.
 - **Authorization.** Only the Repository maintainer at an interactive terminal
-  can give consent through the Framework command; everyone else gets the same
-  token path the owning commands already print.
+  can give consent by answering the Framework command; everyone else passes the
+  owning preview's own token explicitly with `--confirm`, exactly the consent
+  the owning commands already accept.
 
 ## Approach and Decisions
 
@@ -89,9 +90,12 @@ Scenarios that materially apply:
   owning preview's own token back. It holds no lifecycle or validation logic.
 - **Decided — consent.** In an interactive terminal the complete preview is
   shown and an explicit affirmative confirms that preview's token; a weakening
-  also needs a typed acknowledgement naming it. Without a terminal nothing is
-  confirmed. This matches the glossary's existing **Activation consent** rule
-  that interactive activation requires confirmation.
+  also needs a typed acknowledgement naming it. Without a terminal the Framework
+  command confirms nothing on its own; it may pass on a token the caller
+  supplies explicitly with `--confirm`, which the owning operation then checks
+  exactly as it would from its own command line (Product Owner, 2026-10-05,
+  amending `SG-GUIDE-001`). This matches the glossary's existing **Activation
+  consent** rule that interactive activation requires confirmation.
 - **Decided — scope of revision.** Only the Gate configuration section's five
   subcontracts: `checks` (required and advisory identities), `budget`,
   `bypass`, `execution` (dependency roots, dependency provisioning,
@@ -128,11 +132,13 @@ Scenarios that materially apply:
 - **Decided — name.** The bin is `agent-framework`, with
   `setup`, `config show`, one `config` subcommand per named revision, `config suggest`, and `report`
   subcommands.
-- **Proposed — revision writer.** No YAML library is a runtime dependency.
+- **Decided — revision writer.** No YAML library is a runtime dependency.
   Verified: `configure-gate` renders the section as one flow-JSON line per
-  subcontract. A revision rewrites only that section, located unambiguously,
-  refuses a section it cannot round-trip, and compares every other byte before
-  and after (`RISK-012`).
+  subcontract. A revision rewrites only a section in exactly that form, and
+  compares every other byte before and after (`RISK-012`). A hand-written
+  section — block YAML, a comment or blank line inside it, other JSON spacing —
+  is refused by line number with nothing written, and is never converted
+  (Product Owner, 2026-10-05).
 - **Tradeoff accepted.** Going through the Gate's command interface costs one
   process per step. It buys independence of the two modules and makes the
   Framework command exercise the same surface agents use.
@@ -151,9 +157,10 @@ Scenarios that materially apply:
 ## Safeguards and Prohibited Behavior
 
 - `SG-GUIDE-001`: never write, confirm, register, or establish trust except
-  through the owning operation's preview and hash-bound confirmation; never
-  confirm without an interactive terminal. Violation: refuse the step, change
-  nothing, name the owning command.
+  through the owning operation's preview and hash-bound confirmation; without an
+  interactive terminal, never confirm on its own — only pass on a token the
+  caller supplied explicitly. Violation: refuse the step, change nothing, name
+  the owning command.
 - `SG-GUIDE-002`: no Sensitive runtime value in any display or report; no report
   inside the clone.
 - `SG-OWNER-001`: never add, remove, or rescope Verification profile commands;

@@ -94,6 +94,17 @@
  *    `gate-configuration` surface with `controlSurfaceChanged` true on the very
  *    next evaluation. Nothing is staged or committed by the Gate
  *    (`AC-SEC-001`, `RISK-008`, `SG-CFG-001`, `FR-LIFE-009`).
+ * 11. `revised-demotion-reaches-sync` — a weakening made by name reaches the
+ *    same refusal (`TB-070`). On a clone activated by the shipped command,
+ *    `agent-framework config demote-check` previews the one changed Gate
+ *    section line and writes nothing; its confirmation writes exactly that
+ *    line and continues into the Gate's own `gate sync` preview, which refuses
+ *    with the weakening named and no token; a real commit is still denied for
+ *    the drift; the acknowledged preview the Framework command names as next
+ *    offers a token; confirming it pins the demoted policy, and the next real
+ *    commit — a failing change the trusted policy would have blocked — is
+ *    graded under it with no drift (`SG-CFG-001`, `RISK-008`, `FR-GUIDE-006`,
+ *    `AC-GUIDE-003`).
  *
  * Every canary in this file is a synthetic literal invented for the fixture. No
  * real environment variable, credential store, key file, or developer secret is
@@ -1826,6 +1837,137 @@ const packagedUnversionedConfiguration = async () => {
   return { name: 'packaged-unversioned-configuration', ok: findings.length === 0, findings };
 };
 
+/** The Framework command, run from the installed `framework-setup` beside this Gate. */
+const FRAMEWORK_COMMAND = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'framework-setup',
+  'scripts',
+  'agent-framework.mjs',
+);
+
+/**
+ * The one-check clone with its Gate section exactly as `configure-gate` writes
+ * one — `evaluation_gate:` and a flow-JSON line per subcontract — the only
+ * form a named revision rewrites.
+ */
+const configuredGateConfiguration = () => {
+  const block = runnerConfiguration();
+  const policy = {
+    checks: { required: [RUNNER_CHECK_ID], advisory: [] },
+    budget: { total_seconds: 600 },
+    bypass: { enabled: false },
+    execution: {},
+    evidence: {},
+  };
+
+  return [
+    block.slice(0, block.indexOf('evaluation_gate:\n')),
+    'evaluation_gate:\n',
+    ...Object.entries(policy).map(([key, value]) => `  ${key}: ${JSON.stringify(value)}\n`),
+  ].join('');
+};
+
+/**
+ * A weakening made by name reaches `gate sync`'s refusal (`TB-070`).
+ *
+ * The maintainer demotes the one required check with
+ * `agent-framework config demote-check` rather than in an editor. The Framework
+ * command judges no weakening of its own: its confirmation writes the line and
+ * continues into the Gate's `gate sync` preview, which refuses exactly as it
+ * refuses a hand edit, until the acknowledged preview it names as next is run
+ * and confirmed (`SG-CFG-001`, `RISK-008`).
+ */
+const revisedDemotionReachesSync = async () => {
+  const findings = [];
+  const root = await cloneWithPolicy('revised-demotion', configuredGateConfiguration());
+
+  if (!(await activateClone(root, findings))) {
+    return { name: 'revised-demotion-reaches-sync', ok: false, findings };
+  }
+
+  const configurationPath = path.join(root, '.agent-framework.yaml');
+  // Without any `change-evaluation-gate` a developer linked globally, so the
+  // Framework command reaches this Gate, the one beside it.
+  const environment = {
+    ...gitEnvironment(),
+    PATH: (process.env.PATH ?? '').split(path.delimiter)
+      .filter((directory) => directory && !existsSync(path.join(directory, 'change-evaluation-gate')))
+      .join(path.delimiter),
+  };
+  const framework = async (args) => {
+    const run = await runFile(process.execPath, [FRAMEWORK_COMMAND, ...args, '--json'], { cwd: root, env: environment }).then(
+      ({ stdout }) => ({ exitCode: 0, stdout }),
+      (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '' }),
+    );
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || '{}') };
+  };
+  const paste = (line) => runFile('sh', ['-c', `${line} --json`], { cwd: root, env: environment }).then(
+    ({ stdout }) => JSON.parse(stdout || '{}'),
+    (error) => JSON.parse(error.stdout || '{}'),
+  );
+  const original = await readFile(configurationPath, 'utf8');
+  const revision = ['config', 'demote-check', RUNNER_CHECK_ID];
+  const expectedLine = `  checks: ${JSON.stringify({ required: [], advisory: [RUNNER_CHECK_ID] })}`;
+  const previewed = await framework(revision);
+
+  check(findings, previewed.exitCode === 1, `The demotion preview exited ${previewed.exitCode}: ${JSON.stringify(previewed.document.failure)}`);
+  check(
+    findings,
+    previewed.document.changes?.length === 1 && previewed.document.changes[0].after === expectedLine,
+    `The preview did not name exactly the one checks line: ${JSON.stringify(previewed.document.changes)}`,
+  );
+  check(findings, previewed.document.repin === null, 'The revision preview judged a weakening of its own.');
+  check(findings, await readFile(configurationPath, 'utf8') === original, 'The demotion preview wrote the configuration.');
+
+  const confirmed = await framework([...revision, '--confirm', previewed.document.previewHash ?? 'none']);
+  const repin = confirmed.document.repin ?? null;
+  const weakenings = repin?.transition?.weakenings ?? [];
+
+  check(findings, confirmed.document.applied === true, `The confirmed demotion was not applied: ${JSON.stringify(confirmed.document.failure)}`);
+  check(
+    findings,
+    await readFile(configurationPath, 'utf8') === original.replace(previewed.document.changes?.[0]?.before ?? '\0', expectedLine),
+    'The confirmed demotion wrote more than the previewed line.',
+  );
+  check(
+    findings,
+    repin?.refusal?.reasonCode === 'weakening-unacknowledged' && repin?.confirmationToken === null,
+    `The chained gate sync did not refuse the unacknowledged weakening: ${JSON.stringify(repin)}`,
+  );
+  check(
+    findings,
+    weakenings.length === 1 && weakenings[0].code === 'required-check-demoted' && weakenings[0].checkId === RUNNER_CHECK_ID,
+    `The chained gate sync did not name the weakening: ${JSON.stringify(weakenings)}.`,
+  );
+
+  // Until the weakening is acknowledged and pinned, the commit is denied for the drift.
+  await stageBroken(root);
+
+  const drifted = await commitAttempt(root, 'broken, before the acknowledged re-pin');
+
+  check(findings, drifted.failed && drifted.output.includes('integrity-drift'), `The commit before the re-pin was not denied for drift: ${drifted.output}`);
+
+  const acknowledged = await paste(confirmed.document.next?.command ?? 'false');
+  const token = acknowledged.observation?.confirmationToken ?? null;
+
+  check(findings, typeof token === 'string', `The acknowledged preview named as next offered no token: ${JSON.stringify(acknowledged.observation?.refusal ?? acknowledged)}`);
+  check(findings, acknowledged.observation?.acknowledgedWeakening === true, 'The acknowledgement was not bound into the preview.');
+
+  const pinned = await runPackagedCommand(root, ['sync', '--acknowledge-weakening', '--confirm', token ?? `sha256:${'0'.repeat(64)}`, '--json']);
+
+  check(findings, JSON.parse(pinned.stdout || '{}').mutation?.performed === true, `The acknowledged sync did not perform: ${pinned.stdout}`);
+
+  const graded = await commitAttempt(root, 'broken, under the acknowledged demotion');
+
+  check(findings, graded.failed === false, `The commit after the re-pin was not graded under the demoted policy: ${graded.output}`);
+  check(findings, !graded.output.includes('integrity-drift'), 'The commit after the re-pin still reported drift.');
+
+  return { name: 'revised-demotion-reaches-sync', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -1842,6 +1984,7 @@ const main = async () => {
       await packagedPolicySync(),
       await packagedDescriptorRecovery(),
       await packagedUnversionedConfiguration(),
+      await revisedDemotionReachesSync(),
     ];
   } finally {
     for (const root of temporaryRoots) {

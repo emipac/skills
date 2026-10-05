@@ -1,14 +1,14 @@
 # TB-070 — Declare secrets, checks, and budget by name
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: 69-add-a-dependency-root-without-editing-yaml
 Tracker ID: 70-declare-secrets-checks-and-budget-by-name
 Draft key: TB-070
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -73,12 +73,12 @@ name and source and no value.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-003` (revision half, evidence and policy): each subcommand
+- [x] `AC-GUIDE-003` (revision half, evidence and policy): each subcommand
   previews, validates, writes only with its token, and leaves other bytes
   identical.
-- [ ] Demoting a required check on an activated fixture continues into a
+- [x] Demoting a required check on an activated fixture continues into a
   `gate sync` preview that refuses until acknowledged.
-- [ ] No secret canary value appears anywhere.
+- [x] No secret canary value appears anywhere.
 
 ## Verification Matrix
 

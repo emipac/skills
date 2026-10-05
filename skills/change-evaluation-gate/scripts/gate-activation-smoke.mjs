@@ -74,6 +74,23 @@
  *    link, a required failure still blocks, and the evidence records the
  *    strategy per root (TB-057, FR-CFG-002, FR-EVAL-004, AC-EVAL-001,
  *    NFR-OPER-001).
+ *    `revised-root-chains-into-sync` — on a clone the packaged command
+ *    activated without the dependency root its check needs, a good commit is
+ *    refused; `agent-framework config add-dependency-root` previews exactly
+ *    the one changed Gate-section line and writes nothing, its confirmation
+ *    writes exactly that line and continues into the Gate's own `gate sync`
+ *    preview for that candidate, the printed sync confirmation re-pins it, and
+ *    the same good commit is then graded with the root provided and allowed
+ *    (TB-069, FR-GUIDE-006, AC-GUIDE-003, SG-CFG-001).
+ *    `guided-setup-to-activated` — a real schema v3 clone walked by
+ *    `agent-framework setup` on a scripted interactive terminal: the
+ *    migration's open decisions answered, each complete preview confirmed
+ *    with `yes`, through framework-setup's own migration and Gate
+ *    configuration and the Gate's own activation, until Gate status names
+ *    nothing further; the activation's Lifecycle event records the
+ *    `interactive-guided-setup` consent channel as self-declared, and real
+ *    commits are then allowed and denied by the hook it registered (TB-072,
+ *    AC-GUIDE-001, FR-GUIDE-003, RISK-011).
  * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
@@ -115,7 +132,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
@@ -2284,6 +2301,261 @@ const mixedProvisioningCommit = async () => {
   return { name: 'mixed-provisioning-commit', ok: findings.length === 0, findings };
 };
 
+/** The Framework command, run from the installed `framework-setup` beside this Gate. */
+const FRAMEWORK_COMMAND = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'framework-setup',
+  'scripts',
+  'agent-framework.mjs',
+);
+
+/**
+ * `PATH` without any `change-evaluation-gate` a developer linked globally, so
+ * the Framework command reaches this Gate, the one beside it.
+ */
+const pathWithoutInstalledGate = async () => {
+  const directories = [];
+
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    if (!(await stat(path.join(directory, 'change-evaluation-gate')).then(() => true, () => false))) {
+      directories.push(directory);
+    }
+  }
+
+  return directories.join(path.delimiter);
+};
+
+/**
+ * TB-069 — a dependency root added by name, end to end.
+ *
+ * A clone the packaged command activated declares no dependency root, so its
+ * check cannot load the git-ignored tooling and a good commit is refused. The
+ * maintainer adds the root with `agent-framework config add-dependency-root`:
+ * the preview names the one Gate-section line it changes and writes nothing;
+ * the confirmation writes exactly that line, keeps every other byte, and
+ * continues into the Gate's own `gate sync` preview for exactly that
+ * candidate, run as the Gate's command; the confirmation that preview prints
+ * re-pins it; and the same good commit is then graded with the root provided
+ * by copy and allowed (`FR-GUIDE-006`, `AC-GUIDE-003`, `SG-CFG-001`).
+ */
+const revisedRootChainsIntoSync = async () => {
+  const findings = [];
+  const root = await fixtureRepository({ files: PROVISIONED_FILES });
+  const configurationPath = path.join(root, CONFIGURATION_FILE);
+  const environment = { ...gitEnvironment(), PATH: await pathWithoutInstalledGate() };
+  const framework = async (args) => {
+    const run = await runFile(process.execPath, [FRAMEWORK_COMMAND, ...args, '--json'], { cwd: root, env: environment }).then(
+      ({ stdout }) => ({ exitCode: 0, stdout }),
+      (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '' }),
+    );
+
+    return { exitCode: run.exitCode, document: JSON.parse(run.stdout || '{}') };
+  };
+
+  await assertThrowawayRepository(root);
+
+  const preview = await runPackagedCommand(root, ['activate', '--json']);
+  const token = JSON.parse(preview.stdout || '{}').observation?.confirmationToken;
+  const activated = await runPackagedCommand(root, ['activate', '--confirm', token ?? 'none', '--json']);
+
+  if (JSON.parse(activated.stdout || '{}').mutation?.performed !== true) {
+    findings.push(`The fixture did not activate: ${activated.stdout}`);
+
+    return { name: 'revised-root-chains-into-sync', ok: false, findings };
+  }
+
+  // Without the root, the tooling is not in the snapshot and good code is refused.
+  await writeFile(path.join(root, SOURCE), 'baseline\nunbroken\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const unprovided = await attemptCommit(root, 'good code, before the root is declared');
+
+  check(findings, unprovided.failed === true, 'A good commit was allowed before its dependency root was declared; this scenario no longer observes the root mattering.');
+
+  const original = await readFile(configurationPath, 'utf8');
+  const revision = ['config', 'add-dependency-root', PROVISIONED_ROOT, '--provisioning', 'copy'];
+  const previewed = await framework(revision);
+  const expectedLine = `  execution: ${JSON.stringify({
+    budget_skippable: [],
+    dependency_roots: [PROVISIONED_ROOT],
+    dependency_provisioning: { [PROVISIONED_ROOT]: 'copy' },
+  })}`;
+
+  check(findings, previewed.exitCode === 1, `The revision preview exited ${previewed.exitCode}: ${JSON.stringify(previewed.document.failure)}`);
+  check(
+    findings,
+    previewed.document.changes?.length === 1 && previewed.document.changes[0].after === expectedLine,
+    `The preview did not name exactly the one execution line: ${JSON.stringify(previewed.document.changes)}`,
+  );
+  check(findings, previewed.document.state === 'activated', `The preview did not see an activated clone: ${previewed.document.state}`);
+  check(findings, await readFile(configurationPath, 'utf8') === original, 'The revision preview wrote the configuration.');
+
+  const confirmed = await framework([...revision, '--confirm', previewed.document.previewHash ?? 'none']);
+  const revised = await readFile(configurationPath, 'utf8');
+  const repin = confirmed.document.repin ?? null;
+
+  check(findings, confirmed.document.applied === true, `The confirmed revision was not applied: ${JSON.stringify(confirmed.document.failure)}`);
+  check(
+    findings,
+    revised === original.replace(previewed.document.changes?.[0]?.before ?? '\0', expectedLine),
+    'The confirmed revision wrote more than the previewed line.',
+  );
+  check(findings, repin !== null && typeof repin.confirmationToken === 'string', `The revision did not continue into a re-pin preview with a token: ${JSON.stringify(repin)}`);
+  check(
+    findings,
+    JSON.stringify(repin?.dependencyRoots) === JSON.stringify([PROVISIONED_ROOT])
+      && JSON.stringify(repin?.dependencyProvisioning) === JSON.stringify({ [PROVISIONED_ROOT]: 'copy' })
+      && (repin?.transition?.weakenings ?? null)?.length === 0,
+    `The re-pin preview does not describe the written candidate: ${JSON.stringify(repin)}`,
+  );
+
+  const direct = JSON.parse((await runPackagedCommand(root, ['sync', '--json'])).stdout || '{}').observation ?? {};
+
+  check(
+    findings,
+    direct.confirmationToken === repin?.confirmationToken && direct.candidate?.identity === repin?.candidate?.identity,
+    'The chained re-pin preview is not the one a direct gate sync gives.',
+  );
+
+  // Follow the chain: paste the printed confirmation, exactly as printed.
+  const synced = await pastePrintedLine(root, confirmed.document.next?.command ?? 'false');
+  const syncedDocument = JSON.parse(synced.stdout || '{}');
+
+  check(findings, syncedDocument.mutation?.performed === true, `The chained gate sync confirmation did not re-pin: ${synced.stdout}${synced.stderr}`);
+
+  // The same good code, now graded with the root provided.
+  await git(root, ['add', '--all']);
+
+  const provided = await attemptCommit(root, 'good code, with its dependency root provided');
+
+  check(findings, provided.failed === false, `The good commit was still refused after the root was added and re-pinned: ${provided.output}`);
+
+  const status = JSON.parse((await runPackagedCommand(root, ['status', '--json'])).stdout || '{}');
+
+  check(
+    findings,
+    status.observation?.state === 'activated' && status.observation?.health === 'healthy',
+    `The clone is not healthy after the chained re-pin: ${JSON.stringify(status.observation?.next)}`,
+  );
+
+  return { name: 'revised-root-chains-into-sync', ok: findings.length === 0, findings };
+};
+
+/** The open decisions of `SCHEMA_V3_MIGRATION_INPUT`, answered as `MIGRATION_MAPPINGS` answers them. */
+const GUIDED_ANSWERS = Object.freeze([
+  'express-typescript',
+  'repository-script',
+  JSON.stringify(['tools/check.mjs', SOURCE]),
+  '60',
+  'yes',
+  'yes',
+  '',
+  'yes',
+]);
+
+/**
+ * TB-072 — guided setup, end to end, on a real clone.
+ *
+ * The Framework command's exported entry is driven with a scripted
+ * interactive terminal, exactly the seam its bin fills with the real one, and
+ * every operation it confirms is the owning one, for real: framework-setup's
+ * migration and Gate configuration, and the Gate's own `activate` as a
+ * command. The run must end with Gate status naming nothing further, the
+ * activation's Lifecycle event must record the consent channel the guided
+ * confirmation declared, and the hook it registered must really grade commits.
+ */
+const guidedSetupToActivated = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-activation-smoke-repo-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  // The Node provider is the one that drafts this project's Gate policy.
+  await writeFile(path.join(root, 'package.json'), `${JSON.stringify({ name: 'guided-setup-smoke', private: true })}\n`, 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_MIGRATION_INPUT, 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const { runFrameworkCommand } = await import(pathToFileURL(FRAMEWORK_COMMAND).href);
+  const answers = [...GUIDED_ANSWERS];
+  const terminal = {
+    interactive: true,
+    output: '',
+    questions: [],
+    write: (text) => {
+      terminal.output += text;
+    },
+    ask: async (question) => {
+      const answer = answers.shift() ?? null;
+
+      terminal.questions.push(question);
+      terminal.output += `${question}${answer ?? ''}\n`;
+
+      return answer;
+    },
+  };
+  const environment = { ...gitEnvironment(), PATH: await pathWithoutInstalledGate() };
+  const run = await runFrameworkCommand({ cwd: root, argv: ['setup'], environment, terminal });
+
+  check(findings, run.exitCode === 0, `Guided setup exited ${run.exitCode}: ${JSON.stringify(run.document?.stopped)}\n${terminal.output}`);
+  check(findings, answers.length === 0 && terminal.questions.length === GUIDED_ANSWERS.length, `Guided setup asked ${terminal.questions.length} questions, not one per scripted answer: ${JSON.stringify(terminal.questions)}`);
+  check(
+    findings,
+    JSON.stringify(run.document?.completed?.map((step) => step.step)) === JSON.stringify(['migrate-schema-v4', 'configure-gate', 'activate']),
+    `Guided setup did not complete the migration, the Gate configuration, and the activation: ${JSON.stringify(run.document?.completed)}`,
+  );
+
+  const status = JSON.parse((await runPackagedCommand(root, ['status', '--json'])).stdout || '{}');
+
+  check(
+    findings,
+    status.observation?.state === 'activated' && status.observation?.health === 'healthy' && status.observation?.next?.remedies?.length === 0,
+    `Gate status names something further after guided setup: ${JSON.stringify(status.observation?.next)}`,
+  );
+
+  const events = (await readFile(path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'events.ndjson'), 'utf8').catch(() => ''))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const activation = events.find((event) => event.type === 'activation' && event.outcome === 'succeeded') ?? null;
+
+  check(
+    findings,
+    activation?.consent?.channel === 'interactive-guided-setup' && activation?.consent?.provenance === 'self-declared',
+    `The activation's Lifecycle event does not record the guided consent channel: ${JSON.stringify(activation)}`,
+  );
+
+  // The hook guided setup registered grades real commits: the configuration it
+  // wrote, then broken code, then the fix.
+  await git(root, ['add', '--all']);
+
+  const configured = await attemptCommit(root, 'the configuration guided setup wrote');
+
+  check(findings, configured.failed === false, `The commit of the guided configuration was refused: ${configured.output}`);
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const broken = await attemptCommit(root, 'broken code');
+
+  check(findings, broken.failed === true, 'A commit whose required check fails was allowed on the guided clone.');
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nfixed\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const fixed = await attemptCommit(root, 'fixed code');
+
+  check(findings, fixed.failed === false, `A commit whose checks pass was refused on the guided clone: ${fixed.output}`);
+
+  return { name: 'guided-setup-to-activated', ok: findings.length === 0, findings };
+};
+
 /** The `composer-bin` binary whose shim loads two autoloaders (TB-056). */
 const TWO_AUTOLOADER_BINARY = 'analyse';
 
@@ -3430,6 +3702,8 @@ const main = async () => {
       await vendorBinaryCommit(),
       await dependencyProvisioningCommit(),
       await mixedProvisioningCommit(),
+      await revisedRootChainsIntoSync(),
+      await guidedSetupToActivated(),
       await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),

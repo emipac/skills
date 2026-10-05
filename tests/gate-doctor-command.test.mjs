@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { once } from 'node:events';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -220,8 +222,76 @@ const treeDigest = async (root) => {
   return entries;
 };
 
-const doctorProbesUnderTemporary = async () => (await readdir(await canonicalTemporaryPath()).catch(() => []))
+const doctorProbesUnder = async (directory) => (await readdir(directory).catch(() => []))
   .filter((entry) => entry.startsWith('gate-doctor-probe-'));
+
+const doctorProbesUnderTemporary = async () => doctorProbesUnder(await canonicalTemporaryPath());
+
+/**
+ * What a concurrently running suite's doctor does to the shared temporary
+ * directory: a separate process creates a `gate-doctor-probe-*` directory there
+ * and removes it when told to (`TB-075`).
+ */
+const FOREIGN_PROBE_DRIVER = [
+  "import { mkdtemp, rm } from 'node:fs/promises';",
+  "import { tmpdir } from 'node:os';",
+  "import path from 'node:path';",
+  "const directory = await mkdtemp(path.join(tmpdir(), 'gate-doctor-probe-'));",
+  "process.stdout.write(`${directory}\\n`);",
+  "process.stdin.on('end', () => rm(directory, { recursive: true, force: true }));",
+  'process.stdin.resume();',
+].join('\n');
+
+/** Start another process's probe and wait until it exists; `release` removes it and waits for that process to end. */
+const foreignProbe = async (t) => {
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', FOREIGN_PROBE_DRIVER], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  const ended = once(child, 'close');
+  const [directory] = await once(createInterface({ input: child.stdout }), 'line');
+  const release = async () => {
+    child.stdin.end();
+    await ended;
+  };
+
+  t.after(release);
+
+  return { directory, release };
+};
+
+/**
+ * Run `operate` with a temporary directory of this test's own, and list the
+ * `gate-doctor-probe-*` entries left in it afterwards (`TB-075`).
+ *
+ * The probe is created under `os.tmpdir()`, read at call time, so pointing
+ * `TMPDIR` at a fresh directory puts every probe this test's doctors make, and
+ * any they leave unreported, where no other suite writes: test files run in
+ * separate processes, and the tests within this file run one at a time.
+ */
+const probesLeftInPrivateTemporary = async (t, operate) => {
+  const privateTemporary = await temporary(t, 'gate-doctor-tmp-');
+  const sharedTemporary = process.env.TMPDIR;
+
+  process.env.TMPDIR = privateTemporary;
+
+  try {
+    await operate();
+  } finally {
+    if (sharedTemporary === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = sharedTemporary;
+    }
+  }
+
+  return doctorProbesUnder(privateTemporary);
+};
+
+const assertDoctorLeftNoProbe = (probesLeft) => assert.deepEqual(
+  probesLeft,
+  [],
+  'doctor left a probe directory behind.',
+);
 
 /** Preview and confirm an activation through the same surface, as a maintainer would. */
 const activateThroughSurface = async (root, environment) => {
@@ -501,37 +571,76 @@ test('TB-063 SG-LIFE-001, FR-LIFE-009: doctor writes nothing under the clone or 
     },
   });
   const environment = { PATH: await phpOnPath(t) };
-  const probesBefore = await doctorProbesUnderTemporary();
+  const probesLeft = await probesLeftInPrivateTemporary(t, async () => {
+    for (const phase of ['configured', 'activated']) {
+      if (phase === 'activated') {
+        // eslint-disable-next-line no-await-in-loop
+        const { confirmed } = await activateThroughSurface(root, environment);
 
-  for (const phase of ['configured', 'activated']) {
-    if (phase === 'activated') {
+        assert.equal(confirmed.document.mutation.performed, true, JSON.stringify(confirmed.document.mutation));
+      }
+
       // eslint-disable-next-line no-await-in-loop
-      const { confirmed } = await activateThroughSurface(root, environment);
+      const before = await treeDigest(root);
+      // eslint-disable-next-line no-await-in-loop
+      const doctor = await gate(root, ['doctor', '--json'], environment, { probe: true });
+      // eslint-disable-next-line no-await-in-loop
+      const after = await treeDigest(root);
 
-      assert.equal(confirmed.document.mutation.performed, true, JSON.stringify(confirmed.document.mutation));
+      assert.deepEqual(after, before, `doctor changed the ${phase} clone.`);
+      assert.equal(doctor.document.observation.state, phase);
+      assert.equal(doctor.document.mutation, null);
+
+      const { probe } = doctor.document.observation.dependencies;
+
+      assert.equal(isInside(await canonicalTemporaryPath(), probe.directory), true);
+      // eslint-disable-next-line no-await-in-loop
+      assert.equal(await lstat(probe.directory).then(() => true, () => false), false, 'the probe directory was left behind.');
+      assert.equal(probe.removed, true);
     }
-
-    // eslint-disable-next-line no-await-in-loop
-    const before = await treeDigest(root);
-    // eslint-disable-next-line no-await-in-loop
-    const doctor = await gate(root, ['doctor', '--json'], environment, { probe: true });
-    // eslint-disable-next-line no-await-in-loop
-    const after = await treeDigest(root);
-
-    assert.deepEqual(after, before, `doctor changed the ${phase} clone.`);
-    assert.equal(doctor.document.observation.state, phase);
-    assert.equal(doctor.document.mutation, null);
-
-    const { probe } = doctor.document.observation.dependencies;
-
-    assert.equal(isInside(await canonicalTemporaryPath(), probe.directory), true);
-    // eslint-disable-next-line no-await-in-loop
-    assert.equal(await lstat(probe.directory).then(() => true, () => false), false, 'the probe directory was left behind.');
-    assert.equal(probe.removed, true);
-  }
+  });
 
   // An activated clone is not something activation would take over again.
-  assert.deepEqual(await doctorProbesUnderTemporary(), probesBefore);
+  assertDoctorLeftNoProbe(probesLeft);
+});
+
+test('TB-075 SG-LIFE-001: another process\'s probe in the shared temporary directory, made while doctor runs, does not decide whether doctor left one', async (t) => {
+  const root = await configuredClone(t);
+  const environment = { PATH: await phpOnPath(t) };
+  const sharedBefore = await doctorProbesUnderTemporary();
+  const foreign = await foreignProbe(t);
+  const probesLeft = await probesLeftInPrivateTemporary(t, async () => {
+    const doctor = await gate(root, ['doctor', '--json'], environment);
+
+    assert.equal(doctor.document.observation.dependencies.probe.removed, true);
+  });
+  const sharedAfter = await doctorProbesUnderTemporary();
+
+  await foreign.release();
+
+  // The shared listing the footprint test once compared changed under it.
+  assert.equal(sharedAfter.includes(path.basename(foreign.directory)), true);
+  assert.notDeepEqual(sharedAfter, sharedBefore);
+  assertDoctorLeftNoProbe(probesLeft);
+});
+
+test('TB-075 SG-LIFE-001: a probe directory left behind without being reported still fails the footprint assertion', async (t) => {
+  const root = await configuredClone(t);
+  const environment = { PATH: await phpOnPath(t) };
+  const probesLeft = await probesLeftInPrivateTemporary(t, async () => {
+    const doctor = await gate(root, ['doctor', '--json'], environment);
+    const { probe } = doctor.document.observation.dependencies;
+
+    // A second probe, made where doctor makes its own and reported nowhere:
+    // the reported probe's own assertions cannot see it.
+    await mkdtemp(path.join(await canonicalTemporaryPath(), 'gate-doctor-probe-'));
+
+    assert.equal(probe.removed, true);
+    assert.equal(await lstat(probe.directory).then(() => true, () => false), false);
+  });
+
+  assert.equal(probesLeft.length, 1);
+  assert.throws(() => assertDoctorLeftNoProbe(probesLeft), /doctor left a probe directory behind/);
 });
 
 test('TB-063: the questions doctor cannot answer are listed as answered by activation, with the step named, and every activation step is accounted for once', async (t) => {

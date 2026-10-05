@@ -961,10 +961,13 @@ export const resolveSensitiveInputs = async ({
  * the same way `evaluate` is already injectable to prove the crash path below.
  */
 export const openStore = async ({
-  repository, activation, configuration, environment, openStoreSeam, client = GIT_ADAPTER,
+  repository, activation, configuration, environment, openStoreSeam, client = GIT_ADAPTER, consentChannel = null,
 }) => {
   const identity = {
     actor: await resolveActor(repository.root),
+    // Declared only by a confirming operator command (`gate <command>
+    // --consent-channel`); a runner never declares one.
+    consentChannel,
     client: { ...client, version: activation.receipt?.receiptVersion ?? '1.0.0' },
     gate: activation.receipt?.runtime?.gate
       ?? { id: 'change-evaluation-gate', version: null, protocolVersion: PROTOCOL_VERSION },

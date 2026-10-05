@@ -1,14 +1,14 @@
 # TB-069 — Add a dependency root without editing YAML
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: 67-name-the-next-step-without-a-terminal
 Tracker ID: 69-add-a-dependency-root-without-editing-yaml
 Draft key: TB-069
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -87,15 +87,15 @@ today there is no command to do it.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-003` (revision half, execution): add and remove a root, set its
+- [x] `AC-GUIDE-003` (revision half, execution): add and remove a root, set its
   provisioning, and change budget-skippable checks — each previews the exact
   change, refuses an invalid candidate with the validator's own reason, writes
   only with its token, and leaves every byte outside the section identical.
-- [ ] On an activated fixture the confirmed revision continues into the
+- [x] On an activated fixture the confirmed revision continues into the
   `gate sync` preview for exactly that candidate.
-- [ ] `NFR-REL-004`: the file a revision writes equals the file produced by
+- [x] `NFR-REL-004`: the file a revision writes equals the file produced by
   applying the same change and `configure-gate`'s rendering directly.
-- [ ] A hand-edited section the writer cannot round-trip is refused with
+- [x] A hand-edited section the writer cannot round-trip is refused with
   nothing written.
 
 ## Verification Matrix

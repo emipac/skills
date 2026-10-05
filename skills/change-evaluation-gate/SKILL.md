@@ -157,7 +157,15 @@ nothing to restore, and a refused `gate sync` name their recovery from the same
 table, so follow the command a denial names: `gate repair` is named only for a
 gate-owned hook registration, and a changed configuration, descriptor, or runner
 pin names `gate sync`. Each recovery keeps `.agent-framework.yaml` and all
-historical Evidence.
+historical Evidence. With `--json`, each entry of `observation.next.remedies`
+also carries `subcommands`, the Gate subcommands that perform it in order
+(empty when the remedy is the maintainer's own act); render commands from that
+list rather than from the remedy's name. `observation.configuration` carries the
+Gate section as values: `working` (the section this clone declares, or the
+reason it does not resolve) and, on an activated clone, `pinned` — the
+receipt's identity and, when a document reproduces that identity, its `source`
+and `policy`. Compare the two to say which value moved; never read the receipt
+for it.
 
 A declared Grader surface Git does not track — typically an
 `.agent-framework.yaml` nobody committed — is **unversioned**, not changed. Every
@@ -249,6 +257,17 @@ pinned identity — a receipt `gate sync` wrote, or the committed file at `HEAD`
 acknowledgement together. Show the maintainer that preview, name the weakening
 in your own words, and never add `--acknowledge-weakening` or confirm on their
 behalf.
+
+`gate activate`, `gate sync`, `gate repair`, and `gate deactivate` also take
+`--consent-channel <channel>` on a confirmation, from one declared vocabulary:
+`interactive-guided-setup`, which `agent-framework setup` passes when a
+maintainer answered `yes` to its prompt after the complete preview (`TB-072`,
+`RISK-011`). It is not part of any token and changes nothing that is
+performed; every Lifecycle event that confirmation appends records it as
+`consent: { channel, provenance: "self-declared" }`, refusals included, and a
+confirmation without it records no channel. Never pass it yourself: it states
+how a maintainer's consent arrived, which an agent confirming a token did not
+witness.
 
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When

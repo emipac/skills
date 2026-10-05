@@ -1,5 +1,19 @@
 # Bounded Evidence and Lifecycle event contract
 
+## Contents
+
+- [Where the store lives](#where-the-store-lives)
+- [What an envelope carries](#what-an-envelope-carries)
+- [What an envelope is a function of](#what-an-envelope-is-a-function-of)
+- [Fixed v1 ceilings](#fixed-v1-ceilings)
+- [Redaction at the persistence boundary](#redaction-at-the-persistence-boundary)
+- [When a decision is not appended](#when-a-decision-is-not-appended)
+- [Pruning](#pruning)
+- [Lifecycle events](#lifecycle-events)
+- [The one-shot bypass ledger](#the-one-shot-bypass-ledger)
+- [Decision binding](#decision-binding)
+- [Prohibited](#prohibited)
+
 The clone-local Evidence store, the fixed v1 retention ceilings, redaction at
 the persistence boundary, manual preview-bound pruning, and the immutable
 Lifecycle event record.
@@ -207,9 +221,14 @@ immutable local record (`FR-EVID-005`). Every event records:
 | `outcome` | `succeeded`, `refused`, `failed`, or `detected` |
 | `reason` | Why the record exists |
 | `redaction` | Redaction version, applied rule counts, and rules |
+| `consent` | Present only when the confirming invocation declared `--consent-channel`: `channel` from the declared vocabulary (`interactive-guided-setup`) and `provenance`, always `self-declared` (`RISK-011`, `TB-072`) |
 
 Actor attribution is a local convenience, never an authentication claim, and
-`authenticated: true` is not expressible. An event that fails the audit schema is
+`authenticated: true` is not expressible. A consent channel is the same kind of
+claim: the Gate cannot observe which terminal, if any, a confirmation came
+from, so it records the declared channel as `self-declared` on every event that
+confirmation appends, refusals included, refuses a channel outside the
+vocabulary, and records nothing about a channel when none was declared. An event that fails the audit schema is
 refused rather than stored. Later slices emit their own event types through this
 same contract.
 

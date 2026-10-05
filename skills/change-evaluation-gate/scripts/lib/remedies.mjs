@@ -111,6 +111,27 @@ export const remedyInstruction = (remedy, command = 'gate') => ({
   'version-control': 'commit each unversioned Grader surface to version control, when you choose to, so it has history and review — the Gate never stages or commits anything, and running unversioned stays allowed',
 })[remedy] ?? null;
 
+/**
+ * The Gate subcommands that perform each remedy, in the order they are run —
+ * recorded beside the instruction that names them, so a caller that renders a
+ * remedy as commands reads them here rather than keeping its own copy
+ * (`SG-OWNER-001`, `TB-074`). Each writing subcommand previews first and is
+ * confirmed with the token it prints; how a caller spells that is its own.
+ * A remedy the maintainer performs has none, and the Gate performs none of it.
+ */
+const SUBCOMMANDS = Object.freeze({
+  'correct-configuration': Object.freeze([]),
+  'reconcile-client-registration': Object.freeze([]),
+  repair: Object.freeze(['repair']),
+  sync: Object.freeze(['sync']),
+  'activation-transaction': Object.freeze(['deactivate', 'activate']),
+  activate: Object.freeze(['activate']),
+  'version-control': Object.freeze([]),
+});
+
+/** The subcommands recorded for one remedy, or `null` when none are. */
+export const remedySubcommands = (remedy) => SUBCOMMANDS[remedy] ?? null;
+
 /** The remedy recorded for one finding or reason code, or `null` when none is. */
 export const remedyFor = ({ code, surface } = {}) => {
   const entry = REMEDIES[code] ?? null;
@@ -121,7 +142,8 @@ export const remedyFor = ({ code, surface } = {}) => {
 /**
  * What a maintainer does next about everything reported, in the order it has
  * to be done, through the clone's own shortcut where activation recorded one.
- * Nothing to act on says `nothing`.
+ * Nothing to act on says `nothing`. Each remedy is
+ * `{ remedy, instruction, subcommands, findings }`.
  *
  * `findings` are `{ code, surface? }`: a status finding, a control-surface
  * drift finding, or a runner's reason code.
@@ -161,6 +183,8 @@ export const nextRemedies = (findings, shortcut = null) => {
     .map(([remedy, codes]) => ({
       remedy,
       instruction: remedyInstruction(remedy, command) ?? `no remedy is recorded for ${codes.join(', ')}; read its finding above`,
+      // Unrecorded, nothing is performed for it: reading the finding is the maintainer's.
+      subcommands: [...(remedySubcommands(remedy) ?? [])],
       findings: codes,
     }));
 

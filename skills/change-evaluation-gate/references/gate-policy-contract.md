@@ -1,5 +1,18 @@
 # Gate policy contract
 
+## Contents
+
+- [Subcontracts](#subcontracts)
+- [Severity](#severity)
+- [Authorization binding](#authorization-binding)
+- [Budget](#budget)
+- [Sensitive inputs](#sensitive-inputs)
+  - [Environment files](#environment-files)
+- [Bypass](#bypass)
+  - [Where a grant comes from](#where-a-grant-comes-from)
+  - [The commit-visible marker](#the-commit-visible-marker)
+- [Declared but not yet implemented](#declared-but-not-yet-implemented)
+
 Repository Gate policy decides *which* configured checks block, *how long* one
 evaluation may take, and *whether* a supported bypass exists. It names check
 identities and limits only: Verification stays the sole owner of command

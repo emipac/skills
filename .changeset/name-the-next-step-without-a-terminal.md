@@ -1,0 +1,117 @@
+---
+"ai-skills-framework": minor
+---
+
+Add the `agent-framework` command, shipped in `framework-setup` and as a new
+package bin. `agent-framework setup` (with `--json` for a versioned document)
+reports where a clone stands in Gate adoption — `no-configuration`,
+`schema-v3`, `gate-unconfigured`, `configured`, or `activated` with the Gate's
+health — every remaining step in order with the command that owns it, and the
+exact next command, including a draft path in the temporary directory so nobody
+has to invent one. Each boundary is the owning command's own answer:
+`framework-setup`'s schema reading and previews, `gate status --json`, and
+`gate doctor --json`. A healthy clone reports nothing to do.
+
+It writes, confirms, and registers nothing and never prompts. It reaches the
+Gate only by running `change-evaluation-gate` on the path or the installed Gate
+skill beside `framework-setup`; without either it names only `framework-setup`
+steps and states that the Gate steps are unavailable. Exit status is `0` with
+nothing further to do, `1` when steps remain, and `2` when it could not run.
+
+`agent-framework config show` (with `--json`) shows the Gate configuration
+section by its five subcontracts — `checks`, `budget`, `bypass`, `execution`,
+`evidence` — one line per key, and on an activated clone marks each value as
+matching or differing from what the Activation receipt pinned, naming added and
+removed names. Sensitive runtime inputs appear by name and resolved source,
+never by value; a clone with no Gate section names setup's next step; nothing is
+written. To support it, `gate status --json` gains `observation.configuration`:
+the working section and, on an activated clone, the pinned section recovered by
+the rule `gate sync` already uses, or its identity alone when no document
+reproduces it.
+
+`agent-framework config add-dependency-root`, `remove-dependency-root`,
+`set-dependency-provisioning`, `add-budget-skippable`, and
+`remove-budget-skippable` revise the Gate configuration section's `execution`
+entries by name, so nobody hand-edits those YAML keys. Without `--confirm` a
+revision writes nothing and shows each changed line of the section, before and
+after, with its token; `--confirm <token>` writes exactly that change, and only
+while the file is still the one previewed. The candidate is judged by the Gate
+policy validator `--configure-gate` already uses, and refused with its reason.
+Every byte outside the section is kept, comments included, and a section that
+is not exactly what `--configure-gate` writes — a hand-written block section,
+say — is refused by line rather than reformatted. On an activated clone the
+confirmation continues into the Gate's own `gate sync` preview for exactly the
+written candidate and prints its confirmation; it never confirms the re-pin.
+The same operation runs directly as `configure.mjs --revise-gate <revision>`,
+and both write the same file.
+
+`agent-framework config add-sensitive-input`, `remove-sensitive-input`,
+`add-environment-file`, `remove-environment-file`, `promote-check`,
+`demote-check`, `remove-check`, `set-budget`, and `set-bypass` revise the rest
+of the Gate configuration section the same way. A Sensitive runtime input is
+declared by name, with `--environment-file` naming the git-ignored file it may
+be read from; its value is never read, asked for, or printed. A check moves
+between required and advisory, or is removed, only when the policy already
+binds it. An enabled bypass needs its marker, and is refused with the Gate
+policy validator's reason without one. Whether a revision weakens the trusted
+policy stays `gate sync`'s judgement: on an activated clone a demoted or removed
+required check is refused in the chained `gate sync` preview with the weakening
+named and no token, and the next command is the Gate's own
+`gate sync --acknowledge-weakening` preview; a revision given
+`--acknowledge-weakening` passes it through to that preview, which then offers
+its token. `configure.mjs --revise-gate` takes each value as its own option.
+
+`agent-framework config suggest` (with `--json` for a versioned document) lists
+what the repository already implies the Gate configuration section should
+declare and does not: a dependency root for each installed `vendor/` or
+`node_modules/` present with its manifest or a lock file, a Sensitive runtime
+input name for each key `.env.example` assigns, and `.env` when Git ignores it.
+Each proposal names its evidence and the exact `config` revision command that
+previews it. Anything already declared is left out; key names are read without
+their values, `.env` is never read, and a line whose key is not a valid name is
+counted, not shown. It applies nothing and never proposes a check or a
+Verification profile command.
+
+`agent-framework setup` is now guided in an interactive terminal, and is the
+recommended way to adopt the Gate. It walks a clone from its adoption state to
+a healthy activated Gate one step at a time: each step shows the owning
+operation's complete preview — the migrated `.agent-framework.yaml`, the
+drafted Gate policy and the file it would write, or the Gate's own `--json`
+preview — and asks only what that operation cannot derive: the migration's open
+decisions, defaulting to the owning draft, the client to activate, and, for a
+policy weaker than the trusted one, the weakening the Gate names, typed back
+exactly. Only `yes` confirms, and it confirms exactly that preview with its own
+token through the operation that owns it. Any other answer, end of input, or
+the owning operation's refusal — a preview that changed before the answer,
+doctor predicting activation would stop — stops with nothing further confirmed;
+nothing is retried or remembered. It repeats until `gate status` names nothing
+further, writes no draft file, and asks nobody to copy a token. Piped, in CI,
+or with `--json`, it prints exactly the plan it printed before and confirms
+nothing. A clone with no configuration is told the base setup command to run,
+since base setup has no preview to confirm.
+
+`gate activate`, `gate sync`, `gate repair`, and `gate deactivate`
+confirmations accept `--consent-channel interactive-guided-setup`, which guided
+setup passes. It is not part of any token; every Lifecycle event the
+confirmation appends records it as `consent: { channel, provenance:
+"self-declared" }`, and a confirmation without it records exactly what it did
+before. The Activation receipt is unchanged, so a guided run and the same
+commands typed directly pin the same receipt.
+
+`agent-framework report --html [--out <path>]` writes one self-contained static
+HTML page a maintainer can read or share: the Gate state and health, every
+remaining step with its command and the next command, the doctor's findings,
+and the effective Gate configuration section. The state, health, steps, and
+configuration are rendered from the same documents `setup --json` and
+`config show --json` print, and the doctor's findings are copied from
+`gate doctor --json`, so the page cannot disagree with them. It holds no
+script, stylesheet, font, image, link, or control, escapes every string it
+shows, and carries its generation time and the command that regenerates it;
+apart from that time, two pages of an unchanged clone are identical. A
+Sensitive runtime input appears by name and source only. The page goes to a
+fresh name in the temporary directory, or to `--out`, and the command prints
+its path. A path whose real location is inside the clone, through a link or
+`..` included, an existing file, and a missing directory are each refused with
+nothing written; nothing under the clone changes. Exit status is `0` when the
+page is written and nothing further remains, `1` when it is written and setup
+or config show names something further, and `2` when nothing was written.

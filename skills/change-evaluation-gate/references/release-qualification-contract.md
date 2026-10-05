@@ -1,5 +1,14 @@
 # Release qualification contract
 
+## Contents
+
+- [1. The manifest is a record, and qualification is the reader](#1-the-manifest-is-a-record-and-qualification-is-the-reader)
+- [2. The release version is read, never written](#2-the-release-version-is-read-never-written)
+- [3. The environment matrix is a function of what is claimed](#3-the-environment-matrix-is-a-function-of-what-is-claimed)
+- [4. A support tier is derived, never declared](#4-a-support-tier-is-derived-never-declared)
+- [5. Promoting a surface out of `experimental`](#5-promoting-a-surface-out-of-experimental)
+- [6. What this release does not claim](#6-what-this-release-does-not-claim)
+
 What a Gate-capable release candidate must be able to show before any of its
 claims may stand, and what a maintainer has to do to widen those claims later.
 

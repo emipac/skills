@@ -294,6 +294,9 @@ export const openEvidenceStore = async ({
     const redacted = redactor.redactValue(input ?? {});
     const event = createLifecycleEvent({
       actor: identity.actor,
+      // The channel the confirming invocation declared, on every record it
+      // appends, refusals included (`RISK-011`); absent when none was declared.
+      consentChannel: identity.consentChannel ?? null,
       client: identity.client,
       gate: identity.gate,
       repository: { gitCommonDirectory: common, ...identity.repository },

@@ -1,5 +1,22 @@
 # Lifecycle command contract
 
+## Contents
+
+- [The three rules](#the-three-rules)
+- [Commands](#commands)
+- [The operator surface (`TB-040`, `TB-041`)](#the-operator-surface-tb-040-tb-041)
+- [`gate update`](#gate-update)
+- [Health](#health)
+- [The state a clone is reported to be in](#the-state-a-clone-is-reported-to-be-in)
+- [The durable identity of a gate-written registration](#the-durable-identity-of-a-gate-written-registration)
+- [Removal](#removal)
+- [`gate sync` (`TB-062`)](#gate-sync-tb-062)
+- [`gate check` (`TB-061`)](#gate-check-tb-061)
+- [`gate doctor` (`TB-063`)](#gate-doctor-tb-063)
+- [Recovery](#recovery)
+- [Prohibited](#prohibited)
+- [Verified by](#verified-by)
+
 Delivered by TB-012. Implemented in
 [`scripts/lib/lifecycle.mjs`](../scripts/lib/lifecycle.mjs), with the durable
 registration identity and the two registration writes in
@@ -74,13 +91,13 @@ gate check      [--staged] [--json]
 gate doctor     [--json]
 gate locks      [--recover <token>] [--json]
 gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
-gate repair     [--hook-script <path>] [--confirm <token>] [--json]
+gate repair     [--hook-script <path>] [--confirm <token> [--consent-channel <channel>]] [--json]
 gate update     [--confirm <token>] [--json]
-gate deactivate [--confirm <token>] [--json]
+gate deactivate [--confirm <token> [--consent-channel <channel>]] [--json]
 gate uninstall  --asset <path> ... [--confirm <token>] [--json]
 gate cleanup    [--confirm <token>] [--json]
 gate bypass     --reason <text> [--reference <ref>] [--actor <name>] [--confirm <token>] [--json]
-gate sync       [--acknowledge-weakening] [--confirm <token>] [--json]
+gate sync       [--acknowledge-weakening] [--confirm <token> [--consent-channel <channel>]] [--json]
 ```
 
 **Two invocations, never one.** Every command previews by default and writes
@@ -92,6 +109,22 @@ both commands back to back, and it is not meant to — it means no single comman
 destroys anything. `status`, `check`, and `doctor` have no confirmed form at
 all: none of them mutates anything under the clone, so none has anything to
 confirm.
+
+**A confirmation may declare its consent channel.** `gate activate`, `gate
+sync`, `gate repair`, and `gate deactivate` accept `--consent-channel
+<channel>`, a value selector from one declared vocabulary
+(`CONSENT_CHANNELS`): `interactive-guided-setup`, the explicit answer a
+maintainer gave a Guided setup prompt in an interactive terminal after the
+operation's complete preview (`RISK-011`, `TB-072`). Any other value is refused
+as `selector-invalid` before anything runs. The channel is not part of any
+token and changes nothing that is performed; it is echoed in
+`invocation.selectors` like any value selector, and every Lifecycle event the
+confirming invocation appends — a refusal included — carries it as `consent: {
+channel, provenance: "self-declared" }`, because which terminal a confirmation
+came from is not something this command can observe. A confirmation that
+declares none records exactly what it recorded before the selector existed, and
+the Activation receipt never carries a channel, so a guided and a direct
+confirmation of the same preview pin the same receipt (`NFR-REL-004`).
 
 **The preview is re-derived, never carried.** Every invocation rebuilds the
 preview from the filesystem as it is right now, and the operator's token is
@@ -194,7 +227,31 @@ the next commit was denied for. Runner pinning re-observes each pinned
 executable with one `access(2)` and composes each argument vector in-process: no
 pinned program is started and nothing is written. A trusted-configuration
 finding names `.agent-framework.yaml` as its `path`; the receipt pins an
-identity, not a document, so which key moved is not reported.
+identity, not a document, so the finding does not say which key moved.
+
+**The configuration section as values** (`TB-068`, `FR-GUIDE-005`). `gate
+status --json` also carries `observation.configuration`, on every clone:
+
+- `working` — `{ resolved, reasonCode, detail, identity, policy }`: the
+  `evaluation_gate` section `resolveConfiguration` reads, its configuration
+  identity (the one a receipt pins), or, when it does not resolve, the reason
+  (`gate-policy-missing`, `gate-policy-invalid`, …) with `identity` and `policy`
+  null.
+- `pinned` — `null` on a clone with no receipt, else `{ identity, source,
+  policy }`: the identity the receipt pinned, and the pinned section recovered
+  by the rule `gate sync` judges a transition against — the receipt itself when
+  a sync wrote it (`source: receipt`), the file when its identity never moved
+  (`configuration-file`), else the committed `.agent-framework.yaml` at `HEAD`
+  (`committed-configuration`), accepted only when it reproduces the pinned
+  identity. When nothing does, `source` and `policy` are null and only the
+  identities can be compared; nothing is guessed.
+
+Comparing `working.policy` with `pinned.policy` says which key moved; the
+Framework command's `agent-framework config show` renders exactly that. Git is
+only read, so status still writes nothing. The section holds check identities,
+limits, and Sensitive input names, never a value. The field is additive and
+the text rendering is unchanged, so the document stays
+`change-evaluation-gate/observation/1`.
 
 **Unversioned Grader surfaces** (`TB-066`). On an activated clone `gate
 status` also states every declared Grader surface Git does not track — the
@@ -222,7 +279,14 @@ one `next:` line and the document carries the same answer as
 (`git gate` when this clone's `.git/config` holds the alias activation writes
 for this command, byte for byte, otherwise `null` and the line says `gate`),
 `remedies` (each with the finding codes it answers, in the order they must be
-performed), and `informational` (codes that need nothing). A clone with nothing
+performed), and `informational` (codes that need nothing). Each remedy is
+`{ remedy, instruction, subcommands, findings }`: `subcommands` (`TB-074`) lists
+the Gate subcommands that perform it, in the order they are run — `["sync"]`,
+`["deactivate", "activate"]` — and is empty for a remedy the maintainer
+performs. It names subcommands only; the command prefix and the
+preview-then-`--confirm <token>` spelling are the caller's. The field is
+additive, so the document stays `change-evaluation-gate/observation/1`, and
+`gate repair --json` carries the same remedies. A clone with nothing
 to act on prints `next: nothing`, and its rendering is otherwise unchanged. The
 document also gains `observation.controlSurface` — the `observed` surface and
 the `drifted` surface names, or `null` on a clone with no receipt. No existing
@@ -240,8 +304,17 @@ the Gate tells a maintainer what to run renders through it (`TB-065`, below):
 | `gate-policy-missing`, `configuration-missing`, `repository-unresolved` | informational — nothing is enforced, and adopting the Gate is a choice |
 | `grader-surface-unversioned` (`TB-066`) | the maintainer commits it to version control, when they choose to — the Gate never stages or commits anything, and running unversioned stays allowed; named last, after any recovery |
 
+The subcommands of each remedy are recorded beside its instruction in the same
+module: `gate repair` → `repair`; `gate sync` → `sync`; the new Activation
+transaction → `deactivate`, `activate`; `gate activate` → `activate`; correcting
+the configuration, reconciling a client registration, and committing a Grader
+surface → none. A caller that renders a remedy as commands — the Framework
+command's `agent-framework setup` — reads them from the document and keeps no
+copy of its own (`SG-OWNER-001`, ADR 0004).
+
 A finding with no entry fails the unit suite, which enumerates every code
-`statusGate` can emit from its source. Deactivation leaves the `git gate` alias
+`statusGate` can emit from its source; so does a remedy with no recorded
+instruction or subcommand list. Deactivation leaves the `git gate` alias
 in place, so the pair runs through it end to end. Where a clone needs both a
 sync and a new Activation transaction, `next:` names only the pair: it re-pins
 the configuration as well, and a sync refuses a clone whose adapter set moved.
@@ -741,7 +814,12 @@ global uninstall, Evidence deletion, or status-time mutation of any kind.
   same sync, and following that command exactly lets the next commit through;
   a foreign `gate` alias is never named; every control surface and runner-pin
   reason code has a remedy entry; no module but the table names a recovery
-  inline; and repair's scope is unchanged beside configuration drift.
+  inline; and repair's scope is unchanged beside configuration drift. `TB-074`
+  adds configuration-, hook-, and runtime-drift clones whose every remedy in
+  `gate status --json` and `gate repair --json` carries its subcommands in
+  order, and an enumeration of the table in which every remedy has an
+  instruction and a subcommand list, empty exactly for the maintainer's own
+  acts.
 - `tests/gate-check-command.test.mjs` (`TB-061`) — `gate check` against real
   clones: the check outcomes and snapshot identity the preflight recorded for
   the same working tree, `not-authoritative`, and the exit status; `--staged`

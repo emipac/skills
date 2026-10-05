@@ -1,5 +1,20 @@
 # HTML Report Format
 
+## Contents
+
+- [Scaffold](#scaffold)
+- [Header](#header)
+- [Candidate card](#candidate-card)
+- [Diagram patterns](#diagram-patterns)
+  - [Mermaid graph (the workhorse for dependencies / call flow)](#mermaid-graph-the-workhorse-for-dependencies--call-flow)
+  - [Hand-built boxes-and-arrows (when Mermaid's layout fights you)](#hand-built-boxes-and-arrows-when-mermaids-layout-fights-you)
+  - [Cross-section (good for layered shallowness)](#cross-section-good-for-layered-shallowness)
+  - [Mass diagram (good for "interface as wide as implementation")](#mass-diagram-good-for-interface-as-wide-as-implementation)
+  - [Call-graph collapse](#call-graph-collapse)
+- [Style guidance](#style-guidance)
+- [Top recommendation section](#top-recommendation-section)
+- [Tone](#tone)
+
 The architectural review is rendered as a single self-contained HTML file in the OS temp directory. Tailwind and Mermaid both come from CDNs. Mermaid handles graph-shaped diagrams reliably; hand-built divs and inline SVG handle the more editorial visuals (mass diagrams, cross-sections). Mix the two — don't lean on Mermaid for everything, it'll start to look generic.
 
 ## Scaffold

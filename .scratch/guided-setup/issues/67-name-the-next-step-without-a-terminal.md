@@ -1,14 +1,14 @@
 # TB-067 — Name the next step without a terminal
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by:
 Tracker ID: 67-name-the-next-step-without-a-terminal
 Draft key: TB-067
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -96,15 +96,15 @@ the migration, and an exact next command — today the command does not exist.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-001`: for each fixture — no configuration, schema v3, schema v4
+- [x] `AC-GUIDE-001`: for each fixture — no configuration, schema v3, schema v4
   unconfigured, configured, activated and healthy, configuration drift, hook
   drift, and Gate module absent — `setup` names the state, the ordered remaining
   steps, and the next command the owning operation requires; healthy reports
   nothing to do; Gate-absent names only setup steps and says Gate steps are
   unavailable.
-- [ ] `AC-GUIDE-002`: without a terminal and with `--json`, nothing under the
+- [x] `AC-GUIDE-002`: without a terminal and with `--json`, nothing under the
   clone or `.git` changes, and the JSON document carries the same plan.
-- [ ] The installed `framework-setup` skill runs the command from where the
+- [x] The installed `framework-setup` skill runs the command from where the
   client placed it and through a link, with identical output.
 
 ## Verification Matrix

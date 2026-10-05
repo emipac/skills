@@ -1,14 +1,14 @@
 # TB-068 — Show the Gate configuration a clone runs
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: 67-name-the-next-step-without-a-terminal
 Tracker ID: 68-show-the-gate-configuration-a-clone-runs
 Draft key: TB-068
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -70,11 +70,11 @@ activation, `config show` lists that root as differing from the pinned value.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-003` (display half): configured and activated fixtures show every
+- [x] `AC-GUIDE-003` (display half): configured and activated fixtures show every
   subcontract by name; an activated fixture marks matching and differing
   pinned values; an unconfigured clone says there is no Gate section and names
   the next step from `TB-067`.
-- [ ] No secret canary value appears; nothing is written.
+- [x] No secret canary value appears; nothing is written.
 
 ## Verification Matrix
 

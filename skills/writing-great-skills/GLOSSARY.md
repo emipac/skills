@@ -1,5 +1,40 @@
 # Glossary — Building Great Skills
 
+## Contents
+
+- [Predictability](#predictability)
+- [Invocation](#invocation)
+  - [Model-Invoked](#model-invoked)
+  - [Explicitly Invoked](#explicitly-invoked)
+  - [Description](#description)
+  - [Context Pointer](#context-pointer)
+  - [Context Load](#context-load)
+  - [Cognitive Load](#cognitive-load)
+  - [Router Skill](#router-skill)
+  - [Granularity](#granularity)
+- [Information Hierarchy axis](#information-hierarchy-axis)
+  - [Information Hierarchy](#information-hierarchy)
+  - [Steps](#steps)
+  - [Reference](#reference)
+  - [External Reference](#external-reference)
+  - [Progressive Disclosure](#progressive-disclosure)
+  - [Co-location](#co-location)
+  - [Sprawl](#sprawl)
+- [Steering](#steering)
+  - [Branch](#branch)
+  - [Leading Word](#leading-word)
+  - [Completion Criterion](#completion-criterion)
+  - [Legwork](#legwork)
+  - [Post-Completion Steps](#post-completion-steps)
+  - [Premature Completion](#premature-completion)
+  - [Negation](#negation)
+- [Pruning](#pruning)
+  - [Single Source of Truth](#single-source-of-truth)
+  - [Duplication](#duplication)
+  - [Relevance](#relevance)
+  - [Sediment](#sediment)
+  - [No-Op](#no-op)
+
 The domain model for what makes a skill great. A skill exists to wrangle determinism out of a stochastic system; the root virtue is **Predictability**, and every term below is a lever on it. This is the disclosed reference for [`writing-great-skills`](SKILL.md).
 
 The terms are grouped by axis: **Invocation** (how a skill is reached), **Information Hierarchy** (how its content is arranged), **Steering** (how the agent's runtime behaviour is shaped), and **Pruning** (how it is kept lean). Each **failure mode** lives beside the lever that cures it, tagged _failure mode_.
@@ -64,7 +99,7 @@ How finely you divide skills. Finer division spends one of the two loads: more *
 
 _Avoid_: chunking, modularity
 
-## Information Hierarchy
+## Information Hierarchy axis
 
 How a skill's content is arranged, and how far down the ladder each piece sits.
 
