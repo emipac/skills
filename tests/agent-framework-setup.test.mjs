@@ -408,7 +408,10 @@ test('TB-067 AC-GUIDE-001: a schema v3 clone names the migration first and its e
   assert.deepEqual(preview.argv, ['node', CONFIGURE, '--project', root, '--migrate-v4', '--mapping', draftPath]);
   assert.deepEqual(confirm.argv, [...preview.argv, '--confirm', '<previewHash>']);
   assert.deepEqual(plan.next, { step: 'migrate-schema-v4', command: draft.run, instruction: plan.steps[0].summary });
-  assert.match(text.stdout, /^next: node .*configure\.mjs' --project .* --draft-mapping --out /m);
+  // The script path is quoted only when the checkout path needs it (a space),
+  // so the text must carry the document's next command exactly, either way.
+  assert.equal(text.stdout.split('\n').includes(`next: ${plan.next.command}`), true, text.stdout);
+  assert.match(text.stdout, /^next: node .*configure\.mjs'? --project .* --draft-mapping --out /m);
 
   const pasted = await pasteIntoShell(root, plan.next.command);
 
