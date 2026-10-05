@@ -1601,10 +1601,13 @@ Diagnostics:
   --configure-gate --policy policy.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
       <p>
         Configuration is one-shot. Running it again fails with <code>The Gate is already
-        configured</code> — to change policy afterwards, edit the <code>evaluation_gate</code>
-        block in <code>.agent-framework.yaml</code> directly, or remove it and configure again.
-        The block lands as inline JSON, one line per subcontract, which is valid YAML if not
-        especially pretty.
+        configured</code>. To add or remove a dependency root, set its provisioning, or change the
+        budget-skippable checks afterwards, use the named revisions in Section 12
+        (<code>agent-framework config add-dependency-root</code> and its siblings); to change
+        anything else, edit the <code>evaluation_gate</code> block in
+        <code>.agent-framework.yaml</code> directly, or remove it and configure again. The block
+        lands as inline JSON, one line per subcontract, which is valid YAML if not especially
+        pretty.
       </p>
 
       <details class="ref">
@@ -2098,6 +2101,38 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         </p>
       </div>
 
+      <p class="cmd-label">Add a dependency root by name — no YAML to edit</p>
+      <pre><code>agent-framework config add-dependency-root vendor --provisioning copy                    # the exact line it changes, and a token
+agent-framework config add-dependency-root vendor --provisioning copy --confirm &lt;token&gt;  # writes that line, then previews the re-pin</code></pre>
+      <p>
+        The first command writes nothing. It shows the one line of the Gate section that changes,
+        before and after, and the token for exactly that change to exactly this file:
+      </p>
+      <pre><code>preview: .agent-framework.yaml, Gate configuration section — 1 line would change; every other byte is kept:
+  line 24 (execution):
+-   execution: {"budget_skippable":[]}
++   execution: {"budget_skippable":[],"dependency_roots":["vendor"],"dependency_provisioning":{"vendor":"copy"}}</code></pre>
+      <p>
+        Confirming with that token writes exactly that line; every other byte of the file, your
+        comments included, stays as it was. A token from another preview, or from before the file
+        changed, writes nothing. The candidate is checked by the same validator
+        <code>--configure-gate</code> uses, and refused with its reason. On an activated clone the
+        confirmation then continues into <code>git gate sync</code>'s own preview for exactly that
+        candidate and prints its <code>--confirm</code> line; the re-pin is still yours to confirm.
+        The siblings work the same way: <code>remove-dependency-root &lt;root&gt;</code>,
+        <code>set-dependency-provisioning link|copy [--root &lt;root&gt;]</code>,
+        <code>add-budget-skippable &lt;check&gt;</code>, and
+        <code>remove-budget-skippable &lt;check&gt;</code>. Each also exists without the Framework
+        command, as <code>configure.mjs --revise-gate &lt;revision&gt; --root … --provisioning …
+        --check …</code>, previewed and then confirmed the same way.
+      </p>
+      <p>
+        A revision rewrites the section only when it is exactly what <code>--configure-gate</code>
+        wrote: <code>evaluation_gate:</code> and one inline-JSON line per subcontract, nothing
+        between them. A section you rewrote by hand as block YAML, or with a comment inside it, is
+        refused by line and left alone — it is never reformatted. Edit that one by hand.
+      </p>
+
       <p class="cmd-label">Re-pin the changed policy — edit, then one preview and one confirmation</p>
       <pre><code>git gate sync                            # what the policy was, what it is now, and whether it is weaker
 git gate sync --confirm &lt;token&gt;          # pins exactly that preview</code></pre>
@@ -2150,7 +2185,7 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: <code>git gate sync</code>.</td></tr>
             <tr><td>A <code>verification.commands</code> entry the Gate binds</td><td>Re-pin: the identities and the pinned runners both come from it, and sync re-pins both.</td></tr>
             <tr><td><code>evidence.sensitive_inputs</code> or <code>environment_files</code></td><td>Re-pin.</td></tr>
-            <tr><td><code>execution.dependency_roots</code> or <code>dependency_provisioning</code></td><td>Re-pin.</td></tr>
+            <tr><td><code>execution.dependency_roots</code> or <code>dependency_provisioning</code></td><td>Re-pin — <code>agent-framework config</code> continues into it for you.</td></tr>
             <tr><td>The installed Gate release</td><td><code>git gate update</code> — that one is not a re-pin.</td></tr>
             <tr><td>A Git hook someone else's tool moved</td><td><code>git gate repair</code>.</td></tr>
           </tbody>
@@ -2169,9 +2204,11 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
 
       <p>
         Configuration itself is one-shot: running <code>--configure-gate</code> a second time fails
-        with <code>The Gate is already configured</code>. After the first time you edit the
-        <code>evaluation_gate</code> block in <code>.agent-framework.yaml</code> directly, or remove
-        it with <code>git gate cleanup</code> and configure again.
+        with <code>The Gate is already configured</code>. After the first time, revise dependency
+        roots, their provisioning, and budget-skippable checks with <code>agent-framework
+        config</code>; for anything else edit the <code>evaluation_gate</code> block in
+        <code>.agent-framework.yaml</code> directly, or remove it with <code>git gate cleanup</code>
+        and configure again.
       </p>
     </section>
 
@@ -2196,12 +2233,12 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             <tr>
               <td>Tool reports "not found", or a dependency is missing</td>
               <td>The snapshot holds only what Git tracks. <code>vendor</code>, <code>node_modules</code> and generated directories are not in it.</td>
-              <td>Name the directory in <code>execution.dependency_roots</code>, then re-pin.</td>
+              <td><code>agent-framework config add-dependency-root &lt;directory&gt;</code>, then confirm the re-pin it previews.</td>
             </tr>
             <tr>
               <td>The check runs but reports nonsense — wrong project root, your own imports flagged as external, a test suite that finds no tests</td>
               <td>A tool resolved a path to its realpath, followed the link out of the snapshot, and is now describing <em>your clone</em> instead of the tree it is grading.</td>
-              <td>Declare <code>copy</code> for that one root in <code>execution.dependency_provisioning</code>, then re-pin.</td>
+              <td><code>agent-framework config set-dependency-provisioning copy --root &lt;directory&gt;</code>, then confirm the re-pin it previews.</td>
             </tr>
             <tr>
               <td>Tests fail on a missing key, token, or connection string that works in your shell</td>

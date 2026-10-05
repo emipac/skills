@@ -28,3 +28,19 @@ written. To support it, `gate status --json` gains `observation.configuration`:
 the working section and, on an activated clone, the pinned section recovered by
 the rule `gate sync` already uses, or its identity alone when no document
 reproduces it.
+
+`agent-framework config add-dependency-root`, `remove-dependency-root`,
+`set-dependency-provisioning`, `add-budget-skippable`, and
+`remove-budget-skippable` revise the Gate configuration section's `execution`
+entries by name, so nobody hand-edits those YAML keys. Without `--confirm` a
+revision writes nothing and shows each changed line of the section, before and
+after, with its token; `--confirm <token>` writes exactly that change, and only
+while the file is still the one previewed. The candidate is judged by the Gate
+policy validator `--configure-gate` already uses, and refused with its reason.
+Every byte outside the section is kept, comments included, and a section that
+is not exactly what `--configure-gate` writes — a hand-written block section,
+say — is refused by line rather than reformatted. On an activated clone the
+confirmation continues into the Gate's own `gate sync` preview for exactly the
+written candidate and prints its confirmation; it never confirms the re-pin.
+The same operation runs directly as `configure.mjs --revise-gate <revision>`,
+and both write the same file.

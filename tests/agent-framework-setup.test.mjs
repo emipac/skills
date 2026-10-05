@@ -20,8 +20,13 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { validateGatePolicy } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 import { REMEDIES } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
-import { configureProject } from '../skills/framework-setup/scripts/configure.mjs';
+import {
+  configureGate,
+  configureProject,
+  previewGateConfiguration,
+} from '../skills/framework-setup/scripts/configure.mjs';
 
 /**
  * `agent-framework setup` without a terminal (`TB-067`).
@@ -303,10 +308,15 @@ const gateJson = async (root, argv, env = environment()) => {
  * fixture that needs more than the configuration (an ignored environment
  * file, say).
  */
-const activatedClone = async (t, { prepare = async () => {}, env, ...options } = {}) => {
+const activatedClone = async (t, { prepare = async () => {}, env, policy = null, ...options } = {}) => {
   const root = await throwawayRepository(t);
 
-  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration(options), 'utf8');
+  if (policy === null) {
+    await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration(options), 'utf8');
+  } else {
+    await configuredThroughConfigureGate(root, policy, options);
+  }
+
   await prepare(root);
   await commit(root);
 
@@ -316,6 +326,21 @@ const activatedClone = async (t, { prepare = async () => {}, env, ...options } =
   assert.equal(confirmed.mutation.performed, true, `The fixture failed to activate: ${confirmed.mutation.reasonCode}.`);
 
   return root;
+};
+
+/**
+ * The Gate section exactly as `configure-gate` writes it: the schema v4
+ * configuration without its section, then `framework-setup`'s own previewed
+ * and confirmed Gate configuration with `policy` (`TB-069`). The hand-written
+ * block section `schemaV4Configuration` writes is what a maintainer's edit
+ * looks like; this is what the owning writer produces.
+ */
+const configuredThroughConfigureGate = async (root, policy, { configuration = schemaV4Configuration({ gate: false }) } = {}) => {
+  await writeFile(path.join(root, '.agent-framework.yaml'), configuration, 'utf8');
+
+  const preview = await previewGateConfiguration({ projectRoot: root, policy });
+
+  await configureGate({ projectRoot: root, policy, confirmation: preview.previewHash });
 };
 
 /** `framework-setup` installed on its own, as a client places one skill directory. */
@@ -1122,4 +1147,461 @@ test('TB-068 SG-GUIDE-002: no secret canary from the environment or a declared e
   assert.match(text.stdout, /^ {2}- MAIL_PASSWORD: from \.env$/m);
   assert.match(text.stdout, /^ {2}- NOT_SET_ANYWHERE: unresolved — no source sets it$/m);
   assert.match(text.stdout, /^ {2}environment file \.env: read$/m);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-069: `agent-framework config <revision>` — the execution revisions.
+ *
+ * `framework-setup`'s previewed, hash-bound revision of the Gate configuration
+ * section, driven by the Framework command as a child process: the preview
+ * names the exact lines that change and writes nothing, the token of that
+ * preview is the only thing that writes, every byte outside the section is
+ * kept, and on an activated clone the confirmed revision continues into the
+ * Gate's own re-pin preview for exactly that candidate (`FR-GUIDE-006`,
+ * `AC-GUIDE-003`, `NFR-REL-004`, `SG-GUIDE-001`, `RISK-012`).
+ * ------------------------------------------------------------------------- */
+
+/** The policy the configured fixtures hold, as `configure-gate` wrote it. */
+const CONFIGURED_POLICY = Object.freeze({
+  checks: { required: ['configuration.broad-tests.test'], advisory: [] },
+  budget: { total_seconds: 600 },
+  bypass: { enabled: false, marker: null },
+  execution: { budget_skippable: [] },
+  evidence: {},
+});
+
+/** A clone whose Gate section `configure-gate` wrote, committed and never activated. */
+const configuredClone = async (t, { policy = CONFIGURED_POLICY, configuration } = {}) => {
+  const root = await throwawayRepository(t);
+
+  await configuredThroughConfigureGate(root, policy, configuration === undefined ? {} : { configuration });
+  await commit(root);
+
+  return root;
+};
+
+const configurationOf = (root) => readFile(path.join(root, '.agent-framework.yaml'), 'utf8');
+
+/** The `  <subcontract>: <JSON>` line `configure-gate` writes for one value. */
+const sectionLine = (subcontract, value) => `  ${subcontract}: ${JSON.stringify(value)}`;
+
+/**
+ * THE FIRST RED TEST OF TB-069.
+ *
+ * Adding `vendor`, copied rather than linked, to a configured clone previews
+ * exactly one changed line of the Gate section — the `execution` line, before
+ * and after — and offers that preview's token, writing nothing; before this
+ * slice no command revised a configured section at all (`AC-GUIDE-003`).
+ */
+test('TB-069 AC-GUIDE-003: adding vendor with copy previews exactly one changed line of the Gate section and offers a token', async (t) => {
+  const root = await configuredClone(t);
+  const before = await cloneHash(root);
+  const original = await configurationOf(root);
+  const argv = ['config', 'add-dependency-root', 'vendor', '--provisioning', 'copy'];
+  const text = await agentFramework(root, argv);
+  const json = await agentFramework(root, [...argv, '--json']);
+  const again = await agentFramework(root, [...argv, '--json']);
+  const revision = json.document;
+  const lines = original.split('\n');
+  const executionLine = lines.indexOf(sectionLine('execution', CONFIGURED_POLICY.execution)) + 1;
+
+  assert.equal(await cloneHash(root), before, 'a revision preview changed a byte under the clone or .git.');
+  assert.equal(json.stderr, '', json.stderr);
+  assert.equal(again.stdout, json.stdout, 'a repeated preview printed a different document.');
+  assert.equal(json.status, 1);
+  assert.equal(text.status, 1);
+  assert.equal(revision.document, 'agent-framework/config-revision/1');
+  assert.equal(revision.command, 'config add-dependency-root');
+  assert.equal(revision.applied, false);
+  assert.equal(revision.failure, null);
+  assert.deepEqual(revision.revision, { operation: 'add-dependency-root', root: 'vendor', provisioning: 'copy' });
+  assert.deepEqual(revision.changes, [{
+    subcontract: 'execution',
+    line: executionLine,
+    before: sectionLine('execution', { budget_skippable: [] }),
+    after: sectionLine('execution', {
+      budget_skippable: [],
+      dependency_roots: ['vendor'],
+      dependency_provisioning: { vendor: 'copy' },
+    }),
+  }]);
+  assert.match(revision.previewHash, /^[0-9a-f]{64}$/);
+  assert.equal(revision.state, 'configured');
+  assert.equal(revision.repin, null);
+  assert.ok(revision.next.command.endsWith(`--confirm ${revision.previewHash}`), revision.next.command);
+
+  // The text names the same change, line for line, and the same next command.
+  assert.ok(text.stdout.includes(`- ${revision.changes[0].before}\n+ ${revision.changes[0].after}\n`), text.stdout);
+  assert.ok(text.stdout.split('\n').includes(`next: ${revision.next.command}`), text.stdout);
+});
+
+/**
+ * Preview one revision through the Framework command, then confirm it with
+ * the token that preview printed, each as its own child process. Returns both
+ * documents and the configuration before and after.
+ */
+const reviseThroughFramework = async (root, argv, options = {}) => {
+  const original = await configurationOf(root);
+  const preview = await agentFramework(root, ['config', ...argv, '--json'], options);
+
+  assert.equal(preview.document.failure, null, JSON.stringify(preview.document.failure));
+  assert.equal(await configurationOf(root), original, 'a revision preview wrote the configuration.');
+
+  const confirmed = await agentFramework(root, ['config', ...argv, '--confirm', preview.document.previewHash, '--json'], options);
+
+  assert.equal(confirmed.document.failure, null, JSON.stringify(confirmed.document.failure));
+
+  return { original, preview: preview.document, confirmed: confirmed.document, revised: await configurationOf(root) };
+};
+
+/** The single line two texts differ by, as `{ index, before, after }`, asserting there is exactly one. */
+const onlyChangedLine = (before, after) => {
+  const left = before.split('\n');
+  const right = after.split('\n');
+
+  assert.equal(right.length, left.length, 'a revision added or removed lines.');
+
+  const changed = left.flatMap((line, index) => (line === right[index] ? [] : [{ index, before: line, after: right[index] }]));
+
+  assert.equal(changed.length, 1, `expected exactly one changed line, found ${JSON.stringify(changed)}.`);
+
+  return changed[0];
+};
+
+test('TB-069 AC-GUIDE-003 / SG-GUIDE-001: only the preview\'s token writes, exactly the previewed line, on a configured clone with nothing to re-pin', async (t) => {
+  const root = await configuredClone(t);
+  const agents = await readFile(path.join(root, 'AGENTS.md'));
+  const argv = ['config', 'add-dependency-root', 'vendor', '--provisioning', 'copy'];
+  const preview = await agentFramework(root, [...argv, '--json']);
+  const original = await configurationOf(root);
+
+  // The confirming command is the one the preview printed, pasted as is.
+  const confirmed = await pasteIntoShell(root, `${preview.document.next.command} --json`);
+  const document = JSON.parse(confirmed.stdout);
+  const revised = await configurationOf(root);
+  const changed = onlyChangedLine(original, revised);
+
+  assert.equal(confirmed.status, 0, confirmed.stderr);
+  assert.equal(document.applied, true);
+  assert.equal(document.state, 'configured');
+  assert.equal(document.repin, null);
+  assert.equal(document.next, null);
+  assert.deepEqual(document.changes, preview.document.changes);
+  assert.equal(changed.index + 1, preview.document.changes[0].line);
+  assert.equal(changed.before, preview.document.changes[0].before);
+  assert.equal(changed.after, preview.document.changes[0].after);
+  assert.deepEqual(await readFile(path.join(root, 'AGENTS.md')), agents, 'a revision changed AGENTS.md.');
+  assert.deepEqual(
+    (await readdir(root)).filter((entry) => entry.startsWith('.agent-framework.yaml.')),
+    [],
+    'a revision left a temporary file behind.',
+  );
+
+  // The same revision again changes nothing and says so; the file stays put.
+  const repeated = await agentFramework(root, [...argv, '--json']);
+
+  assert.equal(repeated.status, 2);
+  assert.equal(repeated.document.failure.reasonCode, 'nothing-to-revise');
+  assert.match(repeated.document.failure.detail, /dependency root vendor is already declared/);
+  assert.equal(await configurationOf(root), revised);
+});
+
+test('TB-069 AC-GUIDE-003: add and remove a root, set its provisioning single and per root, and change budget-skippable checks', async (t) => {
+  const root = await configuredClone(t, {
+    policy: {
+      ...CONFIGURED_POLICY,
+      checks: { required: ['configuration.broad-tests.test'], advisory: ['configuration.static-analysis.lint'] },
+    },
+  });
+  const steps = [
+    [['add-dependency-root', 'vendor'], { budget_skippable: [], dependency_roots: ['vendor'] }],
+    [['add-dependency-root', 'node_modules', '--provisioning', 'copy'], {
+      budget_skippable: [], dependency_roots: ['vendor', 'node_modules'], dependency_provisioning: { node_modules: 'copy' },
+    }],
+    [['set-dependency-provisioning', 'copy'], {
+      budget_skippable: [], dependency_roots: ['vendor', 'node_modules'], dependency_provisioning: 'copy',
+    }],
+    // One root moves; every other keeps the single strategy it had.
+    [['set-dependency-provisioning', 'link', '--root', 'vendor'], {
+      budget_skippable: [], dependency_roots: ['vendor', 'node_modules'], dependency_provisioning: { vendor: 'link', node_modules: 'copy' },
+    }],
+    [['remove-dependency-root', 'vendor'], {
+      budget_skippable: [], dependency_roots: ['node_modules'], dependency_provisioning: { node_modules: 'copy' },
+    }],
+    // A map that names only the removed root leaves with it.
+    [['remove-dependency-root', 'node_modules'], { budget_skippable: [], dependency_roots: [] }],
+    [['add-budget-skippable', 'configuration.static-analysis.lint'], {
+      budget_skippable: ['configuration.static-analysis.lint'], dependency_roots: [],
+    }],
+    [['remove-budget-skippable', 'configuration.static-analysis.lint'], { budget_skippable: [], dependency_roots: [] }],
+  ];
+
+  for (const [argv, execution] of steps) {
+    const { original, preview, confirmed, revised } = await reviseThroughFramework(root, argv);
+    const changed = onlyChangedLine(original, revised);
+
+    assert.equal(changed.after, sectionLine('execution', execution), `${argv.join(' ')} wrote ${changed.after}.`);
+    assert.deepEqual(preview.changes, [{ subcontract: 'execution', line: changed.index + 1, before: changed.before, after: changed.after }]);
+    assert.equal(confirmed.applied, true);
+    assert.equal(confirmed.exitStatus, 0);
+  }
+});
+
+/**
+ * The candidate is judged by the Gate policy validator `configure-gate` loads,
+ * and only by it: each refusal carries that validator's own path and message,
+ * computed here from the same validator over the same candidate.
+ */
+test('TB-069 AC-GUIDE-003: an invalid candidate is refused with the Gate policy validator\'s own reason and nothing is written', async (t) => {
+  const root = await configuredClone(t);
+  const before = await cloneHash(root);
+  const execution = CONFIGURED_POLICY.execution;
+  const cases = [
+    [['add-dependency-root', '../outside'], { ...execution, dependency_roots: ['../outside'] }],
+    [['add-budget-skippable', 'configuration.broad-tests.test'], { ...execution, budget_skippable: ['configuration.broad-tests.test'] }],
+    [['add-dependency-root', 'vendor', '--provisioning', 'symlink'], {
+      ...execution, dependency_roots: ['vendor'], dependency_provisioning: { vendor: 'symlink' },
+    }],
+    [['set-dependency-provisioning', 'copy', '--root', 'undeclared'], { ...execution, dependency_provisioning: { undeclared: 'copy' } }],
+  ];
+
+  for (const [argv, candidate] of cases) {
+    const issues = validateGatePolicy({ ...CONFIGURED_POLICY, execution: candidate });
+    const refused = await agentFramework(root, ['config', ...argv, '--json']);
+
+    assert.ok(issues.length > 0, `the validator accepts ${JSON.stringify(candidate)}.`);
+    assert.equal(refused.status, 2, argv.join(' '));
+    assert.equal(refused.document.failure.reasonCode, 'candidate-invalid');
+    assert.equal(refused.document.applied, false);
+    assert.equal(refused.document.next, null);
+
+    for (const issue of issues) {
+      assert.ok(refused.document.failure.detail.includes(`${issue.path}: ${issue.message}`), refused.document.failure.detail);
+    }
+  }
+
+  assert.equal(await cloneHash(root), before);
+});
+
+/**
+ * `RISK-012`. A configuration a maintainer annotated around the section —
+ * above it, between it and the next key, in a key's trailing comment, and at
+ * the end of the file — keeps every one of those bytes: the file before the
+ * section and the file after it are identical before and after the revision.
+ */
+test('TB-069 RISK-012: every byte outside the Gate section, maintainer comments included, is identical after a revision', async (t) => {
+  const commented = [
+    '# Maintainer notes: this file is reviewed with every release.',
+    schemaV4Configuration({ gate: false }).trimEnd(),
+    '# The Gate section below is written by configure-gate.',
+    'history:',
+    '  path: docs/history   # where delivered work is recorded',
+    '  required: false',
+    '# end of configuration',
+    '',
+  ].join('\n');
+  const root = await throwawayRepository(t);
+
+  await configuredThroughConfigureGate(root, CONFIGURED_POLICY, { configuration: commented });
+  // A comment between the section and the key after it, as a maintainer adds one.
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    (await configurationOf(root)).replace('\nhistory:\n', '\n# The Gate section above is ours to revise.\nhistory:\n'),
+    'utf8',
+  );
+  await commit(root);
+
+  const { original, preview, revised } = await reviseThroughFramework(root, ['add-dependency-root', 'vendor', '--provisioning', 'copy']);
+  const sectionStart = original.indexOf('evaluation_gate:\n');
+  const sectionEnd = original.indexOf('\n# The Gate section above');
+  const revisedEnd = revised.indexOf('\n# The Gate section above');
+
+  assert.ok(original.includes('# The Gate section below is written by configure-gate.\nevaluation_gate:\n'), original);
+  assert.equal(revised.slice(0, sectionStart), original.slice(0, sectionStart), 'a byte before the Gate section changed.');
+  assert.equal(revised.slice(revisedEnd), original.slice(sectionEnd), 'a byte after the Gate section changed.');
+  assert.deepEqual(
+    original.slice(sectionStart, sectionEnd).split('\n').filter((line, index) => line !== revised.slice(sectionStart, revisedEnd).split('\n')[index]),
+    [preview.changes[0].before],
+  );
+  onlyChangedLine(original, revised);
+});
+
+/**
+ * A section the writer cannot round-trip is refused by name, with nothing
+ * written: the hand-written block section the earlier fixtures use, a comment
+ * inside a configure-gate section, flow JSON spelled another way, a section
+ * declared twice, and a clone with no section at all.
+ */
+test('TB-069 RISK-012: a section the writer cannot locate unambiguously or round-trip is refused and nothing is written', async (t) => {
+  const blockSection = await schemaV4Clone(t);
+  const blockBefore = await cloneHash(blockSection);
+  const block = await agentFramework(blockSection, ['config', 'add-dependency-root', 'vendor', '--json']);
+  const blockLine = (await configurationOf(blockSection)).split('\n').indexOf('  checks:') + 1;
+
+  assert.equal(block.status, 2);
+  assert.equal(block.document.failure.reasonCode, 'section-unrevisable');
+  assert.match(block.document.failure.detail, new RegExp(`^\\.agent-framework\\.yaml line ${blockLine} is not the \`  checks: <JSON>\` line\\.`));
+  assert.match(block.document.failure.detail, /never changes how a section is written\. Nothing was written; edit the section by hand\.$/);
+  assert.deepEqual(block.document.changes, []);
+  assert.equal(block.document.previewHash, null);
+  assert.equal(await cloneHash(blockSection), blockBefore);
+
+  const edits = [
+    ['a comment inside the section', (contents) => contents.replace('\n  budget: ', '\n  # tuned by hand\n  budget: '), 'section-unrevisable'],
+    ['flow JSON spelled with spaces', (contents) => contents.replace('{"total_seconds":600}', '{ "total_seconds": 600 }'), 'section-unrevisable'],
+    ['a section declared twice', (contents) => `${contents}evaluation_gate:\n  checks: {}\n`, 'section-ambiguous'],
+  ];
+
+  for (const [name, edit, reasonCode] of edits) {
+    const root = await configuredClone(t);
+
+    await writeFile(path.join(root, '.agent-framework.yaml'), edit(await configurationOf(root)), 'utf8');
+
+    const before = await cloneHash(root);
+    const refused = await agentFramework(root, ['config', 'add-dependency-root', 'vendor', '--json']);
+
+    assert.equal(refused.status, 2, name);
+    assert.equal(refused.document.failure.reasonCode, reasonCode, `${name}: ${refused.document.failure.detail}`);
+    assert.match(refused.document.failure.detail, /Nothing was written/, name);
+    assert.equal(await cloneHash(root), before, `${name}: a refused revision changed a byte.`);
+  }
+
+  const unconfigured = await schemaV4Clone(t, { gate: false });
+  const missing = await agentFramework(unconfigured, ['config', 'add-dependency-root', 'vendor', '--json']);
+
+  assert.equal(missing.document.failure.reasonCode, 'gate-unconfigured');
+});
+
+test('TB-069 SG-GUIDE-001: a stale or foreign token writes nothing, and neither does a file changed after its preview', async (t) => {
+  const root = await configuredClone(t);
+  const argv = ['config', 'add-dependency-root', 'vendor', '--provisioning', 'copy'];
+  const preview = await agentFramework(root, [...argv, '--json']);
+  const before = await cloneHash(root);
+  const foreign = await agentFramework(root, [...argv, '--confirm', 'f'.repeat(64), '--json']);
+  const otherRevision = await agentFramework(root, ['config', 'add-dependency-root', 'vendor', '--confirm', preview.document.previewHash, '--json']);
+
+  for (const refused of [foreign, otherRevision]) {
+    assert.equal(refused.status, 2);
+    assert.equal(refused.document.failure.reasonCode, 'preview-mismatch');
+    assert.equal(refused.document.applied, false);
+  }
+
+  assert.equal(await cloneHash(root), before);
+
+  // A byte outside the section moves between the preview and its confirmation.
+  const edited = `${await configurationOf(root)}# edited after the preview\n`;
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), edited, 'utf8');
+
+  const stale = await agentFramework(root, [...argv, '--confirm', preview.document.previewHash, '--json']);
+
+  assert.equal(stale.status, 2);
+  assert.equal(stale.document.failure.reasonCode, 'preview-mismatch');
+  assert.equal(await configurationOf(root), edited, 'a stale token wrote the configuration.');
+});
+
+/**
+ * `AC-GUIDE-003`, `SG-CFG-001`. On an activated clone the confirmed revision
+ * continues into the Gate's re-pin preview for exactly the candidate written —
+ * the identity the Gate reads from the file — and that preview is the one a
+ * direct `gate sync --json` gives, weakenings and token included. Nothing is
+ * re-pinned: the receipt pins what it pinned before.
+ */
+test('TB-069 AC-GUIDE-003: on an activated clone a confirmed revision continues into the Gate\'s re-pin preview for exactly that candidate', async (t) => {
+  const root = await activatedClone(t, { policy: CONFIGURED_POLICY });
+  const pinnedBefore = (await gateJson(root, ['status'])).observation.configuration.pinned;
+  const argv = ['add-dependency-root', 'vendor', '--provisioning', 'copy'];
+  const previewText = await agentFramework(root, ['config', ...argv]);
+
+  assert.match(previewText.stdout, /^state: activated — confirming continues into the Gate's preview of the re-pin/m);
+
+  const { preview, confirmed } = await reviseThroughFramework(root, argv);
+  const status = await gateJson(root, ['status']);
+  const direct = await gateJson(root, ['sync']);
+  const confirmedText = await agentFramework(root, ['config', ...argv]);
+
+  assert.equal(preview.state, 'activated');
+  assert.equal(preview.repin, null);
+  assert.equal(confirmed.applied, true);
+  assert.equal(confirmed.exitStatus, 1);
+  assert.equal(confirmed.repin.subcommand, 'sync');
+  assert.equal(confirmed.repin.candidate.identity, status.observation.configuration.working.identity);
+  assert.deepEqual(status.observation.configuration.working.policy.execution, {
+    budget_skippable: [], dependency_roots: ['vendor'], dependency_provisioning: { vendor: 'copy' },
+  });
+
+  for (const field of ['trusted', 'candidate', 'transition', 'acknowledgedWeakening', 'dependencyRoots', 'dependencyProvisioning', 'refusal', 'confirmationToken']) {
+    assert.deepEqual(confirmed.repin[field], direct.observation[field], `the chained preview's ${field} is not the direct gate sync's.`);
+  }
+
+  assert.match(confirmed.repin.confirmationToken, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(confirmed.repin.transition.weakenings, []);
+  assert.deepEqual(confirmed.repin.dependencyRoots, ['vendor']);
+  assert.ok(confirmed.next.command.endsWith(` sync --confirm ${confirmed.repin.confirmationToken}`), confirmed.next.command);
+  assert.equal(confirmed.next.command, confirmed.repin.commands[0].run);
+
+  // Nothing was re-pinned: the receipt pins what it pinned before the revision.
+  assert.deepEqual(status.observation.configuration.pinned.identity, pinnedBefore.identity);
+  assert.notEqual(status.observation.configuration.working.identity, pinnedBefore.identity);
+
+  // Asking again previews the same revision as already made.
+  assert.equal(confirmedText.status, 2);
+  assert.match(confirmedText.stdout, /^failed: nothing-to-revise — /m);
+});
+
+/**
+ * `NFR-REL-004`. Twin clones revised the same way — one through the Framework
+ * command, one through `configure.mjs --revise-gate`, each previewed and then
+ * confirmed with its own token — hold byte-identical files, and that file is
+ * the one `configure-gate` writes when given the revised policy directly.
+ */
+test('TB-069 NFR-REL-004: the Framework command, the direct revision command, and configure-gate write the same file', async (t) => {
+  const throughFramework = await configuredClone(t);
+  const direct = await configuredClone(t);
+  const fresh = await throwawayRepository(t);
+
+  assert.equal(await configurationOf(direct), await configurationOf(throughFramework));
+
+  const { confirmed } = await reviseThroughFramework(throughFramework, ['add-dependency-root', 'vendor', '--provisioning', 'copy']);
+  const configureArgv = ['--project', direct, '--revise-gate', 'add-dependency-root', '--root', 'vendor', '--provisioning', 'copy'];
+  const directPreview = JSON.parse((await run(process.execPath, [CONFIGURE, ...configureArgv], { cwd: direct })).stdout);
+  const directConfirmed = await run(process.execPath, [CONFIGURE, ...configureArgv, '--confirm', directPreview.previewHash], { cwd: direct });
+
+  assert.equal(directConfirmed.status, 0, directConfirmed.stderr);
+  assert.equal(JSON.parse(directConfirmed.stdout).status, 'revised');
+  assert.equal(directPreview.previewHash, confirmed.previewHash);
+  assert.equal(await configurationOf(direct), await configurationOf(throughFramework));
+
+  await configuredThroughConfigureGate(fresh, {
+    ...CONFIGURED_POLICY,
+    execution: { budget_skippable: [], dependency_roots: ['vendor'], dependency_provisioning: { vendor: 'copy' } },
+  });
+
+  assert.equal(await configurationOf(fresh), await configurationOf(throughFramework));
+});
+
+test('TB-069: every named revision is in the usage, and a malformed revision is refused with exit 2 and the usage', async (t) => {
+  const root = await configuredClone(t);
+  const before = await cloneHash(root);
+
+  for (const argv of [
+    ['config', 'add-dependency-root'],
+    ['config', 'add-dependency-root', 'vendor', 'node_modules'],
+    ['config', 'add-dependency-root', 'vendor', '--root', 'x'],
+    ['config', 'remove-dependency-root', 'vendor', '--provisioning', 'copy'],
+    ['config', 'add-budget-skippable', 'x', '--confirm'],
+    ['config', 'set-allowed-environment', 'PATH'],
+  ]) {
+    const result = await agentFramework(root, argv);
+
+    assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}.`);
+    assert.equal(result.stdout, '');
+
+    for (const name of ['add-dependency-root', 'remove-dependency-root', 'set-dependency-provisioning', 'add-budget-skippable', 'remove-budget-skippable']) {
+      assert.match(result.stderr, new RegExp(`agent-framework config ${name} <`));
+    }
+  }
+
+  assert.match((await agentFramework(root, ['config', 'bogus'])).stderr, /\[--provisioning <provisioning>\] \[--confirm <token>\]/);
+  assert.equal(await cloneHash(root), before);
 });

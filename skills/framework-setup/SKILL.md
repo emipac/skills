@@ -68,6 +68,58 @@ the Gate module. Exit status is `0` when nothing differs, `1` when there is no
 Gate section, it does not resolve, or a value differs, and `2` when it could not
 run.
 
+## Revising the Gate section by name: `agent-framework config <revision>`
+
+To add or remove a dependency root, set how roots are provided, or change the
+budget-skippable checks, never edit the YAML keys: name the revision.
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs config add-dependency-root <root> [--provisioning link|copy] [--confirm <token>] [--json] [--project <directory>]
+node <skill-directory>/scripts/agent-framework.mjs config remove-dependency-root <root> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config set-dependency-provisioning <link|copy> [--root <root>] [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config add-budget-skippable <check> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config remove-budget-skippable <check> [--confirm <token>] ...
+```
+
+Without `--confirm` it writes nothing: it shows each line of the Gate section
+the revision changes, before and after, its `previewHash`, and the exact
+confirming command. `--confirm <previewHash>` writes exactly that change, and
+only while the file is still the one previewed. The candidate is judged by the
+same Gate policy validator `--configure-gate` loads and refused with its own
+reason. Provisioning is set as a single strategy or, with `--root`, per root:
+a single strategy that differs becomes a map in which every other root keeps
+the strategy it had, and removing a root removes its map entry. A revision
+that would change nothing is refused (`nothing-to-revise`).
+
+Every byte outside the section — comments and formatting included — is kept.
+The section itself is rewritten only when it round-trips: it is exactly what
+`--configure-gate` writes (`evaluation_gate:` and then one flow-JSON line per
+subcontract, `checks`, `budget`, `bypass`, `execution`, `evidence`, nothing
+between them), so re-rendering the candidate the same way changes only the
+revised line. A hand-written block section, a comment or blank line inside the
+section, differently spelled JSON, or a section declared twice is refused by
+line with nothing written (`section-unrevisable`, `section-ambiguous`); edit
+that one by hand.
+
+On an activated clone a confirmed revision continues into the Gate's own
+preview of the re-pin `gate status` names for the changed configuration
+(`gate sync --json`), checks it is for exactly the candidate written, and
+prints its trusted and candidate identities, any weakening, any refusal, and
+its own `--confirm` line. It never confirms that re-pin. A configured clone
+that is not activated has nothing to re-pin. `allowed_environment` and
+Verification profile commands are never revisable here.
+
+The same operation runs without the Framework command:
+
+```bash
+node <skill-directory>/scripts/configure.mjs --project "$PWD" \
+  --revise-gate add-dependency-root --root vendor --provisioning copy [--confirm <preview-hash>]
+```
+
+(`--check <id>` for the budget-skippable revisions.) Both write the same file.
+Exit status is `0` when the revision is written and nothing follows, `1` when a
+confirmation or a re-pin remains, and `2` when it was refused.
+
 ## Process
 
 ### 1. Discover
@@ -271,7 +323,9 @@ node <skill-directory>/scripts/configure.mjs \
 The transaction rejects schema v3, stale confirmation, missing or extra
 subcontracts, command ownership, and activation state. It writes only
 `.agent-framework.yaml`, atomically, and reports `activated: false`. It never
-creates a hook, receipt, trust decision, or evidence runtime.
+creates a hook, receipt, trust decision, or evidence runtime. It configures
+once: a clone already configured is refused, and its execution entries are
+revised by name instead (`agent-framework config <revision>`, above).
 
 Completion criterion: the result reports `configured`, the exact preview was
 installed, and commit behavior remains unchanged.

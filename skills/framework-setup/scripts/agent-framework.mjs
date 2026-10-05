@@ -35,13 +35,31 @@
  * with the source `gate doctor --json` resolves them from, never a value
  * (`SG-GUIDE-002`). A clone with no Gate section names setup's next step.
  *
+ * `config <revision>` revises the Gate configuration section by one named
+ * revision (`FR-GUIDE-006`, `TB-069`) — `add-dependency-root`,
+ * `remove-dependency-root`, `set-dependency-provisioning`,
+ * `add-budget-skippable`, `remove-budget-skippable`, as `framework-setup`'s
+ * `gateRevisions` table names them. It only drives `framework-setup`'s own
+ * revision operation (ADR 0004): without `--confirm` it shows that operation's
+ * preview — the exact lines that change, before and after — and the exact
+ * command that confirms it; with `--confirm <token>` it passes that token, and
+ * nothing else, to the operation, which writes only when the token is the
+ * preview's own. It never confirms on anyone's behalf and never prompts. On an
+ * activated clone a confirmed revision continues into the Gate's own preview
+ * of the re-pin `gate status` names for the changed configuration, run as the
+ * Gate's command with `--json`, for exactly the candidate written; that
+ * preview's token is the Gate's to confirm, never this command's.
+ *
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]
  *   agent-framework config show [--json] [--project <directory>]
+ *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
- * value that differs from the pinned one), `2` the command could not run.
+ * value that differs from the pinned one; for a revision: its confirmation, or
+ * the re-pin it continued into), `2` the command could not run or the revision
+ * was refused.
  */
 
 import { createHash } from 'node:crypto';
@@ -55,8 +73,11 @@ import {
   discoverProject,
   draftGatePolicy,
   gatePolicyKeys,
+  gateRevisions,
   previewConfigurationMigration,
   previewGateConfiguration,
+  previewGateRevision,
+  reviseGate,
 } from './configure.mjs';
 import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 import { locateGateCommand, runGateCommand } from './lib/gate-command.mjs';
@@ -67,6 +88,9 @@ export const DOCUMENT_VERSION = 'agent-framework/setup/1';
 /** The `config show` document, versioned the same way. */
 export const CONFIG_DOCUMENT_VERSION = 'agent-framework/config-show/1';
 
+/** The `config <revision>` document, versioned the same way. */
+export const REVISION_DOCUMENT_VERSION = 'agent-framework/config-revision/1';
+
 export const EXIT_DONE = 0;
 
 export const EXIT_STEPS_REMAIN = 1;
@@ -76,9 +100,16 @@ export const EXIT_UNRUNNABLE = 2;
 const USAGE = [
   'usage: agent-framework setup [--json] [--project <directory>]',
   '       agent-framework config show [--json] [--project <directory>]',
+  ...Object.entries(gateRevisions).map(([name, { argument, options }]) => [
+    `       agent-framework config ${name} <${argument}>`,
+    ...options.map((option) => `[--${option} <${option}>]`),
+    '[--confirm <token>] [--json] [--project <directory>]',
+  ].join(' ')),
 ].join('\n');
 
-const CONFIGURE_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'configure.mjs');
+const ENTRY_SCRIPT = fileURLToPath(import.meta.url);
+
+const CONFIGURE_SCRIPT = path.join(path.dirname(ENTRY_SCRIPT), 'configure.mjs');
 
 /** The steps the Gate module performs, named when it is absent (`FR-GUIDE-009`). */
 const GATE_STEPS = Object.freeze(['configure-gate', 'doctor', 'activate']);
@@ -86,6 +117,16 @@ const GATE_STEPS = Object.freeze(['configure-gate', 'doctor', 'activate']);
 const LIMIT = 'setup wrote nothing, confirmed nothing, and registered nothing; each step is performed only by the command it names, which previews first where it writes.';
 
 const CONFIG_LIMIT = 'config show wrote nothing and changed nothing; a Sensitive runtime input is shown by name and the source it resolves from, never by value.';
+
+const REVISION_LIMIT = 'a config revision writes only the Gate configuration section of .agent-framework.yaml, only with the token of the preview that showed the change, and keeps every other byte; it confirms no re-pin — the Gate confirms its own preview with its own token.';
+
+/**
+ * The finding a revised configuration raises on an activated clone: the
+ * section no longer reproduces what the Activation receipt pinned. The remedy
+ * `gate status` names for it is the re-pin a confirmed revision continues
+ * into; which subcommand performs it is the Gate's to say (`TB-074`).
+ */
+const CONFIGURATION_DRIFT = 'control-surface-drift:trusted-configuration';
 
 /**
  * Characters a POSIX shell passes through unchanged outside quotes; anything
@@ -397,26 +438,46 @@ const planSetup = async ({ projectRoot, environment, status = null }) => {
 
 const parseArguments = (argv) => {
   const [first, second] = argv;
-  const subcommand = first === 'config' && second === 'show' ? 'config show' : first;
-  const rest = argv.slice(subcommand === 'config show' ? 2 : 1);
-  const options = { subcommand, json: false, project: null };
+  const revision = first === 'config' && Object.hasOwn(gateRevisions, second ?? '') ? gateRevisions[second] : null;
+  const subcommand = first === 'config' && (second === 'show' || revision !== null) ? `config ${second}` : first;
 
-  if (subcommand !== 'setup' && subcommand !== 'config show') {
+  if (subcommand !== 'setup' && subcommand !== 'config show' && revision === null) {
     return null;
   }
 
+  const rest = argv.slice(subcommand === 'setup' ? 1 : 2);
+  const options = { subcommand, json: false, project: null, revision: null, confirmation: null };
+  const valued = new Set(['--project', ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)])]);
+
+  if (revision !== null) {
+    options.revision = { operation: second };
+  }
+
   for (let index = 0; index < rest.length; index += 1) {
-    if (rest[index] === '--json') {
+    const argument = rest[index];
+
+    if (argument === '--json') {
       options.json = true;
-    } else if (rest[index] === '--project' && rest[index + 1] !== undefined) {
-      options.project = rest[index + 1];
+    } else if (valued.has(argument) && rest[index + 1] !== undefined) {
+      const value = rest[index + 1];
+
+      if (argument === '--project') {
+        options.project = value;
+      } else if (argument === '--confirm') {
+        options.confirmation = value;
+      } else {
+        options.revision[argument.slice(2)] = value;
+      }
+
       index += 1;
+    } else if (revision !== null && !argument.startsWith('--') && options.revision[revision.argument] === undefined) {
+      options.revision[revision.argument] = argument;
     } else {
       return null;
     }
   }
 
-  return options;
+  return revision !== null && options.revision[revision.argument] === undefined ? null : options;
 };
 
 const render = (document) => {
@@ -836,6 +897,280 @@ const runSetup = async ({ projectRoot, environment }) => {
 };
 
 /**
+ * The Framework command that previews or confirms one revision, as a
+ * maintainer types it: the operation, its value, its options, and the token
+ * when confirming.
+ */
+const revisionCommand = (projectRoot, revision, confirmation = null) => {
+  const { argument, options } = gateRevisions[revision.operation];
+
+  return command(confirmation === null ? 'preview' : 'confirm', [
+    'node',
+    ENTRY_SCRIPT,
+    'config',
+    revision.operation,
+    revision[argument],
+    ...options.flatMap((option) => (revision[option] === undefined ? [] : [`--${option}`, revision[option]])),
+    '--project',
+    projectRoot,
+    ...(confirmation === null ? [] : ['--confirm', confirmation]),
+  ]);
+};
+
+/**
+ * On an activated clone, the Gate's own preview of the re-pin it names for the
+ * configuration a confirmed revision just wrote.
+ *
+ * `gate status` is asked which remedy answers the changed configuration and
+ * which subcommand performs it, so this holds no remedy mapping (`TB-074`).
+ * The Gate must read the section as exactly the candidate written, and its
+ * preview must name that candidate's identity; otherwise no re-pin is offered.
+ * The preview is the Gate's own `--json` document, its weakenings, refusal,
+ * and token reported as it states them (`SG-CFG-001`). Nothing is confirmed.
+ */
+const repinPreview = async ({ projectRoot, gate, environment, observation, policy }) => {
+  const working = observation.configuration?.working;
+
+  if (working === undefined) {
+    const release = observation.release ? `${observation.release.id} ${observation.release.version}` : 'a release it does not name';
+
+    return failure(
+      'gate-configuration-unobserved',
+      `the revision was written, but \`${[...gate.display, 'status', '--json'].join(' ')}\` reports no configuration section: the installed Gate (${release}, ${gate.detail}) predates it, so the candidate the Gate reads cannot be compared with the one written. Update the Gate module.`,
+    );
+  }
+
+  if (canonical(working.policy) !== canonical(policy)) {
+    return failure(
+      'repin-candidate-mismatch',
+      `the revision was written, but the Gate reads a different Gate configuration section than the candidate it wrote (${working.reasonCode ?? 'another value'}), so no re-pin preview is offered for it. Run \`agent-framework config show\`.`,
+    );
+  }
+
+  const remedy = observation.next.remedies.find((entry) => (entry.findings ?? []).includes(CONFIGURATION_DRIFT)) ?? null;
+
+  if (remedy === null || !Array.isArray(remedy.subcommands) || remedy.subcommands.length !== 1) {
+    return failure(
+      'repin-unnamed',
+      `the revision was written, but gate status names no single subcommand that re-pins the changed configuration; it says: ${observation.next.instruction}.`,
+    );
+  }
+
+  const [subcommand] = remedy.subcommands;
+  const previewed = await runGateCommand(gate, { cwd: projectRoot, args: [subcommand], environment });
+
+  if (previewed.failure) {
+    return previewed;
+  }
+
+  const repin = previewed.document.observation;
+
+  if (repin.candidate?.identity !== working.identity) {
+    return failure(
+      'repin-candidate-mismatch',
+      `the revision was written, but \`${[...gate.display, subcommand, '--json'].join(' ')}\` previews ${repin.candidate?.identity ?? 'no candidate'}, not the written candidate ${working.identity}; nothing was re-pinned.`,
+    );
+  }
+
+  const prefix = observation.next.shortcut === null ? gate.display : observation.next.shortcut.split(' ');
+
+  return {
+    repin: {
+      subcommand,
+      owner: 'change-evaluation-gate',
+      trusted: repin.trusted,
+      candidate: repin.candidate,
+      transition: repin.transition,
+      acknowledgedWeakening: repin.acknowledgedWeakening,
+      dependencyRoots: repin.dependencyRoots,
+      dependencyProvisioning: repin.dependencyProvisioning,
+      refusal: repin.refusal,
+      confirmationToken: repin.confirmationToken,
+      commands: repin.confirmationToken === null
+        ? []
+        : [gateCommand('confirm', prefix, subcommand, '--confirm', repin.confirmationToken)],
+    },
+  };
+};
+
+/**
+ * Preview or confirm one revision through `framework-setup`'s own operation,
+ * then say what follows: on an activated clone the re-pin preview, else
+ * nothing. The operation's refusal is reported as it gives it.
+ */
+const reviseConfiguration = async ({ projectRoot, environment, revision, confirmation }) => {
+  let revised;
+
+  try {
+    revised = confirmation === null
+      ? await previewGateRevision({ projectRoot, revision })
+      : await reviseGate({ projectRoot, revision, confirmation });
+  } catch (error) {
+    return failure(error.reasonCode ?? 'revision-refused', error.message);
+  }
+
+  const gate = await locateGateCommand({ environment });
+  const done = { gate, revised, state: null, repin: null };
+
+  if (!gate.available) {
+    return done;
+  }
+
+  const status = await runGateCommand(gate, { cwd: projectRoot, args: ['status'], environment });
+
+  if (status.failure) {
+    return { ...done, ...status };
+  }
+
+  const { observation } = status.document;
+
+  if (confirmation === null || observation.state !== 'activated') {
+    return { ...done, state: observation.state };
+  }
+
+  return {
+    ...done,
+    state: observation.state,
+    ...await repinPreview({ projectRoot, gate, environment, observation, policy: revised.policy }),
+  };
+};
+
+/** What comes after a revision: its confirmation, the re-pin's, or nothing. */
+const revisionNext = ({ projectRoot, revised, repin, applied }) => {
+  if (!applied) {
+    const confirm = revisionCommand(projectRoot, revised.revision, revised.previewHash);
+
+    return { step: 'confirm-revision', command: confirm.run, instruction: 'confirm exactly this preview with its token.' };
+  }
+
+  if (repin === null) {
+    return null;
+  }
+
+  return repin.confirmationToken === null
+    ? { step: repin.subcommand, command: null, instruction: repin.refusal?.next ?? repin.refusal?.detail ?? `the Gate offers no token for this ${repin.subcommand}.` }
+    : { step: repin.subcommand, command: repin.commands[0].run, instruction: `confirm the Gate's ${repin.subcommand} preview with its own token.` };
+};
+
+const runConfigRevision = async ({ projectRoot, environment, revision, confirmation }) => {
+  const outcome = (await exists(projectRoot))
+    ? await reviseConfiguration({ projectRoot, environment, revision, confirmation })
+    : failure('project-missing', `${projectRoot} does not exist.`);
+  const revised = outcome.revised ?? null;
+  const applied = revised !== null && confirmation !== null;
+  const repin = outcome.repin ?? null;
+  const exitStatus = outcome.failure
+    ? EXIT_UNRUNNABLE
+    : (!applied || repin !== null ? EXIT_STEPS_REMAIN : EXIT_DONE);
+
+  return {
+    document: {
+      document: REVISION_DOCUMENT_VERSION,
+      command: `config ${revision.operation}`,
+      ok: !outcome.failure,
+      exitStatus,
+      project: projectRoot,
+      owner: 'framework-setup',
+      revision: revised?.revision ?? revision,
+      applied,
+      subcontract: revised?.subcontract ?? null,
+      changes: revised?.changes ?? [],
+      previewHash: revised?.previewHash ?? null,
+      state: outcome.state ?? null,
+      gate: outcome.gate === undefined ? null : describeGate(outcome.gate),
+      repin,
+      next: revised === null || outcome.failure ? null : revisionNext({ projectRoot, revised, repin, applied }),
+      failure: outcome.failure ?? null,
+      limit: REVISION_LIMIT,
+    },
+    render: renderRevision,
+  };
+};
+
+/** One revision's value and options as a maintainer typed them. */
+const describeRevision = (revision) => {
+  const definition = gateRevisions[revision.operation];
+
+  return [
+    revision.operation,
+    revision[definition.argument],
+    ...definition.options.flatMap((option) => (revision[option] === undefined ? [] : [`--${option}`, revision[option]])),
+  ].filter((part) => part !== undefined).join(' ');
+};
+
+/** The re-pin preview, as the Gate states it. */
+const renderRepin = (repin) => {
+  const weakenings = repin.transition?.weakenings ?? [];
+  const provisioning = repin.dependencyProvisioning;
+  const lines = [
+    `re-pin: the Gate's ${repin.subcommand} preview for the written candidate (${repin.owner})`,
+    `  trusted: ${repin.trusted?.identity ?? 'none'}`,
+    `  candidate: ${repin.candidate.identity}`,
+    `  weakenings: ${repin.transition === null ? 'not judged — no trusted policy was recovered' : (weakenings.length === 0 ? 'none' : weakenings.map((weakening) => `${weakening.code} ${weakening.checkId}`).join(', '))}`,
+    `  dependency roots: ${(repin.dependencyRoots ?? []).map((root) => `${root} (${typeof provisioning === 'string' ? provisioning : (provisioning?.[root] ?? 'unrecorded')})`).join(', ') || 'none'}`,
+  ];
+
+  if (repin.refusal !== null) {
+    lines.push(`  refused: ${repin.refusal.reasonCode}${repin.refusal.detail ? ` — ${repin.refusal.detail}` : ''}`);
+  }
+
+  if (repin.confirmationToken !== null) {
+    lines.push(`  token: ${repin.confirmationToken}`);
+  }
+
+  return lines;
+};
+
+const renderRevision = (document) => {
+  const lines = [
+    `agent-framework ${document.command}`,
+    `project: ${document.project}`,
+    `revision: ${describeRevision(document.revision)} (${document.subcontract ?? 'refused'}, owned by ${document.owner})`,
+  ];
+
+  if (document.changes.length > 0) {
+    lines.push(document.applied
+      ? `applied: .agent-framework.yaml, Gate configuration section — ${document.changes.length} line${document.changes.length === 1 ? '' : 's'} changed; every other byte kept:`
+      : `preview: .agent-framework.yaml, Gate configuration section — ${document.changes.length} line${document.changes.length === 1 ? '' : 's'} would change; every other byte is kept:`);
+
+    for (const change of document.changes) {
+      lines.push(`  line ${change.line} (${change.subcontract}):`, `- ${change.before}`, `+ ${change.after}`);
+    }
+  }
+
+  if (document.failure !== null) {
+    lines.push(`failed: ${document.failure.reasonCode} — ${document.failure.detail}`, REVISION_LIMIT, '');
+
+    return lines.join('\n');
+  }
+
+  if (!document.applied) {
+    lines.push(`token: ${document.previewHash}`);
+  }
+
+  if (document.gate !== null && !document.gate.available) {
+    lines.push(`gate: unavailable — ${document.gate.detail}; no re-pin step can be named.`);
+  } else if (document.state === 'activated' && !document.applied) {
+    lines.push('state: activated — confirming continues into the Gate\'s preview of the re-pin it names for the changed configuration; that preview has its own token.');
+  } else if (document.state !== null) {
+    lines.push(`state: ${document.state}${document.state === 'activated' ? '' : ' — the clone is not activated, so nothing is re-pinned.'}`);
+  }
+
+  if (document.repin !== null) {
+    lines.push(...renderRepin(document.repin));
+  }
+
+  lines.push(
+    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `run every command from ${document.project}.`,
+    REVISION_LIMIT,
+    '',
+  );
+
+  return lines.join('\n');
+};
+
+/**
  * Run one Framework command invocation and return what it printed, without
  * touching the process — the seam tests and later subcommands drive.
  */
@@ -847,8 +1182,16 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
   }
 
   const projectRoot = path.resolve(cwd, options.project ?? '.');
-  const run = options.subcommand === 'config show' ? runConfigShow : runSetup;
-  const { document, render: rendered } = await run({ projectRoot, environment });
+  const run = {
+    setup: runSetup,
+    'config show': runConfigShow,
+  }[options.subcommand] ?? runConfigRevision;
+  const { document, render: rendered } = await run({
+    projectRoot,
+    environment,
+    revision: options.revision,
+    confirmation: options.confirmation,
+  });
 
   return {
     exitCode: document.exitStatus,
