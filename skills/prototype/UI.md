@@ -1,5 +1,20 @@
 # UI Prototype
 
+## Contents
+
+- [When this is the right shape](#when-this-is-the-right-shape)
+- [Two sub-shapes — strongly prefer sub-shape A](#two-sub-shapes--strongly-prefer-sub-shape-a)
+  - [Sub-shape A — adjustment to an existing page (preferred)](#sub-shape-a--adjustment-to-an-existing-page-preferred)
+  - [Sub-shape B — a new page (last resort)](#sub-shape-b--a-new-page-last-resort)
+- [Process](#process)
+  - [1. State the question and pick N](#1-state-the-question-and-pick-n)
+  - [2. Generate radically different variants](#2-generate-radically-different-variants)
+  - [3. Wire them together](#3-wire-them-together)
+  - [4. Build the floating switcher](#4-build-the-floating-switcher)
+  - [5. Hand it over](#5-hand-it-over)
+  - [6. Capture the answer and clean up](#6-capture-the-answer-and-clean-up)
+- [Anti-patterns](#anti-patterns)
+
 Generate **several radically different UI variations** on a single route, switchable from a floating bottom bar. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
 
 If the question is about logic/state rather than what something looks like — wrong branch. Use [LOGIC.md](LOGIC.md).

@@ -1,5 +1,17 @@
 # Provider check descriptor contract (version 1)
 
+## Contents
+
+- [Provider interface](#provider-interface)
+- [Check descriptor fields](#check-descriptor-fields)
+- [Prerequisites](#prerequisites)
+- [Evidence ladder stages](#evidence-ladder-stages)
+- [Outcomes and policy bindings](#outcomes-and-policy-bindings)
+- [Extension rules](#extension-rules)
+- [Command safety](#command-safety)
+  - [Argument composition](#argument-composition)
+- [Capability gaps](#capability-gaps)
+
 This is the seam between a stack Verification provider and Gate evaluation.
 A provider is a pure resolver: proved project facts in, normalized check
 descriptors out. Gate core consumes descriptors and never learns which stack

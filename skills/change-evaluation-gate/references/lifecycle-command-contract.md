@@ -1,5 +1,22 @@
 # Lifecycle command contract
 
+## Contents
+
+- [The three rules](#the-three-rules)
+- [Commands](#commands)
+- [The operator surface (`TB-040`, `TB-041`)](#the-operator-surface-tb-040-tb-041)
+- [`gate update`](#gate-update)
+- [Health](#health)
+- [The state a clone is reported to be in](#the-state-a-clone-is-reported-to-be-in)
+- [The durable identity of a gate-written registration](#the-durable-identity-of-a-gate-written-registration)
+- [Removal](#removal)
+- [`gate sync` (`TB-062`)](#gate-sync-tb-062)
+- [`gate check` (`TB-061`)](#gate-check-tb-061)
+- [`gate doctor` (`TB-063`)](#gate-doctor-tb-063)
+- [Recovery](#recovery)
+- [Prohibited](#prohibited)
+- [Verified by](#verified-by)
+
 Delivered by TB-012. Implemented in
 [`scripts/lib/lifecycle.mjs`](../scripts/lib/lifecycle.mjs), with the durable
 registration identity and the two registration writes in

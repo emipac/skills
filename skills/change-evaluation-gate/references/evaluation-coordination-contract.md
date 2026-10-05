@@ -1,5 +1,15 @@
 # Evaluation coordination contract
 
+## Contents
+
+- [What the lock is keyed on](#what-the-lock-is-keyed-on)
+- [What the lock records](#what-the-lock-records)
+- [Sharing](#sharing)
+- [Queueing and Git priority](#queueing-and-git-priority)
+- [Cancellation](#cancellation)
+- [Stale-lock recovery](#stale-lock-recovery)
+- [Failure](#failure)
+
 Gate execution is serialized per clone, shares only work that is provably
 identical and still running, and answers `unverified` whenever coordination
 cannot be trusted.

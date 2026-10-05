@@ -1,5 +1,19 @@
 # Bounded Evidence and Lifecycle event contract
 
+## Contents
+
+- [Where the store lives](#where-the-store-lives)
+- [What an envelope carries](#what-an-envelope-carries)
+- [What an envelope is a function of](#what-an-envelope-is-a-function-of)
+- [Fixed v1 ceilings](#fixed-v1-ceilings)
+- [Redaction at the persistence boundary](#redaction-at-the-persistence-boundary)
+- [When a decision is not appended](#when-a-decision-is-not-appended)
+- [Pruning](#pruning)
+- [Lifecycle events](#lifecycle-events)
+- [The one-shot bypass ledger](#the-one-shot-bypass-ledger)
+- [Decision binding](#decision-binding)
+- [Prohibited](#prohibited)
+
 The clone-local Evidence store, the fixed v1 retention ceilings, redaction at
 the persistence boundary, manual preview-bound pruning, and the immutable
 Lifecycle event record.

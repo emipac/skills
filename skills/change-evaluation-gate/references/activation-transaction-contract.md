@@ -1,5 +1,22 @@
 # Activation transaction contract
 
+## Contents
+
+- [The ordered pipeline](#the-ordered-pipeline)
+- [The receipt](#the-receipt)
+- [Reported states](#reported-states)
+- [Proving the hook program](#proving-the-hook-program)
+- [Rollback](#rollback)
+- [Hook registration](#hook-registration)
+  - [The declared composition order](#the-declared-composition-order)
+  - [Preserving and executing the chain](#preserving-and-executing-the-chain)
+  - [Marker drift](#marker-drift)
+- [Pausing for trust, and resuming](#pausing-for-trust-and-resuming)
+- [Non-interactive activation](#non-interactive-activation)
+- [Reason codes](#reason-codes)
+- [The packaged runner](#the-packaged-runner)
+- [Deliberately not here](#deliberately-not-here)
+
 Activation is the explicit, clone-local, repository-bound transaction that turns
 a **configured** repository into an **activated** one. It previews exactly what
 it will do, obtains consent bound to that preview, proves every dependency, and
