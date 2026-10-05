@@ -82,6 +82,15 @@
  *    preview for that candidate, the printed sync confirmation re-pins it, and
  *    the same good commit is then graded with the root provided and allowed
  *    (TB-069, FR-GUIDE-006, AC-GUIDE-003, SG-CFG-001).
+ *    `guided-setup-to-activated` — a real schema v3 clone walked by
+ *    `agent-framework setup` on a scripted interactive terminal: the
+ *    migration's open decisions answered, each complete preview confirmed
+ *    with `yes`, through framework-setup's own migration and Gate
+ *    configuration and the Gate's own activation, until Gate status names
+ *    nothing further; the activation's Lifecycle event records the
+ *    `interactive-guided-setup` consent channel as self-declared, and real
+ *    commits are then allowed and denied by the hook it registered (TB-072,
+ *    AC-GUIDE-001, FR-GUIDE-003, RISK-011).
  * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
@@ -123,7 +132,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import {
@@ -2434,6 +2443,119 @@ const revisedRootChainsIntoSync = async () => {
   return { name: 'revised-root-chains-into-sync', ok: findings.length === 0, findings };
 };
 
+/** The open decisions of `SCHEMA_V3_MIGRATION_INPUT`, answered as `MIGRATION_MAPPINGS` answers them. */
+const GUIDED_ANSWERS = Object.freeze([
+  'express-typescript',
+  'repository-script',
+  JSON.stringify(['tools/check.mjs', SOURCE]),
+  '60',
+  'yes',
+  'yes',
+  '',
+  'yes',
+]);
+
+/**
+ * TB-072 — guided setup, end to end, on a real clone.
+ *
+ * The Framework command's exported entry is driven with a scripted
+ * interactive terminal, exactly the seam its bin fills with the real one, and
+ * every operation it confirms is the owning one, for real: framework-setup's
+ * migration and Gate configuration, and the Gate's own `activate` as a
+ * command. The run must end with Gate status naming nothing further, the
+ * activation's Lifecycle event must record the consent channel the guided
+ * confirmation declared, and the hook it registered must really grade commits.
+ */
+const guidedSetupToActivated = async () => {
+  const findings = [];
+  const root = await temporaryDirectory('gate-activation-smoke-repo-');
+
+  await assertThrowawayRepository(root);
+  await mkdir(path.join(root, 'app'), { recursive: true });
+  await mkdir(path.join(root, 'tools'), { recursive: true });
+  await writeFile(path.join(root, 'tools/check.mjs'), CHECK_SCRIPT, 'utf8');
+  await writeFile(path.join(root, SOURCE), 'baseline\n', 'utf8');
+  // The Node provider is the one that drafts this project's Gate policy.
+  await writeFile(path.join(root, 'package.json'), `${JSON.stringify({ name: 'guided-setup-smoke', private: true })}\n`, 'utf8');
+  await writeFile(path.join(root, CONFIGURATION_FILE), SCHEMA_V3_MIGRATION_INPUT, 'utf8');
+  await git(root, ['init', '--quiet']);
+  await git(root, ['add', '--all']);
+  await commit(root, 'baseline');
+
+  const { runFrameworkCommand } = await import(pathToFileURL(FRAMEWORK_COMMAND).href);
+  const answers = [...GUIDED_ANSWERS];
+  const terminal = {
+    interactive: true,
+    output: '',
+    questions: [],
+    write: (text) => {
+      terminal.output += text;
+    },
+    ask: async (question) => {
+      const answer = answers.shift() ?? null;
+
+      terminal.questions.push(question);
+      terminal.output += `${question}${answer ?? ''}\n`;
+
+      return answer;
+    },
+  };
+  const environment = { ...gitEnvironment(), PATH: await pathWithoutInstalledGate() };
+  const run = await runFrameworkCommand({ cwd: root, argv: ['setup'], environment, terminal });
+
+  check(findings, run.exitCode === 0, `Guided setup exited ${run.exitCode}: ${JSON.stringify(run.document?.stopped)}\n${terminal.output}`);
+  check(findings, answers.length === 0 && terminal.questions.length === GUIDED_ANSWERS.length, `Guided setup asked ${terminal.questions.length} questions, not one per scripted answer: ${JSON.stringify(terminal.questions)}`);
+  check(
+    findings,
+    JSON.stringify(run.document?.completed?.map((step) => step.step)) === JSON.stringify(['migrate-schema-v4', 'configure-gate', 'activate']),
+    `Guided setup did not complete the migration, the Gate configuration, and the activation: ${JSON.stringify(run.document?.completed)}`,
+  );
+
+  const status = JSON.parse((await runPackagedCommand(root, ['status', '--json'])).stdout || '{}');
+
+  check(
+    findings,
+    status.observation?.state === 'activated' && status.observation?.health === 'healthy' && status.observation?.next?.remedies?.length === 0,
+    `Gate status names something further after guided setup: ${JSON.stringify(status.observation?.next)}`,
+  );
+
+  const events = (await readFile(path.join(root, '.git', 'change-evaluation-gate', 'evidence', 'events.ndjson'), 'utf8').catch(() => ''))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const activation = events.find((event) => event.type === 'activation' && event.outcome === 'succeeded') ?? null;
+
+  check(
+    findings,
+    activation?.consent?.channel === 'interactive-guided-setup' && activation?.consent?.provenance === 'self-declared',
+    `The activation's Lifecycle event does not record the guided consent channel: ${JSON.stringify(activation)}`,
+  );
+
+  // The hook guided setup registered grades real commits: the configuration it
+  // wrote, then broken code, then the fix.
+  await git(root, ['add', '--all']);
+
+  const configured = await attemptCommit(root, 'the configuration guided setup wrote');
+
+  check(findings, configured.failed === false, `The commit of the guided configuration was refused: ${configured.output}`);
+
+  await writeFile(path.join(root, SOURCE), `baseline\n${BREAKAGE}\n`, 'utf8');
+  await git(root, ['add', '--all']);
+
+  const broken = await attemptCommit(root, 'broken code');
+
+  check(findings, broken.failed === true, 'A commit whose required check fails was allowed on the guided clone.');
+
+  await writeFile(path.join(root, SOURCE), 'baseline\nfixed\n', 'utf8');
+  await git(root, ['add', '--all']);
+
+  const fixed = await attemptCommit(root, 'fixed code');
+
+  check(findings, fixed.failed === false, `A commit whose checks pass was refused on the guided clone: ${fixed.output}`);
+
+  return { name: 'guided-setup-to-activated', ok: findings.length === 0, findings };
+};
+
 /** The `composer-bin` binary whose shim loads two autoloaders (TB-056). */
 const TWO_AUTOLOADER_BINARY = 'analyse';
 
@@ -3581,6 +3703,7 @@ const main = async () => {
       await dependencyProvisioningCommit(),
       await mixedProvisioningCommit(),
       await revisedRootChainsIntoSync(),
+      await guidedSetupToActivated(),
       await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),

@@ -258,6 +258,17 @@ acknowledgement together. Show the maintainer that preview, name the weakening
 in your own words, and never add `--acknowledge-weakening` or confirm on their
 behalf.
 
+`gate activate`, `gate sync`, `gate repair`, and `gate deactivate` also take
+`--consent-channel <channel>` on a confirmation, from one declared vocabulary:
+`interactive-guided-setup`, which `agent-framework setup` passes when a
+maintainer answered `yes` to its prompt after the complete preview (`TB-072`,
+`RISK-011`). It is not part of any token and changes nothing that is
+performed; every Lifecycle event that confirmation appends records it as
+`consent: { channel, provenance: "self-declared" }`, refusals included, and a
+confirmation without it records no channel. Never pass it yourself: it states
+how a maintainer's consent arrived, which an agent confirming a token did not
+witness.
+
 When this skill configured the policy, report the repository as `configured`,
 never `activated`, and name activation as a separate explicit action. When
 reporting on a clone the surface observed, report the state that surface

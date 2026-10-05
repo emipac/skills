@@ -21,7 +21,11 @@ import {
 } from '../skills/change-evaluation-gate/scripts/lib/configuration.mjs';
 import { openCoordinationLock } from '../skills/change-evaluation-gate/scripts/lib/coordination.mjs';
 import { openEvidenceStore } from '../skills/change-evaluation-gate/scripts/lib/evidence-store.mjs';
-import { validateLifecycleEvent } from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
+import {
+  CONSENT_CHANNELS,
+  createLifecycleEvent,
+  validateLifecycleEvent,
+} from '../skills/change-evaluation-gate/scripts/lib/lifecycle-event.mjs';
 import { inspectCoordination, statusGate } from '../skills/change-evaluation-gate/scripts/lib/lifecycle.mjs';
 import {
   COMMANDS,
@@ -3506,4 +3510,79 @@ test('TB-068: a clone with no receipt reports its working section and no pinned 
   });
   assert.match(missing.working.detail, /evaluation_gate/);
   assert.equal(missing.pinned, null);
+});
+
+/**
+ * `RISK-011`, `TB-072`. A confirmation may declare the channel it arrived
+ * through. The channel is a closed vocabulary, is not part of any token, and
+ * is recorded — as self-declared — on every Lifecycle event the confirming
+ * invocation appends, refusals included; a confirmation that declares none
+ * records exactly what it recorded before the selector existed.
+ */
+test('TB-072 RISK-011: --consent-channel is recorded, as self-declared, on the events of the confirmation that declared it', async (t) => {
+  const [channel] = CONSENT_CHANNELS;
+  const root = await commandActivatedClone(t);
+  const eventsOf = async () => (await readFile(path.join(root, '.git/change-evaluation-gate/evidence/events.ndjson'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const before = await wholeCloneSnapshot(root);
+
+  assert.deepEqual(CONSENT_CHANNELS, ['interactive-guided-setup']);
+
+  // An unknown channel, and a command that confirms nothing, are refused before anything runs.
+  for (const argv of [['deactivate', '--consent-channel', 'terminal'], ['status', '--consent-channel', channel]]) {
+    const refused = await observe(root, argv);
+
+    assert.equal(refused.exitCode, EXIT_UNRUNNABLE, argv.join(' '));
+    assert.equal(refused.document.failure.reasonCode, argv[0] === 'status' ? 'unknown-selector' : 'selector-invalid');
+  }
+
+  assert.equal(await wholeCloneSnapshot(root), before);
+  assert.equal((await eventsOf()).some((event) => 'consent' in event), false, 'a direct activation recorded a channel.');
+
+  // The channel is not part of the token: a preview with it and one without offer the same.
+  await rm(JSON.parse(await readFile(path.join(root, '.git/change-evaluation-gate/evidence/activation/receipt.json'), 'utf8')).hooks[0].path);
+
+  const plain = await observe(root, ['repair']);
+  const declared = await observe(root, ['repair', '--consent-channel', channel]);
+
+  assert.equal(tokenOf(declared), tokenOf(plain));
+  assert.deepEqual(declared.document.invocation.selectors, ['--consent-channel', channel]);
+
+  // A refused confirmation records the refusal with the channel it declared.
+  const mismatched = await observe(root, ['deactivate', '--confirm', `sha256:${'0'.repeat(64)}`, '--consent-channel', channel]);
+
+  assert.equal(mismatched.document.mutation.performed, false);
+  assert.deepEqual((await eventsOf()).at(-1).consent, { channel, provenance: 'self-declared' });
+  assert.equal((await eventsOf()).at(-1).outcome, 'refused');
+
+  const repaired = await observe(root, ['repair', '--confirm', tokenOf(plain), '--consent-channel', channel]);
+  const repair = (await eventsOf()).at(-1);
+
+  assert.equal(repaired.document.mutation.performed, true, repaired.document.mutation.summary);
+  assert.equal(repair.type, 'repair');
+  assert.equal(repair.outcome, 'succeeded');
+  assert.deepEqual(repair.consent, { channel, provenance: 'self-declared' });
+  assert.deepEqual(validateLifecycleEvent(repair), []);
+
+  // Without the selector, nothing about a channel is recorded.
+  const deactivation = await observe(root, ['deactivate']);
+
+  await observe(root, ['deactivate', '--confirm', tokenOf(deactivation)]);
+  assert.equal((await eventsOf()).at(-1).type, 'removal');
+  assert.equal('consent' in (await eventsOf()).at(-1), false);
+
+  // The record refuses a channel outside the vocabulary.
+  const invented = createLifecycleEvent({
+    type: 'activation',
+    consentChannel: 'terminal',
+    client: { id: 'git' },
+    gate: { id: 'change-evaluation-gate' },
+    repository: { identity: `sha256:${'1'.repeat(64)}` },
+    outcome: 'succeeded',
+    reason: 'fixture',
+  });
+
+  assert.deepEqual(validateLifecycleEvent(invented).map((error) => error.path), ['event.consent']);
 });

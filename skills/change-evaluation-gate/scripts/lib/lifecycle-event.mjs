@@ -15,6 +15,14 @@
  * machine owner controls every input to it (SG-TRUST-001). `authenticated` is
  * therefore always `false` and cannot be set.
  *
+ * A record may also carry the channel the confirmation it records declared it
+ * arrived through (`RISK-011`, `TB-072`), as `consent`. It is present only when
+ * the confirming invocation declared one — every record written without one is
+ * exactly what it was before the field existed — and it is a claim, carried
+ * under the same `self-declared` provenance as a typed actor and never as
+ * proof: nothing here can observe which terminal, if any, a confirmation came
+ * from.
+ *
  * Later slices emit their own event types through this same contract; nothing
  * here knows what activation, trust, or coordination mean.
  */
@@ -39,6 +47,18 @@ export const LIFECYCLE_EVENT_TYPES = Object.freeze([
 ]);
 
 export const LIFECYCLE_OUTCOMES = Object.freeze(['succeeded', 'refused', 'failed', 'detected']);
+
+/**
+ * The channels a confirmation may declare it arrived through (`RISK-011`).
+ * `interactive-guided-setup`: an explicit answer, in an interactive terminal,
+ * to a Guided setup prompt shown after the operation's complete preview. A
+ * confirmation that declares none is the operator's own `--confirm`, and its
+ * record says nothing about a channel.
+ */
+export const CONSENT_CHANNELS = Object.freeze(['interactive-guided-setup']);
+
+/** How a declared channel is carried: as a claim, like a typed actor. */
+const CONSENT_PROVENANCE = 'self-declared';
 
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -79,6 +99,9 @@ export const createLifecycleEvent = (input = {}, { clock = () => new Date() } = 
       // Local attribution is best effort. Nothing may claim otherwise.
       authenticated: false,
     },
+    ...(isNonEmptyString(input.consentChannel)
+      ? { consent: { channel: input.consentChannel, provenance: CONSENT_PROVENANCE } }
+      : {}),
     client: {
       id: input.client?.id ?? null,
       surface: input.client?.surface ?? null,
@@ -140,6 +163,12 @@ export const validateLifecycleEvent = (event) => {
 
   if (!isPlainObject(event.actor) || event.actor.authenticated !== false) {
     error('event.actor', 'A lifecycle event must record a best-effort actor that is explicitly unauthenticated.');
+  }
+
+  if ('consent' in event && (!isPlainObject(event.consent)
+    || !CONSENT_CHANNELS.includes(event.consent.channel)
+    || event.consent.provenance !== CONSENT_PROVENANCE)) {
+    error('event.consent', `A lifecycle event's consent channel must be one of ${CONSENT_CHANNELS.join(', ')}, carried as ${CONSENT_PROVENANCE}.`);
   }
 
   for (const section of ['client', 'gate']) {

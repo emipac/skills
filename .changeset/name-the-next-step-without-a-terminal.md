@@ -71,3 +71,29 @@ previews it. Anything already declared is left out; key names are read without
 their values, `.env` is never read, and a line whose key is not a valid name is
 counted, not shown. It applies nothing and never proposes a check or a
 Verification profile command.
+
+`agent-framework setup` is now guided in an interactive terminal, and is the
+recommended way to adopt the Gate. It walks a clone from its adoption state to
+a healthy activated Gate one step at a time: each step shows the owning
+operation's complete preview — the migrated `.agent-framework.yaml`, the
+drafted Gate policy and the file it would write, or the Gate's own `--json`
+preview — and asks only what that operation cannot derive: the migration's open
+decisions, defaulting to the owning draft, the client to activate, and, for a
+policy weaker than the trusted one, the weakening the Gate names, typed back
+exactly. Only `yes` confirms, and it confirms exactly that preview with its own
+token through the operation that owns it. Any other answer, end of input, or
+the owning operation's refusal — a preview that changed before the answer,
+doctor predicting activation would stop — stops with nothing further confirmed;
+nothing is retried or remembered. It repeats until `gate status` names nothing
+further, writes no draft file, and asks nobody to copy a token. Piped, in CI,
+or with `--json`, it prints exactly the plan it printed before and confirms
+nothing. A clone with no configuration is told the base setup command to run,
+since base setup has no preview to confirm.
+
+`gate activate`, `gate sync`, `gate repair`, and `gate deactivate`
+confirmations accept `--consent-channel interactive-guided-setup`, which guided
+setup passes. It is not part of any token; every Lifecycle event the
+confirmation appends records it as `consent: { channel, provenance:
+"self-declared" }`, and a confirmation without it records exactly what it did
+before. The Activation receipt is unchanged, so a guided run and the same
+commands typed directly pin the same receipt.

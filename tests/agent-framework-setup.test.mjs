@@ -16,17 +16,20 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { validateGatePolicy } from '../skills/change-evaluation-gate/scripts/lib/policy.mjs';
 import { REMEDIES } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
+import { runFrameworkCommand } from '../skills/framework-setup/scripts/agent-framework.mjs';
 import {
   configureGate,
   configureProject,
   previewGateConfiguration,
 } from '../skills/framework-setup/scripts/configure.mjs';
+import { processTerminal } from '../skills/framework-setup/scripts/lib/terminal.mjs';
 
 /**
  * `agent-framework setup` without a terminal (`TB-067`).
@@ -192,6 +195,12 @@ const throwawayRepository = async (t) => {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-setup-')));
 
   t.after(() => rm(root, { recursive: true, force: true }));
+
+  return seedRepository(root);
+};
+
+/** The throwaway repository's contents, at `root`, which must exist and be empty. */
+const seedRepository = async (root) => {
   assert.equal(root.startsWith(FRAMEWORK_ROOT), false);
   await git(root, ['init', '--quiet']);
   await mkdir(path.join(root, 'tools'), { recursive: true });
@@ -278,9 +287,9 @@ const noConfigurationClone = async (t) => {
 };
 
 /** Schema v3, written by framework-setup's own base setup. */
-const schemaV3Clone = async (t) => {
-  const root = await throwawayRepository(t);
+const schemaV3Clone = async (t) => seedSchemaV3(await throwawayRepository(t));
 
+const seedSchemaV3 = async (root) => {
   await configureProject({ projectRoot: root, selections: { tracker: 'local-markdown' } });
   await commit(root);
 
@@ -2465,4 +2474,555 @@ test('TB-071: config suggest is in the usage and takes no value', async (t) => {
   assert.equal(refused.status, 2);
   assert.equal(refused.stdout, '');
   assert.match(refused.stderr, /^ {7}agent-framework config suggest \[--json\] \[--project <directory>\]$/m);
+});
+
+/* -------------------------------------------------------------------------
+ * TB-072: `agent-framework setup` in an interactive terminal.
+ *
+ * The exported entry driven in-process with a scripted terminal — the
+ * interactive flag, the answers typed in order, and everything written to it —
+ * while every owning operation runs for real: `framework-setup`'s migration
+ * and Gate configuration in-process, the Gate as its own command. Each yes is
+ * consent for exactly the preview shown before it, through the owning
+ * operation's own token, and the Gate records the channel it came through
+ * (`AC-GUIDE-001`, `AC-GUIDE-002`, `NFR-REL-004`, `SG-GUIDE-001`,
+ * `SG-CFG-001`, `RISK-011`).
+ * ------------------------------------------------------------------------- */
+
+/** The channel guided confirmations declare, in the Gate's own vocabulary. */
+const GUIDED_CHANNEL = 'interactive-guided-setup';
+
+/**
+ * A scripted terminal. An answer may be a function, run when its question is
+ * asked, so a fixture can change the clone between a preview and its answer.
+ * A question asked after the last answer reads end of input.
+ */
+const scriptedTerminal = (answers = [], { interactive = true } = {}) => {
+  const queue = [...answers];
+  const terminal = {
+    interactive,
+    output: '',
+    questions: [],
+    write: (text) => {
+      terminal.output += text;
+    },
+    ask: async (question) => {
+      const next = queue.shift();
+      const answer = typeof next === 'function' ? await next() : (next ?? null);
+
+      terminal.questions.push(question);
+      terminal.output += `${question}${answer ?? ''}\n`;
+
+      return answer;
+    },
+    unanswered: () => queue.length,
+  };
+
+  return terminal;
+};
+
+/** `agent-framework <argv>` through the exported entry, on a scripted terminal. */
+const guidedSetup = async (root, answers, { env = environment(), interactive = true, argv = ['setup'], run: entry = runFrameworkCommand } = {}) => {
+  const terminal = scriptedTerminal(answers, { interactive });
+  const result = await entry({ cwd: root, argv, environment: env, terminal });
+
+  return { ...result, terminal };
+};
+
+/** Each question asked, by the word it starts with and what it names. */
+const askedOf = (terminal) => terminal.questions.map((question) => question.match(/^(\w+) ([^\s(]+(?: [^\s(]+)?)/)?.slice(1).join(' ') ?? question);
+
+/** The schema v3 fixture's open migration decisions, answered. */
+const SCHEMA_V3_DECISIONS = Object.freeze(['express-typescript', '60']);
+
+const EVIDENCE = '.git/change-evaluation-gate/evidence';
+
+const eventsOf = async (root) => (await readFile(path.join(root, EVIDENCE, 'events.ndjson'), 'utf8').catch(() => ''))
+  .split('\n')
+  .filter(Boolean)
+  .map((line) => JSON.parse(line));
+
+const receiptOf = (root) => readFile(path.join(root, EVIDENCE, 'activation', 'receipt.json'), 'utf8').catch(() => null);
+
+/** Gate status says the clone is activated, healthy, and names nothing further. */
+const assertHealthy = async (root, env = environment()) => {
+  const status = await gateJson(root, ['status'], env);
+  const plan = (await agentFramework(root, ['setup', '--json'], { env })).document;
+
+  assert.equal(status.observation.state, 'activated');
+  assert.equal(status.observation.health, 'healthy', JSON.stringify(status.observation.next));
+  assert.deepEqual(status.observation.next.remedies, []);
+  assert.deepEqual(plan.steps, []);
+  assert.equal(plan.next, null);
+};
+
+/** Every draft path the plan names: guided setup must write none of them. */
+const draftPathsOf = async (root) => {
+  const planned = (await agentFramework(root, ['setup', '--json'])).document;
+
+  return planned.steps.flatMap((step) => step.commands)
+    .filter((entry) => entry.role === 'draft')
+    .map((entry) => entry.argv.at(-1));
+};
+
+/**
+ * THE FIRST RED TEST OF TB-072.
+ *
+ * A schema v3 clone, answered at every question, ends activated and healthy
+ * with nothing further to do, and only the decisions the owning operations
+ * cannot derive were asked: the two the migration report leaves open, and the
+ * client to activate — each step's consent beside them (`AC-GUIDE-001`).
+ */
+test('TB-072 AC-GUIDE-001: a schema v3 clone answered yes at every step ends activated, healthy, with nothing further to do', async (t) => {
+  const root = await schemaV3Clone(t);
+  const agents = await readFile(path.join(root, 'AGENTS.md'));
+  const drafts = await draftPathsOf(root);
+  const run = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, 'yes', 'yes', '', 'yes']);
+
+  assert.equal(run.exitCode, 0, run.terminal.output);
+  assert.equal(run.terminal.unanswered(), 0);
+  assert.equal(run.stdout, '');
+  assert.deepEqual(askedOf(run.terminal), [
+    'decide backend profile',
+    'decide verification.commands.test.backend[0] timeout_seconds',
+    'confirm migrate-schema-v4 exactly',
+    'confirm configure-gate exactly',
+    'decide client',
+    'confirm gate activate',
+  ]);
+  // The draft is offered as the default; where it has none, nothing is shown.
+  assert.match(run.terminal.questions[4], /^decide client \(the adapter to activate\) \[git\]: $/);
+  assert.match(run.terminal.questions[0], /^decide backend profile \("unknown"\): $/);
+  await assertHealthy(root);
+
+  assert.equal(run.document.document, 'agent-framework/setup-guided/1');
+  assert.deepEqual(run.document.completed.map((step) => step.step), ['migrate-schema-v4', 'configure-gate', 'activate']);
+  assert.equal(run.document.stopped, null);
+  assert.equal(run.document.plan.state, 'activated');
+  assert.match(run.terminal.output, /^where this clone stands now:\nagent-framework setup\n/m);
+  assert.match(run.terminal.output, /^next: nothing$/m);
+  assert.deepEqual(await readFile(path.join(root, 'AGENTS.md')), agents);
+
+  // A guided run writes and names no draft, and does not claim to have confirmed nothing.
+  for (const draft of drafts) {
+    await assert.rejects(readFile(draft), { code: 'ENOENT' }, `guided setup wrote the draft ${draft}.`);
+    assert.equal(run.terminal.output.includes(draft), false, `guided setup named the draft ${draft}.`);
+  }
+
+  assert.equal(run.terminal.output.includes('setup wrote nothing, confirmed nothing'), false);
+});
+
+/**
+ * `RISK-011`. The Gate records that consent came through an interactive
+ * guided run: the Lifecycle event of each confirmation carries the declared
+ * channel as self-declared, the receipt is what a direct activation writes,
+ * and a direct confirmation records no channel.
+ */
+test('TB-072 RISK-011: the Gate records the guided consent channel on the confirmation it performed', async (t) => {
+  const root = await schemaV4Clone(t);
+  const run = await guidedSetup(root, ['', 'yes']);
+
+  assert.equal(run.exitCode, 0, run.terminal.output);
+
+  const events = await eventsOf(root);
+  const activation = events.filter((event) => event.type === 'activation');
+
+  assert.equal(activation.length, 1);
+  assert.equal(activation[0].outcome, 'succeeded');
+  assert.deepEqual(activation[0].consent, { channel: GUIDED_CHANNEL, provenance: 'self-declared' });
+  assert.equal(activation[0].actor.authenticated, false);
+  assert.match(run.terminal.output, /consent channel: interactive-guided-setup, declared to the Gate, which records it as self-declared\./);
+  assert.equal((await receiptOf(root)).includes(GUIDED_CHANNEL), false, 'the receipt carries the channel; only the event records it.');
+
+  const direct = await activatedClone(t);
+
+  assert.equal((await eventsOf(direct)).some((event) => 'consent' in event), false, 'a direct confirmation recorded a channel.');
+});
+
+test('TB-072 AC-GUIDE-001: every adoption state reaches Gate status with nothing further to do', async (t) => {
+  const cases = [
+    ['schema v4 without a Gate section', () => schemaV4Clone(t, { gate: false }), ['yes', '', 'yes'], ['configure-gate', 'activate']],
+    ['configured', () => schemaV4Clone(t), ['', 'yes'], ['activate']],
+    ['configuration drift', async () => {
+      const root = await activatedClone(t);
+
+      await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
+
+      return root;
+    }, ['yes'], ['sync']],
+    ['hook drift', async () => {
+      const root = await activatedClone(t);
+      const receipt = JSON.parse(await receiptOf(root));
+
+      await rm(receipt.hooks[0].path, { force: true });
+
+      return root;
+    }, ['yes'], ['repair']],
+    ['runtime drift', async () => {
+      const root = await activatedClone(t);
+      const receiptPath = path.join(root, EVIDENCE, 'activation', 'receipt.json');
+      const receipt = JSON.parse(await receiptOf(root));
+
+      await writeFile(
+        receiptPath,
+        `${JSON.stringify({ ...receipt, runtime: { ...receipt.runtime, gate: { ...receipt.runtime.gate, protocolVersion: '0.9' } } }, null, 2)}\n`,
+        'utf8',
+      );
+
+      return root;
+    }, ['yes', '', 'yes'], ['activation-transaction', 'activate']],
+  ];
+
+  for (const [name, fixture, answers, steps] of cases) {
+    const root = await fixture();
+    const run = await guidedSetup(root, answers);
+
+    assert.equal(run.exitCode, 0, `${name}: ${run.terminal.output}`);
+    assert.equal(run.terminal.unanswered(), 0, name);
+    assert.deepEqual(run.document.completed.map((step) => step.step), steps, name);
+    await assertHealthy(root);
+
+    // Every Gate confirmation recorded the channel it came through.
+    const confirmed = (await eventsOf(root)).filter((event) => event.consent !== undefined);
+
+    assert.ok(confirmed.length >= steps.filter((step) => step !== 'configure-gate').length, `${name}: ${JSON.stringify(confirmed)}`);
+    assert.ok(confirmed.every((event) => event.consent.channel === GUIDED_CHANNEL && event.outcome === 'succeeded'), name);
+  }
+});
+
+test('TB-072 AC-GUIDE-001: an activated, healthy clone asks nothing and changes nothing', async (t) => {
+  const root = await activatedClone(t);
+  const before = await cloneHash(root);
+  const run = await guidedSetup(root, ['yes']);
+  const again = await guidedSetup(root, ['yes']);
+
+  assert.equal(run.exitCode, 0);
+  assert.deepEqual(run.terminal.questions, []);
+  assert.deepEqual(run.document.completed, []);
+  assert.match(run.terminal.output, /^next: nothing$/m);
+  assert.equal(again.terminal.output, run.terminal.output, 'a repeated guided run printed different text.');
+  assert.equal(await cloneHash(root), before);
+});
+
+test('TB-072 AC-GUIDE-001 / FR-GUIDE-009: without the Gate module a schema v3 clone completes setup and states the Gate steps unavailable', async (t) => {
+  const { entry } = await setupOnlyInstall(t);
+  const { runFrameworkCommand: installed } = await import(pathToFileURL(entry).href);
+  const root = await schemaV3Clone(t);
+  const run = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, 'yes', 'yes'], { run: installed });
+
+  assert.equal(run.exitCode, 0, run.terminal.output);
+  assert.equal(run.terminal.unanswered(), 1, 'a Gate step was asked for without the Gate module.');
+  assert.deepEqual(run.document.completed.map((step) => step.step), ['migrate-schema-v4']);
+  assert.equal(run.document.plan.state, 'schema-v4');
+  assert.deepEqual(run.document.plan.unavailable, ['configure-gate', 'doctor', 'activate']);
+  assert.match(run.terminal.output, /^unavailable: configure-gate, doctor, activate — Gate steps are unavailable because the Gate module is not installed\.$/m);
+  assert.match(await configurationOf(root), /^schema_version: 4$/m);
+  assert.equal(await receiptOf(root), null);
+});
+
+test('TB-072 SG-GUIDE-001: a clone with no configuration stops at base setup, which has no preview, naming its command', async (t) => {
+  const root = await noConfigurationClone(t);
+  const before = await cloneHash(root);
+  const run = await guidedSetup(root, ['yes']);
+  const plan = (await agentFramework(root, ['setup', '--json'])).document;
+
+  assert.equal(run.exitCode, 1);
+  assert.deepEqual(run.terminal.questions, []);
+  assert.equal(run.document.stopped.step, 'configure-project');
+  assert.equal(run.document.stopped.reasonCode, 'step-unpreviewed');
+  assert.ok(run.document.stopped.detail.endsWith(plan.steps[0].commands[0].run), run.document.stopped.detail);
+  assert.equal(await cloneHash(root), before);
+});
+
+/**
+ * `AC-GUIDE-002`. Only an explicit `yes` confirms. Any other answer, or end of
+ * input, confirms nothing, writes nothing further, and stops with the clone at
+ * the last completed step; the next run asks again from there.
+ */
+test('TB-072 AC-GUIDE-002: an answer other than yes confirms nothing and stops at the last completed step', async (t) => {
+  for (const answer of ['no', 'y', '', 'YES please', null]) {
+    const root = await schemaV3Clone(t);
+    const before = await cloneHash(root);
+    const run = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, ...(answer === null ? [] : [answer])]);
+
+    assert.equal(run.exitCode, 1, JSON.stringify(answer));
+    assert.equal(run.document.stopped.step, 'migrate-schema-v4');
+    assert.equal(run.document.stopped.reasonCode, answer === null ? 'input-ended' : 'declined');
+    assert.equal(await cloneHash(root), before, `${JSON.stringify(answer)} changed a byte.`);
+  }
+
+  // Migrated and configured, then declined at activation: the clone is left configured.
+  const root = await schemaV3Clone(t);
+  const run = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, 'yes', 'yes', '', 'no']);
+  const status = await gateJson(root, ['status']);
+
+  assert.equal(run.exitCode, 1);
+  assert.deepEqual(run.document.completed.map((step) => step.step), ['migrate-schema-v4', 'configure-gate']);
+  assert.equal(run.document.stopped.step, 'activate');
+  assert.equal(status.observation.state, 'configured');
+  assert.equal(await receiptOf(root), null);
+  assert.deepEqual(await eventsOf(root), []);
+
+  // Consent is never remembered: the next run asks again, and without a yes confirms nothing.
+  const again = await guidedSetup(root, ['']);
+
+  assert.deepEqual(askedOf(again.terminal), ['decide client', 'confirm gate activate']);
+  assert.equal(again.document.stopped.reasonCode, 'input-ended');
+  assert.equal(await receiptOf(root), null);
+});
+
+/**
+ * `AC-GUIDE-002`, `SG-GUIDE-001`. A yes binds the exact preview it answered:
+ * a clone that changed between the preview and the answer is refused by the
+ * owning operation, in its own words, and nothing is performed.
+ */
+test('TB-072 AC-GUIDE-002: a preview that changed before the yes is refused by the owning operation, in its words', async (t) => {
+  const migrated = await schemaV3Clone(t);
+  const configurationPath = path.join(migrated, '.agent-framework.yaml');
+  const edited = async () => {
+    await writeFile(configurationPath, `${await readFile(configurationPath, 'utf8')}# edited after the preview\n`, 'utf8');
+
+    return 'yes';
+  };
+  const migration = await guidedSetup(migrated, [...SCHEMA_V3_DECISIONS, edited]);
+
+  assert.equal(migration.exitCode, 1);
+  assert.equal(migration.document.stopped.step, 'migrate-schema-v4');
+  assert.equal(migration.document.stopped.detail, 'Migration confirmation does not match the current preview');
+  assert.match(await configurationOf(migrated), /^schema_version: 3$/m);
+
+  const activated = await schemaV4Clone(t);
+  const moved = async () => {
+    await writeFile(path.join(activated, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
+
+    return 'yes';
+  };
+  const activation = await guidedSetup(activated, ['', moved]);
+  const refused = (await eventsOf(activated)).filter((event) => event.type === 'activation');
+
+  assert.equal(activation.exitCode, 1);
+  assert.equal(activation.document.stopped.step, 'activate');
+  assert.equal(activation.document.stopped.reasonCode, 'preview-mismatch');
+  assert.match(activation.document.stopped.detail, /^Nothing was activated \(preview-mismatch\): /);
+  assert.equal(await receiptOf(activated), null);
+  // The owning refusal is recorded, with the channel the refused confirmation came through.
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].outcome, 'refused');
+  assert.deepEqual(refused[0].consent, { channel: GUIDED_CHANNEL, provenance: 'self-declared' });
+});
+
+/**
+ * `SG-CFG-001`, `RISK-008`. An activated clone whose policy file was weakened
+ * by hand reaches the `gate sync` remedy; the Gate refuses the weaker
+ * candidate, and nothing is acknowledged or re-pinned until the weakening it
+ * names is typed back — then its acknowledged preview is confirmed on yes.
+ */
+test('TB-072 SG-CFG-001: a weakening is refused until the maintainer types it back', async (t) => {
+  const root = await activatedClone(t, { policy: TWO_CHECK_POLICY });
+  const weakened = (await configurationOf(root)).replace(
+    sectionLine('checks', TWO_CHECK_POLICY.checks),
+    sectionLine('checks', { required: [], advisory: ['configuration.static-analysis.lint', 'configuration.broad-tests.test'] }),
+  );
+  const named = 'required-check-demoted configuration.broad-tests.test';
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), weakened, 'utf8');
+
+  const receipt = await receiptOf(root);
+
+  for (const answers of [['yes'], ['required-check-demoted'], []]) {
+    const run = await guidedSetup(root, answers);
+
+    assert.equal(run.exitCode, 1);
+    assert.equal(run.document.stopped.reasonCode, 'weakening-unacknowledged', run.terminal.output);
+    assert.deepEqual(askedOf(run.terminal), ['acknowledge the weakening']);
+    assert.ok(run.terminal.questions[0].includes(`(${named})`), run.terminal.questions[0]);
+    assert.equal(await receiptOf(root), receipt, 'a weakening was re-pinned without its acknowledgement.');
+  }
+
+  const run = await guidedSetup(root, [named, 'yes']);
+
+  assert.equal(run.exitCode, 0, run.terminal.output);
+  assert.deepEqual(askedOf(run.terminal), ['acknowledge the weakening', 'confirm gate sync']);
+  assert.match(run.terminal.output, /"acknowledgedWeakening": true/);
+  await assertHealthy(root);
+
+  const synced = (await eventsOf(root)).at(-1);
+
+  assert.equal(synced.outcome, 'succeeded');
+  assert.deepEqual(synced.consent, { channel: GUIDED_CHANNEL, provenance: 'self-declared' });
+});
+
+test('TB-072: doctor predicting a stop ends the run at that step with its own reason, asking nothing', async (t) => {
+  const root = await throwawayRepository(t);
+
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    schemaV4Configuration().replace(
+      '        - runner: repository-script\n          args:\n            - tools/check.mjs\n            - app/Order.php',
+      '        - runner: composer-bin\n          args:\n            - phpunit',
+    ),
+    'utf8',
+  );
+  await commit(root);
+
+  const before = await cloneHash(root);
+  const doctor = await gateJson(root, ['doctor']);
+  const run = await guidedSetup(root, ['', 'yes']);
+
+  assert.equal(run.exitCode, 1);
+  assert.deepEqual(run.terminal.questions, []);
+  assert.equal(run.document.stopped.step, 'doctor');
+  assert.equal(run.document.stopped.reasonCode, doctor.observation.verdict.stop.reasonCode);
+  assert.ok(run.document.stopped.detail.endsWith(doctor.observation.verdict.stop.detail), run.document.stopped.detail);
+  assert.equal(await cloneHash(root), before);
+});
+
+/**
+ * `SG-GUIDE-001`, `FR-GUIDE-002`. Without the interactive flag — or with
+ * `--json` — the entry prints exactly TB-067's plan, asks nothing, and
+ * confirms nothing, whatever answers the terminal holds.
+ */
+test('TB-072 SG-GUIDE-001: without the interactive flag, or with --json, the plan is printed byte for byte and nothing is asked', async (t) => {
+  for (const clone of [() => schemaV3Clone(t), () => schemaV4Clone(t), () => activatedClone(t)]) {
+    const root = await clone();
+    const before = await cloneHash(root);
+
+    for (const [argv, interactive] of [[['setup'], false], [['setup', '--json'], false], [['setup', '--json'], true]]) {
+      const run = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, 'yes', 'yes', '', 'yes'], { argv, interactive });
+      const printed = await agentFramework(root, argv);
+
+      assert.equal(run.stdout, printed.stdout, `${argv.join(' ')} (interactive ${interactive}) differs from TB-067's plan.`);
+      assert.equal(run.exitCode, printed.status);
+      assert.equal(run.terminal.output, '');
+      assert.deepEqual(run.terminal.questions, []);
+    }
+
+    assert.equal(await cloneHash(root), before);
+  }
+});
+
+/**
+ * `NFR-REL-004`. Twin fixtures — the same schema v3 clone at the same path,
+ * one walked by guided setup, one by the direct command sequence a maintainer
+ * types — end with byte-identical configuration, the same receipt apart from
+ * the instants it records, the random identifiers of its self-test subjects,
+ * and the receipt identity that hashes them, and the same Lifecycle events
+ * apart from those; the recorded consent channel is the only other
+ * difference.
+ */
+test('TB-072 NFR-REL-004: guided setup and the direct command sequence write the same configuration, receipt, and events', async (t) => {
+  const root = await schemaV3Clone(t);
+  const guided = await guidedSetup(root, [...SCHEMA_V3_DECISIONS, 'yes', 'yes', '', 'yes']);
+
+  assert.equal(guided.exitCode, 0, guided.terminal.output);
+
+  const throughGuide = { configuration: await configurationOf(root), receipt: await receiptOf(root), events: await eventsOf(root) };
+
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root);
+  await seedSchemaV3(await seedRepository(root));
+
+  const scratch = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-direct-')));
+  const mapping = path.join(scratch, 'mapping.json');
+  const policy = path.join(scratch, 'policy.json');
+  const configure = async (...argv) => {
+    const result = await run(process.execPath, [CONFIGURE, '--project', root, ...argv], { cwd: root });
+
+    assert.equal(result.status, 0, result.stderr);
+
+    return JSON.parse(result.stdout);
+  };
+
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+
+  const drafted = await configure('--draft-mapping', '--out', mapping);
+
+  drafted.profiles.backend = 'express-typescript';
+  drafted.commands['verification.commands.test.backend[0]'].timeout_seconds = 60;
+  await writeFile(mapping, JSON.stringify(drafted), 'utf8');
+  await configure('--migrate-v4', '--mapping', mapping, '--confirm', (await configure('--migrate-v4', '--mapping', mapping)).previewHash);
+  await configure('--draft-policy', '--out', policy);
+  await configure('--configure-gate', '--policy', policy, '--confirm', (await configure('--configure-gate', '--policy', policy)).previewHash);
+  assert.equal((await gateJson(root, ['doctor'])).observation.verdict.proceeds, true);
+
+  const preview = await gateJson(root, ['activate']);
+
+  assert.equal((await gateJson(root, ['activate', '--confirm', preview.observation.confirmationToken])).mutation.performed, true);
+
+  const direct = { configuration: await configurationOf(root), receipt: await receiptOf(root), events: await eventsOf(root) };
+  const INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g;
+  const SUBJECT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+  const receiptBody = (text) => {
+    const { receiptId, ...body } = JSON.parse(text.replace(INSTANT, '<instant>').replace(SUBJECT, '<subject>'));
+
+    assert.match(receiptId, /^sha256:/);
+
+    return body;
+  };
+  // An event names the receipt it wrote by that receipt's identity.
+  const eventsBody = ({ receipt, events }) => events.map(({ eventId, occurredAt, consent, ...body }) => JSON.parse(JSON.stringify(body)
+    .replaceAll(JSON.parse(receipt).receiptId, '<receipt>')
+    .replace(INSTANT, '<instant>')
+    .replace(SUBJECT, '<subject>')));
+
+  assert.equal(throughGuide.configuration, direct.configuration);
+  assert.deepEqual(receiptBody(throughGuide.receipt), receiptBody(direct.receipt));
+  assert.deepEqual(throughGuide.events.map((event) => event.type), direct.events.map((event) => event.type));
+  assert.deepEqual(eventsBody(throughGuide), eventsBody(direct));
+  assert.ok(throughGuide.events.every((event) => event.consent?.channel === GUIDED_CHANNEL));
+  assert.ok(direct.events.every((event) => event.consent === undefined));
+});
+
+test('TB-072 SG-GUIDE-002: no secret canary from the environment or a declared environment file appears in a guided run', async (t) => {
+  const env = environment({ DB_PASSWORD: SECRET_CANARY });
+  const root = await configuredClone(t, {
+    policy: { ...CONFIGURED_POLICY, evidence: { sensitive_inputs: ['DB_PASSWORD'], environment_files: ['.env'] } },
+    prepare: async (clone) => {
+      await writeFile(path.join(clone, '.gitignore'), '.env\n', 'utf8');
+      await writeFile(path.join(clone, '.env'), `DB_PASSWORD=${SECRET_CANARY}\n`, 'utf8');
+    },
+  });
+  const run = await guidedSetup(root, ['', 'yes'], { env });
+
+  assert.equal(run.exitCode, 0, run.terminal.output);
+  assert.match(run.terminal.output, /DB_PASSWORD/);
+  assert.equal(run.terminal.output.includes(SECRET_CANARY), false, 'the secret canary was printed.');
+  assert.equal(JSON.stringify(run.document).includes(SECRET_CANARY), false, 'the secret canary is in the guided record.');
+  assert.equal(JSON.stringify(await eventsOf(root)).includes(SECRET_CANARY), false, 'the secret canary was recorded.');
+});
+
+/**
+ * The real terminal: interactive only when standard input and output are both
+ * terminals, reading nothing until it asks, and reading end of input as
+ * `null`. A pipe — CI, an agent — is never interactive.
+ */
+test('TB-072 GAP-004: the process terminal is interactive only on a terminal and reads answers line by line', async () => {
+  const piped = processTerminal({ input: new PassThrough(), output: new PassThrough() });
+
+  assert.equal(piped.interactive, false);
+  piped.close();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+
+  input.isTTY = true;
+  output.isTTY = true;
+
+  const terminal = processTerminal({ input, output });
+  const written = [];
+
+  output.on('data', (chunk) => written.push(chunk.toString()));
+  assert.equal(terminal.interactive, true);
+  input.write('express-typescript\nyes\n');
+  assert.equal(await terminal.ask('first? '), 'express-typescript');
+  assert.equal(await terminal.ask('second? '), 'yes');
+
+  const third = terminal.ask('third? ');
+
+  input.end();
+  assert.equal(await third, null);
+  assert.equal(await terminal.ask('fourth? '), null);
+  terminal.write('done\n');
+  terminal.close();
+  assert.equal(written.join(''), 'first? second? third? fourth? done\n');
 });

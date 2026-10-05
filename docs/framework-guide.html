@@ -1166,14 +1166,27 @@ protected_files:
       </p>
 
       <div class="note">
-        <span class="note-tag">Not sure which step you are on?</span>
+        <span class="note-tag">Recommended: let <code>agent-framework setup</code> walk you through it</span>
         <p>
-          Ask <code>agent-framework setup</code> (or
-          <code>node .agents/skills/framework-setup/scripts/agent-framework.mjs setup</code>).
-          It reports where this clone stands, every remaining step in order, and the exact next
-          command — draft paths included. It writes and confirms nothing, and without the Gate
-          module installed it says the Gate steps are unavailable. Add <code>--json</code> for
-          the same plan as a document.
+          Once the module is installed (Step 1), run <code>agent-framework setup</code> (or
+          <code>node .agents/skills/framework-setup/scripts/agent-framework.mjs setup</code>) in
+          your own terminal. It performs Steps 2 to 4 for you, one step at a time: each step shows
+          the owning command's complete preview, asks only what nothing can derive — the
+          migration's open <code>null</code>s, offering the draft as the default, and the client
+          to activate — and confirms that exact preview only when you type <code>yes</code>.
+          Anything else stops, with the clone left at the last finished step. A policy weaker
+          than the one already trusted also needs the weakening typed back, word for word. It
+          repeats until <code>gate status</code> names nothing further, writes no draft file,
+          and asks you to copy no token. The Gate records each confirmation's Lifecycle event as
+          having come through a guided prompt (<code>consent.channel</code>, self-declared).
+        </p>
+        <p>
+          The prompts are your consent: an agent must not answer them. Piped, in CI, or with
+          <code>--json</code>, the same command asks nothing and confirms nothing; it reports
+          where this clone stands, every remaining step in order, and the exact next command —
+          draft paths included — and without the Gate module installed it says the Gate steps
+          are unavailable. The steps below are the same commands typed directly, and they write
+          the same configuration and receipt.
         </p>
       </div>
 

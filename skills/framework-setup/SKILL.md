@@ -8,16 +8,45 @@ description: Discover and configure a Laravel or Express/TypeScript repository f
 Create or update `.agent-framework.yaml`, the repository-local contract consumed
 by the lifecycle skills. Discovery is deterministic; decisions remain human.
 
-## Where the clone stands: `agent-framework setup`
+## Adopting the Gate: `agent-framework setup`
 
-Before choosing a step, ask the Framework command, which ships in this skill
-and as the `agent-framework` package bin:
+The recommended adoption path is the Framework command, which ships in this
+skill and as the `agent-framework` package bin:
 
 ```bash
 node <skill-directory>/scripts/agent-framework.mjs setup [--json] [--project <directory>]
 ```
 
-It reports the adoption state — `no-configuration`, `schema-v3`,
+**In an interactive terminal** (standard input and output both terminals, no
+`--json`) it walks the maintainer from the clone's adoption state to a healthy
+activated clone, one step at a time, re-deriving each step from the clone as
+the last one left it. For each step it shows the owning operation's complete
+preview — the migrated `.agent-framework.yaml`, the drafted Gate policy and the
+file it would write, or the Gate's own `--json` preview — and asks only what
+that operation cannot derive: the migration report's open decisions (a profile
+left `unknown`, a command's runner, arguments, or timeout), offering the owning
+draft's value as the default; the client to activate (`git` by default); and,
+for a candidate weaker than the trusted policy, the weakening the Gate names,
+typed back exactly. Only the answer `yes` confirms, and it confirms exactly that
+preview with its own token through the operation that owns it — this skill's
+migration and Gate configuration in-process, the Gate as its own command. Gate
+confirmations declare `--consent-channel interactive-guided-setup`, so the
+Lifecycle event the Gate appends records, as self-declared, that consent came
+through a guided prompt. Any other answer, end of input, or a refusal by the
+owning operation (a preview that changed before the answer, doctor predicting
+activation would stop) stops the run in the owning operation's words, with the
+clone at the last completed step; nothing is retried and no answer is carried
+to the next step or run. It repeats until Gate status names nothing further,
+then prints where the clone stands. It writes no draft file and prints no token
+to copy. Base setup has no preview, so a clone with no configuration is told the
+command to run and nothing is performed.
+
+The prompts are the maintainer's consent. An agent must not answer them; an
+agent runs `setup --json`, or without a terminal, and hands the confirmation to
+the maintainer.
+
+**Without a terminal, or with `--json`,** it confirms nothing and prints the
+plan: the adoption state — `no-configuration`, `schema-v3`,
 `gate-unconfigured`, `configured`, or `activated` with the Gate's health — every
 remaining step in order with the command that owns it, and the exact next
 command, including the draft path to use. It writes, confirms, and registers
@@ -32,12 +61,17 @@ Gate, rather than guess a command — update the Gate module.
 
 It reaches the Gate only by running `change-evaluation-gate` on the path, else
 the installed `change-evaluation-gate` skill beside this one. When neither
-exists it names only this skill's steps and says the Gate steps are
+exists it performs or names only this skill's steps and says the Gate steps are
 unavailable. Exit status is `0` with nothing further to do, `1` when steps
-remain, and `2` when it could not run.
+remain (or a guided run stopped), and `2` when it could not run.
 
-Completion criterion: the next step and its owning command are known. Perform
-it through the section below that owns it.
+The direct commands each step names remain documented below and in the Gate's
+lifecycle contract; a guided step and the same command typed directly write the
+same configuration, receipt, and Lifecycle events, apart from the recorded
+consent channel.
+
+Completion criterion: Gate status names nothing further, or the next step and
+its owning command are known. Perform it through the section below that owns it.
 
 ## What the Gate runs: `agent-framework config show`
 

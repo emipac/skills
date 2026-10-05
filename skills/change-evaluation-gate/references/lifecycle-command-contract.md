@@ -74,13 +74,13 @@ gate check      [--staged] [--json]
 gate doctor     [--json]
 gate locks      [--recover <token>] [--json]
 gate prune      [--evaluation <id>] [--before <instant>] [--reclaim <bytes>] [--confirm <token>] [--json]
-gate repair     [--hook-script <path>] [--confirm <token>] [--json]
+gate repair     [--hook-script <path>] [--confirm <token> [--consent-channel <channel>]] [--json]
 gate update     [--confirm <token>] [--json]
-gate deactivate [--confirm <token>] [--json]
+gate deactivate [--confirm <token> [--consent-channel <channel>]] [--json]
 gate uninstall  --asset <path> ... [--confirm <token>] [--json]
 gate cleanup    [--confirm <token>] [--json]
 gate bypass     --reason <text> [--reference <ref>] [--actor <name>] [--confirm <token>] [--json]
-gate sync       [--acknowledge-weakening] [--confirm <token>] [--json]
+gate sync       [--acknowledge-weakening] [--confirm <token> [--consent-channel <channel>]] [--json]
 ```
 
 **Two invocations, never one.** Every command previews by default and writes
@@ -92,6 +92,22 @@ both commands back to back, and it is not meant to — it means no single comman
 destroys anything. `status`, `check`, and `doctor` have no confirmed form at
 all: none of them mutates anything under the clone, so none has anything to
 confirm.
+
+**A confirmation may declare its consent channel.** `gate activate`, `gate
+sync`, `gate repair`, and `gate deactivate` accept `--consent-channel
+<channel>`, a value selector from one declared vocabulary
+(`CONSENT_CHANNELS`): `interactive-guided-setup`, the explicit answer a
+maintainer gave a Guided setup prompt in an interactive terminal after the
+operation's complete preview (`RISK-011`, `TB-072`). Any other value is refused
+as `selector-invalid` before anything runs. The channel is not part of any
+token and changes nothing that is performed; it is echoed in
+`invocation.selectors` like any value selector, and every Lifecycle event the
+confirming invocation appends — a refusal included — carries it as `consent: {
+channel, provenance: "self-declared" }`, because which terminal a confirmation
+came from is not something this command can observe. A confirmation that
+declares none records exactly what it recorded before the selector existed, and
+the Activation receipt never carries a channel, so a guided and a direct
+confirmation of the same preview pin the same receipt (`NFR-REL-004`).
 
 **The preview is re-derived, never carried.** Every invocation rebuilds the
 preview from the filesystem as it is right now, and the operator's token is

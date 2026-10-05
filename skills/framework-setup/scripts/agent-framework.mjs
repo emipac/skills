@@ -22,9 +22,21 @@
  *   does not name them is refused, never guessed for (`TB-074`);
  * - whether activation would stop is `gate doctor --json`'s `verdict`.
  *
- * It confirms, writes, registers, and trusts nothing (`SG-GUIDE-001`), and
- * without the Gate module it names only `framework-setup` steps and says the
- * Gate steps are unavailable (`FR-GUIDE-009`).
+ * Printed, the plan confirms, writes, registers, and trusts nothing
+ * (`SG-GUIDE-001`), and without the Gate module it names only
+ * `framework-setup` steps and says the Gate steps are unavailable
+ * (`FR-GUIDE-009`).
+ *
+ * In an interactive terminal, and without `--json`, `setup` performs that plan
+ * (`FR-GUIDE-003`, `FR-GUIDE-004`, `TB-072`): step by step, each owning
+ * operation's complete preview is shown, only what it cannot derive is asked
+ * (the migration's open decisions, the client to activate, a weakening's
+ * acknowledgement), and only an explicit `yes` confirms exactly that preview,
+ * with its own token, through the operation that owns it — the Gate's with
+ * `--consent-channel interactive-guided-setup`, so its Lifecycle event records
+ * how consent arrived (`RISK-011`). It repeats until Gate status names nothing
+ * further; any other answer, or a refusal, stops with nothing further
+ * confirmed. Base setup has no preview, so it is named and never performed.
  *
  * `config show` presents the Gate configuration section by its five
  * subcontracts, read-only (`FR-GUIDE-005`, `TB-068`). The section, and on an
@@ -73,7 +85,7 @@
  * Gate's own acknowledged preview.
  *
  * Usage:
- *   agent-framework setup [--json] [--project <directory>]
+ *   agent-framework setup [--json] [--project <directory>]       (guided in an interactive terminal)
  *   agent-framework config show [--json] [--project <directory>]
  *   agent-framework config suggest [--json] [--project <directory>]
  *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
@@ -93,11 +105,14 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  configureGate,
   discoverGateConfigurationFacts,
   discoverProject,
   draftGatePolicy,
+  draftMigrationMapping,
   gatePolicyKeys,
   gateRevisions,
+  migrateConfiguration,
   previewConfigurationMigration,
   previewGateConfiguration,
   previewGateRevision,
@@ -106,6 +121,7 @@ import {
 } from './configure.mjs';
 import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 import { locateGateCommand, runGateCommand } from './lib/gate-command.mjs';
+import { processTerminal } from './lib/terminal.mjs';
 
 /** The document an agent parses. Versioned, so a later field is an addition rather than a surprise. */
 export const DOCUMENT_VERSION = 'agent-framework/setup/1';
@@ -179,6 +195,16 @@ const ACKNOWLEDGE_WEAKENING = '--acknowledge-weakening';
 const WEAKENING_UNACKNOWLEDGED = 'weakening-unacknowledged';
 
 /**
+ * How guided setup performs a planned step, kept on the step under a symbol so
+ * that no plan document — text or `--json` — changes by a byte (`TB-072`).
+ * `kind` is `unpreviewed`, `migration`, `gate-configuration`, `doctor`, or
+ * `gate` with the Gate subcommands the step names, in order.
+ */
+const PERFORM = Symbol('perform');
+
+const performedAs = (step, perform) => Object.assign(step, { [PERFORM]: perform });
+
+/**
  * Characters a POSIX shell passes through unchanged outside quotes; anything
  * else is single-quoted. The same rule the Gate prints its own instructions
  * with, restated because a skill never imports another skill's files.
@@ -217,7 +243,7 @@ const readDraft = async (file) => {
   }
 };
 
-const baseSetupStep = (projectRoot, discovery) => ({
+const baseSetupStep = (projectRoot, discovery) => performedAs({
   id: 'configure-project',
   owner: 'framework-setup',
   summary: 'write .agent-framework.yaml (schema version 3) and the tracker documents from discovery; every value not passed is the discovered one, and AGENTS.md is never written.',
@@ -228,7 +254,7 @@ const baseSetupStep = (projectRoot, discovery) => ({
   ],
   refusal: null,
   commands: [configureCommand('configure', projectRoot, '--tracker', discovery.recommendedTracker)],
-});
+}, { kind: 'unpreviewed' });
 
 /**
  * The schema v4 migration, with the decisions its own preview reports.
@@ -260,7 +286,7 @@ const migrationStep = async (projectRoot, { current }) => {
     }
   }
 
-  return {
+  return performedAs({
     id: 'migrate-schema-v4',
     owner: 'framework-setup',
     summary: `migrate .agent-framework.yaml from schema version 3 to 4: ${drafted ? 'answer every null in' : 'draft'} the mapping at ${mapping}, preview it, and confirm exactly that preview.`,
@@ -271,7 +297,7 @@ const migrationStep = async (projectRoot, { current }) => {
       preview,
       command('confirm', [...preview.argv, '--confirm', '<previewHash>']),
     ],
-  };
+  }, { kind: 'migration' });
 };
 
 /**
@@ -301,7 +327,7 @@ const gateConfigurationStep = async (projectRoot, { current }) => {
     }
   }
 
-  return {
+  return performedAs({
     id: 'configure-gate',
     owner: 'framework-setup',
     summary: `configure the dormant Gate: ${drafted ? 'review' : 'draft'} the policy at ${policy} — its required and advisory checks are the provider's defaults, not a decision — preview it, and confirm exactly that preview.`,
@@ -312,12 +338,12 @@ const gateConfigurationStep = async (projectRoot, { current }) => {
       preview,
       command('confirm', [...preview.argv, '--confirm', '<previewHash>']),
     ],
-  };
+  }, { kind: 'gate-configuration' });
 };
 
 const gateCommand = (role, prefix, ...argv) => command(role, [...prefix, ...argv]);
 
-const doctorStep = (prefix, verdict = null) => ({
+const doctorStep = (prefix, verdict = null) => performedAs({
   id: 'doctor',
   owner: 'change-evaluation-gate',
   summary: verdict === null
@@ -326,21 +352,21 @@ const doctorStep = (prefix, verdict = null) => ({
   decisions: [],
   refusal: verdict === null ? null : `${verdict.stop.reasonCode}: ${verdict.stop.detail}`,
   commands: [gateCommand('observe', prefix, 'doctor')],
-});
+}, { kind: 'doctor' });
 
 const previewedGateCommands = (prefix, subcommand) => [
   gateCommand('preview', prefix, subcommand),
   gateCommand('confirm', prefix, subcommand, '--confirm', '<token>'),
 ];
 
-const activationStep = (prefix) => ({
+const activationStep = (prefix) => performedAs({
   id: 'activate',
   owner: 'change-evaluation-gate',
   summary: 'activate the configured clone: preview, read it, and confirm exactly that preview with the token it prints.',
   decisions: ['client: git, unless --client <adapter-id> names another'],
   refusal: null,
   commands: previewedGateCommands(prefix, 'activate'),
-});
+}, { kind: 'gate', subcommands: ['activate'] });
 
 /**
  * One remedy `gate status` names, as a step: the Gate's own identifier and
@@ -353,14 +379,14 @@ const activationStep = (prefix) => ({
  */
 const remedyStep = (prefix, remedy) => (remedy.subcommands.length === 1 && remedy.subcommands[0] === 'activate'
   ? { ...activationStep(prefix), id: remedy.remedy }
-  : {
+  : performedAs({
     id: remedy.remedy,
     owner: 'change-evaluation-gate',
     summary: remedy.instruction,
     decisions: [],
     refusal: null,
     commands: remedy.subcommands.flatMap((subcommand) => previewedGateCommands(prefix, subcommand)),
-  });
+  }, { kind: 'gate', subcommands: [...remedy.subcommands] }));
 
 const failure = (reasonCode, detail) => ({ failure: { reasonCode, detail } });
 
@@ -532,14 +558,15 @@ const parseArguments = (argv) => {
   return revision !== null && options.revision[revision.argument] === undefined ? null : options;
 };
 
-const render = (document) => {
+/** The plan as text. `limit` is false only where a guided run, which did confirm, ends with its own. */
+const render = (document, { limit = true } = {}) => {
   const lines = [
     'agent-framework setup',
     `project: ${document.project}`,
   ];
 
   if (document.failure !== null) {
-    lines.push(`failed: ${document.failure.reasonCode} — ${document.failure.detail}`, LIMIT, '');
+    lines.push(`failed: ${document.failure.reasonCode} — ${document.failure.detail}`, ...(limit ? [LIMIT] : []), '');
 
     return lines.join('\n');
   }
@@ -583,7 +610,7 @@ const render = (document) => {
   lines.push(
     `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
     `run every command from ${document.project}.`,
-    LIMIT,
+    ...(limit ? [LIMIT] : []),
     '',
   );
 
@@ -1471,11 +1498,417 @@ const runConfigSuggest = async ({ projectRoot, environment }) => {
   };
 };
 
+/* ---------------------------------------------------------------------------
+ * Guided setup in an interactive terminal (`FR-GUIDE-003`, `FR-GUIDE-004`,
+ * `TB-072`).
+ *
+ * The plan above, performed one step at a time. Each step is re-derived from
+ * the clone as it is after the last one, so the run follows exactly the order
+ * `setup` prints, and only that order is this command's own decision
+ * (`SG-OWNER-001`). Each step shows the owning operation's complete preview,
+ * asks only what that operation cannot derive — the migration's open
+ * decisions, the client to activate, a weakening's acknowledgement — offering
+ * the owning draft as the default, and confirms only on an explicit `yes`,
+ * with that preview's own token, through the operation that owns it. Any other
+ * answer, end of input, or a refusal by the owning operation stops the run
+ * with nothing further confirmed; a refused step is reported in the owning
+ * operation's words and never retried. Consent is asked again for every step
+ * and is never remembered (`SG-GUIDE-001`).
+ * ------------------------------------------------------------------------- */
+
+/** The guided run's record, returned in-process to the caller that drove it. */
+export const GUIDED_DOCUMENT_VERSION = 'agent-framework/setup-guided/1';
+
+/**
+ * The channel a guided confirmation declares to the Gate, in the Gate's own
+ * vocabulary (`gate <command> --consent-channel`), so every Lifecycle event the
+ * confirmation appends records that consent came through this prompt
+ * (`RISK-011`). The Gate records it as self-declared; this command records
+ * nothing of its own.
+ */
+const GUIDED_CONSENT_CHANNEL = 'interactive-guided-setup';
+
+/** The one answer that confirms. `y`, an empty line, and end of input do not. */
+const AFFIRMATIVE = 'yes';
+
+const GUIDED_INTRO = `each step shows the owning operation's complete preview and asks only what that operation cannot derive; only the answer ${AFFIRMATIVE} confirms exactly that preview, through the operation that owns it, and any other answer stops with nothing further confirmed.`;
+
+const GUIDED_LIMIT = `guided setup confirmed only what was answered ${AFFIRMATIVE} after its complete preview, each through the operation that owns it with that preview's own token; it wrote no draft and asked again for every step.`;
+
+const performed = (summary) => ({ done: true, summary });
+
+const stopped = (reasonCode, detail) => ({ done: false, stop: { reasonCode, detail } });
+
+const DECLINED = stopped('declined', `the answer was not ${AFFIRMATIVE}, so nothing was confirmed; the clone stays at the last completed step.`);
+
+const INPUT_ENDED = stopped('input-ended', 'input ended before the question was answered, so nothing was confirmed; the clone stays at the last completed step.');
+
+/** Text shown inside a preview, indented so it reads as the preview's own. */
+const indented = (text) => text.replace(/\n$/, '').split('\n').map((line) => `    ${line}`);
+
+/** A decision as typed: read as JSON when it parses as JSON, else as text; empty takes the default. */
+const readDecision = (answer, fallback) => {
+  const text = answer.trim();
+
+  if (text === '') {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
+
+/** What one guided run says and asks, on the terminal it was given. */
+const guidedIo = (terminal) => ({
+  say: (...lines) => terminal.write(`${lines.join('\n')}\n`),
+  ask: (question) => terminal.ask(question),
+  decide: async (label, fallback) => {
+    const shown = fallback === null || fallback === undefined ? '' : ` [${typeof fallback === 'string' ? fallback : JSON.stringify(fallback)}]`;
+    const answer = await terminal.ask(`decide ${label}${shown}: `);
+
+    return answer === null ? null : { typed: answer.trim(), value: readDecision(answer, fallback ?? null) };
+  },
+  /** `null` when the answer is consent to exactly this preview; otherwise why nothing is confirmed. */
+  withheld: async (label, token) => {
+    const answer = await terminal.ask(`confirm ${label} exactly as previewed (${token})? type ${AFFIRMATIVE} to confirm; anything else stops: `);
+
+    if (answer === null) {
+      return INPUT_ENDED;
+    }
+
+    return answer.trim().toLowerCase() === AFFIRMATIVE ? null : DECLINED;
+  },
+});
+
+/**
+ * The schema v4 migration: its own report's open decisions asked, each
+ * defaulting to the owning draft's value, then its preview, then its
+ * confirmation with that preview's hash.
+ */
+const guideMigration = async ({ projectRoot, io }) => {
+  let report;
+  let draft;
+
+  try {
+    report = await previewConfigurationMigration({ projectRoot, mappings: {} });
+    draft = await draftMigrationMapping({ projectRoot });
+  } catch (error) {
+    return stopped('migration-refused', error.message);
+  }
+
+  const mappings = {
+    profiles: { ...draft.profiles },
+    commands: Object.fromEntries(Object.entries(draft.commands).map(([commandPath, fields]) => [commandPath, { ...fields }])),
+  };
+
+  if (report.ambiguities.length > 0) {
+    io.say(`decisions: the migration report leaves ${report.ambiguities.length} open; each default is the owning draft's, and an answer is read as JSON when it parses as JSON.`);
+  }
+
+  for (const ambiguity of report.ambiguities) {
+    for (const field of ambiguity.required) {
+      const isProfile = Object.hasOwn(mappings.profiles, ambiguity.path);
+      const answer = await io.decide(
+        `${ambiguity.path} ${field} (${JSON.stringify(ambiguity.value)})`,
+        isProfile ? mappings.profiles[ambiguity.path] : mappings.commands[ambiguity.path]?.[field],
+      );
+
+      if (answer === null) {
+        return INPUT_ENDED;
+      }
+
+      if (isProfile) {
+        mappings.profiles[ambiguity.path] = answer.value;
+      } else {
+        mappings.commands[ambiguity.path] = { ...mappings.commands[ambiguity.path], [field]: answer.value };
+      }
+    }
+  }
+
+  let preview;
+
+  try {
+    preview = await previewConfigurationMigration({ projectRoot, mappings });
+  } catch (error) {
+    return stopped('migration-refused', error.message);
+  }
+
+  if (preview.status !== 'ready') {
+    return stopped('migration-requires-mapping', `the migration preview still requires ${preview.ambiguities.map((ambiguity) => `${ambiguity.path}: ${ambiguity.required.join(', ')}`).join('; ')}.`);
+  }
+
+  io.say(
+    'preview (framework-setup, migrate-schema-v4):',
+    `  mapping: ${JSON.stringify(mappings)}`,
+    `  .agent-framework.yaml, from schema version ${preview.fromVersion} to ${preview.toVersion}, would read:`,
+    ...indented(preview.proposedConfiguration),
+    `  previewHash: ${preview.previewHash}`,
+  );
+
+  const withheld = await io.withheld('migrate-schema-v4', preview.previewHash);
+
+  if (withheld !== null) {
+    return withheld;
+  }
+
+  try {
+    await migrateConfiguration({ projectRoot, mappings, confirmation: preview.previewHash });
+  } catch (error) {
+    return stopped('migration-refused', error.message);
+  }
+
+  return performed(`.agent-framework.yaml is at schema version 4, written exactly as previewed (${preview.previewHash}).`);
+};
+
+/**
+ * Gate configuration: the owning drafter's policy — its checks are the
+ * provider's defaults, not a decision — previewed, then confirmed with that
+ * preview's hash.
+ */
+const guideGateConfiguration = async ({ projectRoot, io }) => {
+  let policy;
+  let preview;
+
+  try {
+    policy = await draftGatePolicy({ projectRoot });
+    preview = await previewGateConfiguration({ projectRoot, policy });
+  } catch (error) {
+    return stopped('gate-configuration-refused', error.message);
+  }
+
+  io.say(
+    'preview (framework-setup, configure-gate):',
+    "  policy: the owning draft; its required and advisory checks are the provider's defaults, not a decision:",
+    ...indented(JSON.stringify(policy, null, 2)),
+    '  .agent-framework.yaml would read:',
+    ...indented(preview.proposedConfiguration),
+    `  previewHash: ${preview.previewHash}`,
+  );
+
+  const withheld = await io.withheld('configure-gate', preview.previewHash);
+
+  if (withheld !== null) {
+    return withheld;
+  }
+
+  try {
+    await configureGate({ projectRoot, policy, confirmation: preview.previewHash });
+  } catch (error) {
+    return stopped('gate-configuration-refused', error.message);
+  }
+
+  return performed(`the dormant Gate is configured, written exactly as previewed (${preview.previewHash}).`);
+};
+
+/**
+ * The first Gate subcommand a step names: its `--json` preview shown whole, as
+ * the Gate states it; for a weaker candidate the Gate refuses, the weakening it
+ * names typed back before its acknowledged preview is asked for
+ * (`SG-CFG-001`); then its own token, confirmed on `yes` with the consent
+ * channel declared. A step naming several subcommands is performed one at a
+ * time, the next step re-derived from Gate status after each.
+ */
+const guideGateSubcommand = async ({ projectRoot, environment, gate, step, io }) => {
+  const [subcommand] = step[PERFORM].subcommands;
+
+  if (subcommand === undefined) {
+    return stopped('maintainer-step', `gate status names a step the maintainer performs, with no command: ${step.summary}`);
+  }
+
+  const selectors = [];
+
+  if (subcommand === 'activate') {
+    const client = await io.decide('client (the adapter to activate)', 'git');
+
+    if (client === null) {
+      return INPUT_ENDED;
+    }
+
+    // An empty answer is the Gate's own default, so nothing is passed for it.
+    if (client.typed !== '') {
+      selectors.push('--client', client.typed);
+    }
+  }
+
+  const preview = async () => {
+    const previewed = await runGateCommand(gate, { cwd: projectRoot, args: [subcommand, ...selectors], environment });
+
+    if (!previewed.failure) {
+      io.say(
+        `preview (change-evaluation-gate, ${[...gate.display, subcommand, ...selectors, '--json'].map(quoteForShell).join(' ')}), as the Gate states it:`,
+        ...indented(JSON.stringify(previewed.document.observation, null, 2)),
+      );
+    }
+
+    return previewed;
+  };
+  let previewed = await preview();
+
+  if (previewed.failure) {
+    return stopped(previewed.failure.reasonCode, previewed.failure.detail);
+  }
+
+  if (previewed.document.observation.refusal?.reasonCode === WEAKENING_UNACKNOWLEDGED) {
+    const { refusal, transition } = previewed.document.observation;
+    const named = (transition?.weakenings ?? []).map((weakening) => `${weakening.code} ${weakening.checkId}`).join(', ');
+
+    if (named === '') {
+      return stopped(refusal.reasonCode, refusal.detail ?? 'the Gate refuses a weaker candidate and names no weakening to acknowledge.');
+    }
+
+    io.say(`the Gate offers no token for a candidate weaker than the trusted policy until the weakening is acknowledged; it names: ${named}`);
+
+    const typed = await io.ask(`acknowledge the weakening by typing it exactly as named (${named}); anything else stops: `);
+
+    if (typed === null || typed.trim() !== named) {
+      return stopped(refusal.reasonCode, `the weakening was not typed back, so nothing was acknowledged or confirmed. ${refusal.detail ?? ''}`.trim());
+    }
+
+    selectors.push(ACKNOWLEDGE_WEAKENING);
+    previewed = await preview();
+
+    if (previewed.failure) {
+      return stopped(previewed.failure.reasonCode, previewed.failure.detail);
+    }
+  }
+
+  const { observation } = previewed.document;
+
+  if (typeof observation.confirmationToken !== 'string') {
+    return stopped(
+      observation.refusal?.reasonCode ?? 'no-token',
+      observation.refusal?.detail ?? `the Gate offers no token for this ${subcommand} preview.`,
+    );
+  }
+
+  const withheld = await io.withheld(`gate ${subcommand}`, observation.confirmationToken);
+
+  if (withheld !== null) {
+    return withheld;
+  }
+
+  const confirmed = await runGateCommand(gate, {
+    cwd: projectRoot,
+    args: [subcommand, ...selectors, '--confirm', observation.confirmationToken, '--consent-channel', GUIDED_CONSENT_CHANNEL],
+    environment,
+  });
+
+  if (confirmed.failure) {
+    return stopped(confirmed.failure.reasonCode, confirmed.failure.detail);
+  }
+
+  const { mutation } = confirmed.document;
+
+  if (mutation?.performed !== true) {
+    return stopped(mutation?.reasonCode ?? 'not-performed', mutation?.summary ?? `the Gate did not perform the ${subcommand}.`);
+  }
+
+  return performed(`${mutation.summary} consent channel: ${GUIDED_CONSENT_CHANNEL}, declared to the Gate, which records it as self-declared.`);
+};
+
+/** Perform one planned step as its kind says; the plan supplies the Gate and doctor's verdict. */
+const guideStep = ({ projectRoot, environment, planned, step, io }) => ({
+  unpreviewed: async () => stopped(
+    'step-unpreviewed',
+    `${step.id} writes .agent-framework.yaml with no preview to confirm, so guided setup does not perform it (SG-GUIDE-001). Run it yourself, then run agent-framework setup again: ${step.commands[0].run}`,
+  ),
+  migration: () => guideMigration({ projectRoot, io }),
+  'gate-configuration': () => guideGateConfiguration({ projectRoot, io }),
+  // The plan names doctor first only when its verdict is a stop.
+  doctor: async () => stopped(
+    planned.doctor?.stop?.reasonCode ?? 'doctor-stop',
+    `gate doctor predicts activation would stop: ${planned.doctor?.stop?.detail ?? step.summary}`,
+  ),
+  gate: () => guideGateSubcommand({ projectRoot, environment, gate: planned.gate, step, io }),
+}[step[PERFORM].kind])();
+
+/**
+ * Walk the clone through every remaining step, then print where it stands
+ * exactly as `setup` prints it.
+ */
+const runGuidedSetup = async ({ projectRoot, environment, terminal }) => {
+  const io = guidedIo(terminal);
+  const completed = [];
+  let stop = null;
+  let last = null;
+
+  io.say('agent-framework setup — guided', `project: ${projectRoot}`, GUIDED_INTRO);
+
+  while (stop === null && await exists(projectRoot)) {
+    const planned = await planSetup({ projectRoot, environment });
+
+    if (planned.failure) {
+      stop = { step: null, ...planned.failure };
+      break;
+    }
+
+    const [step] = planned.steps;
+
+    if (step === undefined) {
+      break;
+    }
+
+    if (step.id === last) {
+      stop = { step: step.id, reasonCode: 'step-repeated', detail: `${step.id} completed, and the owning observation names it again; setup does not repeat a step.` };
+      io.say(`stopped: ${stop.reasonCode} — ${stop.detail}`);
+      break;
+    }
+
+    // A Gate step is introduced in the Gate's own words; a framework-setup
+    // step's printed summary names draft files this run never writes.
+    io.say('', `step ${completed.length + 1}: ${step.id} (${step.owner})${step.owner === 'change-evaluation-gate' ? ` — ${step.summary}` : ''}`);
+
+    const outcome = await guideStep({ projectRoot, environment, planned, step, io });
+
+    if (!outcome.done) {
+      stop = { step: step.id, ...outcome.stop };
+      io.say(`stopped: ${stop.reasonCode} — ${stop.detail}`);
+      break;
+    }
+
+    io.say(`done: ${outcome.summary}`);
+    completed.push({ step: step.id, owner: step.owner, summary: outcome.summary });
+    last = step.id;
+  }
+
+  const { document: plan } = await runSetup({ projectRoot, environment });
+  const exitStatus = stop === null ? plan.exitStatus : Math.max(EXIT_STEPS_REMAIN, plan.exitStatus);
+
+  io.say('', 'where this clone stands now:');
+  terminal.write(render(plan, { limit: false }));
+  io.say(GUIDED_LIMIT);
+
+  return {
+    exitCode: exitStatus,
+    stdout: '',
+    stderr: '',
+    document: {
+      document: GUIDED_DOCUMENT_VERSION,
+      command: 'setup',
+      exitStatus,
+      project: projectRoot,
+      consentChannel: GUIDED_CONSENT_CHANNEL,
+      completed,
+      stopped: stop,
+      plan,
+      limit: GUIDED_LIMIT,
+    },
+  };
+};
+
 /**
  * Run one Framework command invocation and return what it printed, without
  * touching the process — the seam tests and later subcommands drive.
+ *
+ * `terminal` is where guided setup asks its questions (`lib/terminal.mjs`).
+ * `setup` is guided only when the terminal says it is interactive and no
+ * `--json` was asked for; otherwise — and for every other subcommand — the
+ * terminal is not touched and the output is exactly the printed plan.
  */
-export const runFrameworkCommand = async ({ cwd, argv, environment = process.env }) => {
+export const runFrameworkCommand = async ({ cwd, argv, environment = process.env, terminal = null }) => {
   const options = parseArguments(argv);
 
   if (options === null) {
@@ -1483,6 +1916,11 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
   }
 
   const projectRoot = path.resolve(cwd, options.project ?? '.');
+
+  if (options.subcommand === 'setup' && !options.json && terminal?.interactive === true) {
+    return runGuidedSetup({ projectRoot, environment, terminal });
+  }
+
   const run = {
     setup: runSetup,
     'config show': runConfigShow,
@@ -1505,11 +1943,19 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
 };
 
 if (isCliEntryPoint(import.meta.url)) {
-  const result = await runFrameworkCommand({
-    cwd: process.cwd(),
-    argv: process.argv.slice(2),
-    environment: process.env,
-  });
+  const terminal = processTerminal();
+  let result;
+
+  try {
+    result = await runFrameworkCommand({
+      cwd: process.cwd(),
+      argv: process.argv.slice(2),
+      environment: process.env,
+      terminal,
+    });
+  } finally {
+    terminal.close();
+  }
 
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);

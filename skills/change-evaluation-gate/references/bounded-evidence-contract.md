@@ -207,9 +207,14 @@ immutable local record (`FR-EVID-005`). Every event records:
 | `outcome` | `succeeded`, `refused`, `failed`, or `detected` |
 | `reason` | Why the record exists |
 | `redaction` | Redaction version, applied rule counts, and rules |
+| `consent` | Present only when the confirming invocation declared `--consent-channel`: `channel` from the declared vocabulary (`interactive-guided-setup`) and `provenance`, always `self-declared` (`RISK-011`, `TB-072`) |
 
 Actor attribution is a local convenience, never an authentication claim, and
-`authenticated: true` is not expressible. An event that fails the audit schema is
+`authenticated: true` is not expressible. A consent channel is the same kind of
+claim: the Gate cannot observe which terminal, if any, a confirmation came
+from, so it records the declared channel as `self-declared` on every event that
+confirmation appends, refusals included, refuses a channel outside the
+vocabulary, and records nothing about a channel when none was declared. An event that fails the audit schema is
 refused rather than stored. Later slices emit their own event types through this
 same contract.
 
