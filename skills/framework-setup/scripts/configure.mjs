@@ -1139,6 +1139,50 @@ const nothingToRevise = (detail) => revisionRefusal(
   `${detail}, so this revision changes nothing; nothing was written.`,
 );
 
+/** `subcontract` with `value` appended to its `key` list. */
+const withListed = (subcontract, key, value) => ({ ...subcontract, [key]: [...listOrEmpty(subcontract[key]), value] });
+
+/** `subcontract` with `value` gone from its `key` list, which stays declared. */
+const withoutListed = (subcontract, key, value) => (
+  Array.isArray(subcontract[key])
+    ? { ...subcontract, [key]: subcontract[key].filter((declared) => declared !== value) }
+    : subcontract
+);
+
+/**
+ * `checks` with one bound check moved from one severity to the other.
+ *
+ * Only a check the policy already binds moves: an identity bound as neither is
+ * refused rather than bound, because binding a check is not a severity change
+ * and which identities a profile resolves is Verification's (`SG-OWNER-001`).
+ */
+const movedCheck = (checks, check, from, to) => {
+  if (listOrEmpty(checks[to]).includes(check)) {
+    throw nothingToRevise(`check ${check} is already ${to}`);
+  }
+
+  if (!listOrEmpty(checks[from]).includes(check)) {
+    throw revisionRefusal(
+      'check-unbound',
+      `check ${check} is not bound by the Gate policy, so there is no severity to change: a revision moves only a check the policy already binds between required and advisory, and never binds a new one or edits a Verification profile command. Nothing was written.`,
+    );
+  }
+
+  return { ...checks, [from]: checks[from].filter((declared) => declared !== check), [to]: [...listOrEmpty(checks[to]), check] };
+};
+
+/**
+ * `true` and `false` as the booleans they spell; any other value as given, so
+ * the Gate policy validator refuses it with its own reason.
+ */
+const spelledBoolean = (value) => {
+  if (value === 'true') {
+    return true;
+  }
+
+  return value === 'false' ? false : value;
+};
+
 /**
  * `execution` with one root given `provisioning`, changing as little of the
  * declaration as that takes, and returned as is when the root already has it.
@@ -1178,9 +1222,17 @@ const withRootProvisioning = (execution, root, provisioning) => {
  * names, `options` the optional values it accepts, and `revise` derives the
  * revised subcontract from the current one, or refuses when the revision would
  * change nothing. None of them judges the candidate — the Gate policy
- * validator `configure-gate` loads does, after (`SG-OWNER-001`). This slice
- * holds `execution` only; the other subcontracts are revised by adding rows
- * here (`TB-070`), and `allowed_environment` is never a Gate policy property.
+ * validator `configure-gate` loads does, after (`SG-OWNER-001`): a value it
+ * would refuse, such as an enabled bypass with no marker, reaches it as given
+ * and is refused with its own reason. `TB-069` added the `execution` rows;
+ * `TB-070` the `evidence`, `checks`, `budget`, and `bypass` rows.
+ *
+ * A Sensitive runtime input is declared by name, and the source it may be
+ * resolved from besides the environment by naming its environment file; no
+ * value is read, asked for, or written (`SG-SECRET-001`). A check is moved or
+ * removed only when the policy already binds it, so no revision binds a new
+ * check, and none adds or edits a Verification profile command or an
+ * `allowed_environment`, which is never a Gate policy property.
  */
 export const gateRevisions = Object.freeze({
   'add-dependency-root': Object.freeze({
@@ -1278,7 +1330,147 @@ export const gateRevisions = Object.freeze({
       return { ...execution, budget_skippable: skippable.filter((declared) => declared !== check) };
     },
   }),
+  'add-sensitive-input': Object.freeze({
+    subcontract: 'evidence',
+    argument: 'name',
+    options: Object.freeze(['environment-file']),
+    revise: (evidence, { name, 'environment-file': file }) => {
+      const addsName = !listOrEmpty(evidence.sensitive_inputs).includes(name);
+      const addsFile = file !== undefined && !listOrEmpty(evidence.environment_files).includes(file);
+
+      if (!addsName && !addsFile) {
+        throw nothingToRevise(file === undefined
+          ? `Sensitive runtime input ${name} is already declared`
+          : `Sensitive runtime input ${name} and environment file ${file} are already declared`);
+      }
+
+      const named = addsName ? withListed(evidence, 'sensitive_inputs', name) : evidence;
+
+      return addsFile ? withListed(named, 'environment_files', file) : named;
+    },
+  }),
+  'remove-sensitive-input': Object.freeze({
+    subcontract: 'evidence',
+    argument: 'name',
+    options: Object.freeze([]),
+    revise: (evidence, { name }) => {
+      if (!listOrEmpty(evidence.sensitive_inputs).includes(name)) {
+        throw nothingToRevise(`Sensitive runtime input ${name} is not declared`);
+      }
+
+      return withoutListed(evidence, 'sensitive_inputs', name);
+    },
+  }),
+  'add-environment-file': Object.freeze({
+    subcontract: 'evidence',
+    argument: 'file',
+    options: Object.freeze([]),
+    revise: (evidence, { file }) => {
+      if (listOrEmpty(evidence.environment_files).includes(file)) {
+        throw nothingToRevise(`environment file ${file} is already declared`);
+      }
+
+      return withListed(evidence, 'environment_files', file);
+    },
+  }),
+  'remove-environment-file': Object.freeze({
+    subcontract: 'evidence',
+    argument: 'file',
+    options: Object.freeze([]),
+    revise: (evidence, { file }) => {
+      if (!listOrEmpty(evidence.environment_files).includes(file)) {
+        throw nothingToRevise(`environment file ${file} is not declared`);
+      }
+
+      return withoutListed(evidence, 'environment_files', file);
+    },
+  }),
+  'promote-check': Object.freeze({
+    subcontract: 'checks',
+    argument: 'check',
+    options: Object.freeze([]),
+    revise: (checks, { check }) => movedCheck(checks, check, 'advisory', 'required'),
+  }),
+  'demote-check': Object.freeze({
+    subcontract: 'checks',
+    argument: 'check',
+    options: Object.freeze([]),
+    revise: (checks, { check }) => movedCheck(checks, check, 'required', 'advisory'),
+  }),
+  'remove-check': Object.freeze({
+    subcontract: 'checks',
+    argument: 'check',
+    options: Object.freeze([]),
+    revise: (checks, { check }) => {
+      if (![...listOrEmpty(checks.required), ...listOrEmpty(checks.advisory)].includes(check)) {
+        throw nothingToRevise(`check ${check} is not bound by the Gate policy`);
+      }
+
+      return withoutListed(withoutListed(checks, 'required', check), 'advisory', check);
+    },
+  }),
+  'set-budget': Object.freeze({
+    subcontract: 'budget',
+    argument: 'seconds',
+    options: Object.freeze([]),
+    revise: (budget, { seconds }) => {
+      // Digits are the number they spell; anything else reaches the validator as given.
+      const total = /^\d+$/.test(seconds) ? Number(seconds) : seconds;
+
+      if (budget.total_seconds === total) {
+        throw nothingToRevise(`the total budget is already ${total} seconds`);
+      }
+
+      return { ...budget, total_seconds: total };
+    },
+  }),
+  'set-bypass': Object.freeze({
+    subcontract: 'bypass',
+    argument: 'enabled',
+    options: Object.freeze(['marker', 'require-reference']),
+    revise: (bypass, { enabled, marker, 'require-reference': requireReference }) => {
+      const revised = {
+        ...bypass,
+        enabled: spelledBoolean(enabled),
+        ...(marker === undefined ? {} : { marker }),
+        ...(requireReference === undefined ? {} : { require_reference: spelledBoolean(requireReference) }),
+      };
+
+      if (JSON.stringify(revised) === JSON.stringify(bypass)) {
+        throw nothingToRevise(`bypass is already ${JSON.stringify(bypass)}`);
+      }
+
+      return revised;
+    },
+  }),
 });
+
+/**
+ * A typed value in `NAME=value` form: a name, file, or check given with a
+ * value after `=`. No revision takes a value, and the part after `=` may be a
+ * secret, so it is never repeated (`SG-GUIDE-002`, `SG-SECRET-001`).
+ */
+const suppliesValue = (value) => typeof value === 'string' && value.includes('=');
+
+/** `revision` as it may be echoed: each value after `=` replaced by a marker that repeats nothing. */
+export const withheldRevision = (revision) => Object.fromEntries(Object.entries(revision ?? {})
+  .map(([key, value]) => [key, suppliesValue(value) ? `${value.slice(0, value.indexOf('='))}=<withheld>` : value]));
+
+/**
+ * Refuse a revision any of whose typed values supplies a value, before the
+ * file, the operation, or the validator sees it, naming only what precedes
+ * `=`.
+ */
+const refuseSuppliedValues = (revision) => {
+  const supplied = Object.entries(revision ?? {}).filter(([, value]) => suppliesValue(value));
+
+  if (supplied.length > 0) {
+    throw Object.assign(revisionRefusal(
+      'value-supplied',
+      `A value was supplied for ${supplied.map(([key, value]) => `${key} ${value.slice(0, value.indexOf('='))}`).join(', ')}: a Gate revision takes a name, file, or check alone and never a value, so the part after \`=\` was not read into the configuration and is not repeated here. Nothing was written; pass the name alone.`,
+    ), { revision: withheldRevision(revision) });
+  }
+};
 
 /** The one revision asked for, with only the values its operation takes. */
 const requestedRevision = (revision) => {
@@ -1447,6 +1639,8 @@ const validatedPolicy = async (policy, reasonCode, prefix) => {
  * exactly this file. Nothing is written.
  */
 export const previewGateRevision = async ({ projectRoot, revision }) => {
+  refuseSuppliedValues(revision);
+
   const configurationPath = path.join(path.resolve(projectRoot), '.agent-framework.yaml');
 
   if (!(await exists(configurationPath))) {
@@ -2410,18 +2604,34 @@ const runCli = async () => {
   // with that preview's token: the direct path the Framework command's
   // `config` revisions drive (`FR-GUIDE-006`, `NFR-REL-004`).
   if (options['revise-gate']) {
+    // Every value any named revision takes, read by its own name; the
+    // operation refuses a value it does not take.
+    const revisionValues = new Set(Object.values(gateRevisions)
+      .flatMap(({ argument, options: optional }) => [argument, ...optional]));
     const revisionOptions = {
       projectRoot,
       revision: {
         operation: options['revise-gate'],
-        root: options.root,
-        provisioning: options.provisioning,
-        check: options.check,
+        ...Object.fromEntries([...revisionValues].map((name) => [name, options[name]])),
       },
     };
-    const result = options.confirm
-      ? await reviseGate({ ...revisionOptions, confirmation: options.confirm })
-      : await previewGateRevision(revisionOptions);
+    let result;
+
+    try {
+      result = options.confirm
+        ? await reviseGate({ ...revisionOptions, confirmation: options.confirm })
+        : await previewGateRevision(revisionOptions);
+    } catch (error) {
+      if (error.reasonCode === undefined) {
+        throw error;
+      }
+
+      // A refusal is the revision's own answer, stated as one, and never the
+      // thrown error's inspection, which would print what it carries.
+      console.log(JSON.stringify({ status: 'refused', reasonCode: error.reasonCode, detail: error.message }, null, 2));
+      process.exitCode = 2;
+      return;
+    }
 
     console.log(JSON.stringify(result, null, 2));
     return;

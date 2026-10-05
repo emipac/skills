@@ -36,10 +36,15 @@
  * (`SG-GUIDE-002`). A clone with no Gate section names setup's next step.
  *
  * `config <revision>` revises the Gate configuration section by one named
- * revision (`FR-GUIDE-006`, `TB-069`) — `add-dependency-root`,
- * `remove-dependency-root`, `set-dependency-provisioning`,
- * `add-budget-skippable`, `remove-budget-skippable`, as `framework-setup`'s
- * `gateRevisions` table names them. It only drives `framework-setup`'s own
+ * revision (`FR-GUIDE-006`, `TB-069`, `TB-070`) — in `execution`
+ * `add-dependency-root`, `remove-dependency-root`,
+ * `set-dependency-provisioning`, `add-budget-skippable`,
+ * `remove-budget-skippable`; in `evidence` `add-sensitive-input`,
+ * `remove-sensitive-input`, `add-environment-file`,
+ * `remove-environment-file`; in `checks` `promote-check`, `demote-check`,
+ * `remove-check`; `set-budget`; and `set-bypass` — as `framework-setup`'s
+ * `gateRevisions` table names them. A Sensitive runtime input is named, never
+ * valued (`SG-GUIDE-002`). It only drives `framework-setup`'s own
  * revision operation (ADR 0004): without `--confirm` it shows that operation's
  * preview — the exact lines that change, before and after — and the exact
  * command that confirms it; with `--confirm <token>` it passes that token, and
@@ -50,10 +55,18 @@
  * Gate's command with `--json`, for exactly the candidate written; that
  * preview's token is the Gate's to confirm, never this command's.
  *
+ * Whether a candidate is weaker than the trusted policy is the Gate's
+ * judgement alone (`SG-CFG-001`): the revision preview names none, and the
+ * re-pin preview reports the weakenings and refusal exactly as the Gate states
+ * them. `--acknowledge-weakening` is passed through to that preview, as the
+ * Gate's own selector, so an acknowledged weaker candidate is offered the
+ * Gate's token; without it the Gate refuses, and the next command is the
+ * Gate's own acknowledged preview.
+ *
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]
  *   agent-framework config show [--json] [--project <directory>]
- *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--json] [--project <directory>]
+ *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
@@ -78,6 +91,7 @@ import {
   previewGateConfiguration,
   previewGateRevision,
   reviseGate,
+  withheldRevision,
 } from './configure.mjs';
 import { isCliEntryPoint } from './lib/cli-entry-point.mjs';
 import { locateGateCommand, runGateCommand } from './lib/gate-command.mjs';
@@ -103,7 +117,7 @@ const USAGE = [
   ...Object.entries(gateRevisions).map(([name, { argument, options }]) => [
     `       agent-framework config ${name} <${argument}>`,
     ...options.map((option) => `[--${option} <${option}>]`),
-    '[--confirm <token>] [--json] [--project <directory>]',
+    '[--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]',
   ].join(' ')),
 ].join('\n');
 
@@ -127,6 +141,15 @@ const REVISION_LIMIT = 'a config revision writes only the Gate configuration sec
  * into; which subcommand performs it is the Gate's to say (`TB-074`).
  */
 const CONFIGURATION_DRIFT = 'control-surface-drift:trusted-configuration';
+
+/**
+ * The Gate's own selector that acknowledges a weakening its re-pin preview
+ * names, and the refusal that preview gives a weaker candidate without it.
+ * Passed through and reported, never judged here (`SG-CFG-001`).
+ */
+const ACKNOWLEDGE_WEAKENING = '--acknowledge-weakening';
+
+const WEAKENING_UNACKNOWLEDGED = 'weakening-unacknowledged';
 
 /**
  * Characters a POSIX shell passes through unchanged outside quotes; anything
@@ -446,7 +469,7 @@ const parseArguments = (argv) => {
   }
 
   const rest = argv.slice(subcommand === 'setup' ? 1 : 2);
-  const options = { subcommand, json: false, project: null, revision: null, confirmation: null };
+  const options = { subcommand, json: false, project: null, revision: null, confirmation: null, acknowledgeWeakening: false };
   const valued = new Set(['--project', ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)])]);
 
   if (revision !== null) {
@@ -458,6 +481,8 @@ const parseArguments = (argv) => {
 
     if (argument === '--json') {
       options.json = true;
+    } else if (argument === ACKNOWLEDGE_WEAKENING && revision !== null) {
+      options.acknowledgeWeakening = true;
     } else if (valued.has(argument) && rest[index + 1] !== undefined) {
       const value = rest[index + 1];
 
@@ -901,7 +926,7 @@ const runSetup = async ({ projectRoot, environment }) => {
  * maintainer types it: the operation, its value, its options, and the token
  * when confirming.
  */
-const revisionCommand = (projectRoot, revision, confirmation = null) => {
+const revisionCommand = (projectRoot, revision, confirmation = null, acknowledgeWeakening = false) => {
   const { argument, options } = gateRevisions[revision.operation];
 
   return command(confirmation === null ? 'preview' : 'confirm', [
@@ -914,6 +939,7 @@ const revisionCommand = (projectRoot, revision, confirmation = null) => {
     '--project',
     projectRoot,
     ...(confirmation === null ? [] : ['--confirm', confirmation]),
+    ...(acknowledgeWeakening ? [ACKNOWLEDGE_WEAKENING] : []),
   ]);
 };
 
@@ -926,9 +952,13 @@ const revisionCommand = (projectRoot, revision, confirmation = null) => {
  * The Gate must read the section as exactly the candidate written, and its
  * preview must name that candidate's identity; otherwise no re-pin is offered.
  * The preview is the Gate's own `--json` document, its weakenings, refusal,
- * and token reported as it states them (`SG-CFG-001`). Nothing is confirmed.
+ * and token reported as it states them (`SG-CFG-001`); it is acknowledged
+ * exactly when the maintainer passed `--acknowledge-weakening`. A weaker
+ * candidate the Gate refuses unacknowledged is offered the Gate's own
+ * acknowledged preview as the next command, never a token. Nothing is
+ * confirmed.
  */
-const repinPreview = async ({ projectRoot, gate, environment, observation, policy }) => {
+const repinPreview = async ({ projectRoot, gate, environment, observation, policy, acknowledgeWeakening }) => {
   const working = observation.configuration?.working;
 
   if (working === undefined) {
@@ -957,7 +987,11 @@ const repinPreview = async ({ projectRoot, gate, environment, observation, polic
   }
 
   const [subcommand] = remedy.subcommands;
-  const previewed = await runGateCommand(gate, { cwd: projectRoot, args: [subcommand], environment });
+  const previewed = await runGateCommand(gate, {
+    cwd: projectRoot,
+    args: [subcommand, ...(acknowledgeWeakening ? [ACKNOWLEDGE_WEAKENING] : [])],
+    environment,
+  });
 
   if (previewed.failure) {
     return previewed;
@@ -986,11 +1020,32 @@ const repinPreview = async ({ projectRoot, gate, environment, observation, polic
       dependencyProvisioning: repin.dependencyProvisioning,
       refusal: repin.refusal,
       confirmationToken: repin.confirmationToken,
-      commands: repin.confirmationToken === null
-        ? []
-        : [gateCommand('confirm', prefix, subcommand, '--confirm', repin.confirmationToken)],
+      commands: repinCommands(prefix, subcommand, repin),
     },
   };
+};
+
+/**
+ * What follows the Gate's re-pin preview: its own confirmation, carrying the
+ * acknowledgement its token binds; for a weaker candidate it refused
+ * unacknowledged, its own preview again with the acknowledgement; otherwise
+ * nothing.
+ */
+const repinCommands = (prefix, subcommand, repin) => {
+  if (repin.confirmationToken !== null) {
+    return [gateCommand(
+      'confirm',
+      prefix,
+      subcommand,
+      ...(repin.acknowledgedWeakening === true ? [ACKNOWLEDGE_WEAKENING] : []),
+      '--confirm',
+      repin.confirmationToken,
+    )];
+  }
+
+  return repin.refusal?.reasonCode === WEAKENING_UNACKNOWLEDGED
+    ? [gateCommand('preview', prefix, subcommand, ACKNOWLEDGE_WEAKENING)]
+    : [];
 };
 
 /**
@@ -998,7 +1053,7 @@ const repinPreview = async ({ projectRoot, gate, environment, observation, polic
  * then say what follows: on an activated clone the re-pin preview, else
  * nothing. The operation's refusal is reported as it gives it.
  */
-const reviseConfiguration = async ({ projectRoot, environment, revision, confirmation }) => {
+const reviseConfiguration = async ({ projectRoot, environment, revision, confirmation, acknowledgeWeakening }) => {
   let revised;
 
   try {
@@ -1031,14 +1086,14 @@ const reviseConfiguration = async ({ projectRoot, environment, revision, confirm
   return {
     ...done,
     state: observation.state,
-    ...await repinPreview({ projectRoot, gate, environment, observation, policy: revised.policy }),
+    ...await repinPreview({ projectRoot, gate, environment, observation, policy: revised.policy, acknowledgeWeakening }),
   };
 };
 
 /** What comes after a revision: its confirmation, the re-pin's, or nothing. */
-const revisionNext = ({ projectRoot, revised, repin, applied }) => {
+const revisionNext = ({ projectRoot, revised, repin, applied, acknowledgeWeakening }) => {
   if (!applied) {
-    const confirm = revisionCommand(projectRoot, revised.revision, revised.previewHash);
+    const confirm = revisionCommand(projectRoot, revised.revision, revised.previewHash, acknowledgeWeakening);
 
     return { step: 'confirm-revision', command: confirm.run, instruction: 'confirm exactly this preview with its token.' };
   }
@@ -1047,14 +1102,22 @@ const revisionNext = ({ projectRoot, revised, repin, applied }) => {
     return null;
   }
 
-  return repin.confirmationToken === null
+  if (repin.confirmationToken !== null) {
+    return { step: repin.subcommand, command: repin.commands[0].run, instruction: `confirm the Gate's ${repin.subcommand} preview with its own token.` };
+  }
+
+  return repin.commands.length === 0
     ? { step: repin.subcommand, command: null, instruction: repin.refusal?.next ?? repin.refusal?.detail ?? `the Gate offers no token for this ${repin.subcommand}.` }
-    : { step: repin.subcommand, command: repin.commands[0].run, instruction: `confirm the Gate's ${repin.subcommand} preview with its own token.` };
+    : {
+      step: repin.subcommand,
+      command: repin.commands[0].run,
+      instruction: `the Gate offers no token for a candidate weaker than the trusted policy until the weakening is acknowledged: preview its ${repin.subcommand} acknowledged, read the weakenings it names, and confirm that preview with its own token.`,
+    };
 };
 
-const runConfigRevision = async ({ projectRoot, environment, revision, confirmation }) => {
+const runConfigRevision = async ({ projectRoot, environment, revision, confirmation, acknowledgeWeakening }) => {
   const outcome = (await exists(projectRoot))
-    ? await reviseConfiguration({ projectRoot, environment, revision, confirmation })
+    ? await reviseConfiguration({ projectRoot, environment, revision, confirmation, acknowledgeWeakening })
     : failure('project-missing', `${projectRoot} does not exist.`);
   const revised = outcome.revised ?? null;
   const applied = revised !== null && confirmation !== null;
@@ -1071,15 +1134,17 @@ const runConfigRevision = async ({ projectRoot, environment, revision, confirmat
       exitStatus,
       project: projectRoot,
       owner: 'framework-setup',
-      revision: revised?.revision ?? revision,
+      // A value typed as `NAME=value` is never echoed back (`SG-GUIDE-002`).
+      revision: revised?.revision ?? withheldRevision(revision),
       applied,
+      acknowledgeWeakening,
       subcontract: revised?.subcontract ?? null,
       changes: revised?.changes ?? [],
       previewHash: revised?.previewHash ?? null,
       state: outcome.state ?? null,
       gate: outcome.gate === undefined ? null : describeGate(outcome.gate),
       repin,
-      next: revised === null || outcome.failure ? null : revisionNext({ projectRoot, revised, repin, applied }),
+      next: revised === null || outcome.failure ? null : revisionNext({ projectRoot, revised, repin, applied, acknowledgeWeakening }),
       failure: outcome.failure ?? null,
       limit: REVISION_LIMIT,
     },
@@ -1106,6 +1171,7 @@ const renderRepin = (repin) => {
     `re-pin: the Gate's ${repin.subcommand} preview for the written candidate (${repin.owner})`,
     `  trusted: ${repin.trusted?.identity ?? 'none'}`,
     `  candidate: ${repin.candidate.identity}`,
+    ...(repin.acknowledgedWeakening === true ? ['  weakening acknowledged: yes — the token binds the acknowledgement; confirm with it as printed'] : []),
     `  weakenings: ${repin.transition === null ? 'not judged — no trusted policy was recovered' : (weakenings.length === 0 ? 'none' : weakenings.map((weakening) => `${weakening.code} ${weakening.checkId}`).join(', '))}`,
     `  dependency roots: ${(repin.dependencyRoots ?? []).map((root) => `${root} (${typeof provisioning === 'string' ? provisioning : (provisioning?.[root] ?? 'unrecorded')})`).join(', ') || 'none'}`,
   ];
@@ -1151,7 +1217,7 @@ const renderRevision = (document) => {
   if (document.gate !== null && !document.gate.available) {
     lines.push(`gate: unavailable — ${document.gate.detail}; no re-pin step can be named.`);
   } else if (document.state === 'activated' && !document.applied) {
-    lines.push('state: activated — confirming continues into the Gate\'s preview of the re-pin it names for the changed configuration; that preview has its own token.');
+    lines.push(`state: activated — confirming continues into the Gate's preview of the re-pin it names for the changed configuration; that preview has its own token, names any weakening of the trusted policy, and offers no token for one until it is acknowledged (${ACKNOWLEDGE_WEAKENING}${document.acknowledgeWeakening ? ', passed through on confirming' : ''}).`);
   } else if (document.state !== null) {
     lines.push(`state: ${document.state}${document.state === 'activated' ? '' : ' — the clone is not activated, so nothing is re-pinned.'}`);
   }
@@ -1191,6 +1257,7 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
     environment,
     revision: options.revision,
     confirmation: options.confirmation,
+    acknowledgeWeakening: options.acknowledgeWeakening,
   });
 
   return {

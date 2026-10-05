@@ -44,3 +44,19 @@ confirmation continues into the Gate's own `gate sync` preview for exactly the
 written candidate and prints its confirmation; it never confirms the re-pin.
 The same operation runs directly as `configure.mjs --revise-gate <revision>`,
 and both write the same file.
+
+`agent-framework config add-sensitive-input`, `remove-sensitive-input`,
+`add-environment-file`, `remove-environment-file`, `promote-check`,
+`demote-check`, `remove-check`, `set-budget`, and `set-bypass` revise the rest
+of the Gate configuration section the same way. A Sensitive runtime input is
+declared by name, with `--environment-file` naming the git-ignored file it may
+be read from; its value is never read, asked for, or printed. A check moves
+between required and advisory, or is removed, only when the policy already
+binds it. An enabled bypass needs its marker, and is refused with the Gate
+policy validator's reason without one. Whether a revision weakens the trusted
+policy stays `gate sync`'s judgement: on an activated clone a demoted or removed
+required check is refused in the chained `gate sync` preview with the weakening
+named and no token, and the next command is the Gate's own
+`gate sync --acknowledge-weakening` preview; a revision given
+`--acknowledge-weakening` passes it through to that preview, which then offers
+its token. `configure.mjs --revise-gate` takes each value as its own option.

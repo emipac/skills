@@ -709,8 +709,10 @@
       <p>
         <code>.agent-framework.yaml</code> has two readers. The lifecycle skills read it to know
         your project; the Gate reads it to know what to enforce. <code>framework-setup</code>
-        writes it, but every project ends up editing it by hand — to add a dependency root, raise a
-        timeout, declare a secret — so this is the reference for doing that safely.
+        writes it, but every project ends up changing it — to add a dependency root, raise a
+        timeout, declare a secret. The Gate section's entries can be changed by name with
+        <code>agent-framework config</code> (Section 12); everything else is edited by hand, so this
+        is the reference for doing that safely.
       </p>
 
       <p>
@@ -1601,10 +1603,11 @@ Diagnostics:
   --configure-gate --policy policy.json --confirm PASTE_THE_PREVIEWHASH_HERE</code></pre>
       <p>
         Configuration is one-shot. Running it again fails with <code>The Gate is already
-        configured</code>. To add or remove a dependency root, set its provisioning, or change the
-        budget-skippable checks afterwards, use the named revisions in Section 12
-        (<code>agent-framework config add-dependency-root</code> and its siblings); to change
-        anything else, edit the <code>evaluation_gate</code> block in
+        configured</code>. To add or remove a dependency root, set its provisioning, change the
+        budget-skippable checks, declare a secret or an environment file, move a check between
+        required and advisory, set the budget, or turn bypass on or off afterwards, use the named
+        revisions in Section 12 (<code>agent-framework config add-dependency-root</code> and its
+        siblings); to change anything else, edit the <code>evaluation_gate</code> block in
         <code>.agent-framework.yaml</code> directly, or remove it and configure again. The block
         lands as inline JSON, one line per subcontract, which is valid YAML if not especially
         pretty.
@@ -2126,6 +2129,39 @@ agent-framework config add-dependency-root vendor --provisioning copy --confirm 
         command, as <code>configure.mjs --revise-gate &lt;revision&gt; --root … --provisioning …
         --check …</code>, previewed and then confirmed the same way.
       </p>
+
+      <p class="cmd-label">Declare a secret, move a check, set the budget or bypass — by name</p>
+      <pre><code>agent-framework config add-sensitive-input DB_PASSWORD --environment-file .env   # name and source, never the value
+agent-framework config remove-sensitive-input DB_PASSWORD
+agent-framework config add-environment-file .env.local
+agent-framework config remove-environment-file .env.local
+agent-framework config promote-check configuration.static-analysis.lint            # advisory → required
+agent-framework config demote-check configuration.broad-tests.test                 # required → advisory
+agent-framework config remove-check configuration.static-analysis.lint
+agent-framework config set-budget 900
+agent-framework config set-bypass true --marker Gate-Bypass --require-reference true
+agent-framework config set-bypass false</code></pre>
+      <p>
+        Each previews its one changed line and token and writes only with that token, exactly like
+        <code>add-dependency-root</code>. A secret is declared by its name; <code>--environment-file</code>
+        also declares the git-ignored file it is read from, if that file is not declared yet.
+        Nothing reads, asks for, or prints the value. A check moves or is removed only when the
+        policy already binds it — binding a new one, or changing what a check runs, is not a
+        revision. An enabled bypass needs its marker; without one the validator refuses it and
+        nothing is written. On the direct path each value is its own option:
+        <code>--name</code>, <code>--environment-file</code>, <code>--file</code>,
+        <code>--check</code>, <code>--seconds</code>, <code>--enabled</code>,
+        <code>--marker</code>, <code>--require-reference</code>.
+      </p>
+      <p>
+        Whether a revision is weaker is <code>git gate sync</code>'s call, not the revision's. After
+        <code>demote-check</code> or <code>remove-check</code> of a required check is confirmed, the
+        chained sync preview names the weakening, prints no token, and the next line it gives you is
+        <code>git gate sync --acknowledge-weakening</code>, whose preview does carry one. If you
+        already know, add <code>--acknowledge-weakening</code> to the revision: it is passed through
+        to the chained preview, which then offers its token, and the printed confirmation carries the
+        acknowledgement that token binds.
+      </p>
       <p>
         A revision rewrites the section only when it is exactly what <code>--configure-gate</code>
         wrote: <code>evaluation_gate:</code> and one inline-JSON line per subcontract, nothing
@@ -2182,9 +2218,9 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
         <table>
           <thead><tr><th>You changed…</th><th>Then</th></tr></thead>
           <tbody>
-            <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: <code>git gate sync</code>.</td></tr>
+            <tr><td>Any <code>evaluation_gate</code> subcontract</td><td>Re-pin: <code>git gate sync</code>. A named <code>agent-framework config</code> revision continues into it.</td></tr>
             <tr><td>A <code>verification.commands</code> entry the Gate binds</td><td>Re-pin: the identities and the pinned runners both come from it, and sync re-pins both.</td></tr>
-            <tr><td><code>evidence.sensitive_inputs</code> or <code>environment_files</code></td><td>Re-pin.</td></tr>
+            <tr><td><code>evidence.sensitive_inputs</code> or <code>environment_files</code></td><td>Re-pin — <code>agent-framework config add-sensitive-input</code> and its siblings continue into it for you.</td></tr>
             <tr><td><code>execution.dependency_roots</code> or <code>dependency_provisioning</code></td><td>Re-pin — <code>agent-framework config</code> continues into it for you.</td></tr>
             <tr><td>The installed Gate release</td><td><code>git gate update</code> — that one is not a re-pin.</td></tr>
             <tr><td>A Git hook someone else's tool moved</td><td><code>git gate repair</code>.</td></tr>
@@ -2205,8 +2241,9 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
       <p>
         Configuration itself is one-shot: running <code>--configure-gate</code> a second time fails
         with <code>The Gate is already configured</code>. After the first time, revise dependency
-        roots, their provisioning, and budget-skippable checks with <code>agent-framework
-        config</code>; for anything else edit the <code>evaluation_gate</code> block in
+        roots, their provisioning, budget-skippable checks, Sensitive inputs, environment files,
+        check severity, the budget, and bypass with <code>agent-framework config</code>; for a
+        section you wrote by hand, or anything else, edit the <code>evaluation_gate</code> block in
         <code>.agent-framework.yaml</code> directly, or remove it with <code>git gate cleanup</code>
         and configure again.
       </p>
@@ -2243,7 +2280,7 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             <tr>
               <td>Tests fail on a missing key, token, or connection string that works in your shell</td>
               <td>The evaluation does not inherit your shell. A check receives only its <code>allowed_environment</code>, plus any name you approved.</td>
-              <td>Name it in <code>evidence.sensitive_inputs</code>, and name the file it lives in — usually <code>.env</code> — in <code>evidence.environment_files</code>. Then re-pin.</td>
+              <td><code>agent-framework config add-sensitive-input &lt;NAME&gt; --environment-file .env</code> — the name and the file it lives in, never the value — then confirm the re-pin it previews.</td>
             </tr>
             <tr>
               <td>A check flags files you never wrote — generated caches, compiled containers, build output</td>
@@ -2253,7 +2290,7 @@ git gate sync --acknowledge-weakening --confirm &lt;token&gt;</code></pre>
             <tr>
               <td><span class="pill p-unver">unverified</span>, no output, right around the time limit</td>
               <td>The per-check timeout, or the total budget, ran out. A cold run inside a fresh snapshot is slower than a warm one in your terminal.</td>
-              <td>Raise <code>timeout_seconds</code> for that command and <code>budget.total_seconds</code>, then re-pin.</td>
+              <td>Raise <code>timeout_seconds</code> for that command by hand and the total budget with <code>agent-framework config set-budget &lt;seconds&gt;</code>, then confirm the re-pin it previews.</td>
             </tr>
             <tr>
               <td>Every preflight is <span class="pill p-unver">unverified</span> with no checks listed, while commits work normally</td>

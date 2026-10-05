@@ -1129,6 +1129,58 @@ test('refuses a Gate revision outside execution, an unrevisable section, or an i
   assert.equal(await readFile(configurationPath, 'utf8'), handEdited);
 });
 
+test('revises Gate evidence, checks, budget, and bypass by name, deterministically and only with the preview token', async (context) => {
+  const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-tb070-');
+  const agents = await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8');
+  const revisions = [
+    [{ operation: 'add-sensitive-input', name: 'DB_PASSWORD', 'environment-file': '.env' }, '  evidence: {"sensitive_inputs":["DB_PASSWORD"],"environment_files":[".env"]}'],
+    [{ operation: 'demote-check', check: 'unit' }, '  checks: {"required":[],"advisory":["lint","unit"]}'],
+    [{ operation: 'promote-check', check: 'unit' }, '  checks: {"required":["unit"],"advisory":["lint"]}'],
+    [{ operation: 'remove-check', check: 'lint' }, '  checks: {"required":["unit"],"advisory":[]}'],
+    [{ operation: 'set-budget', seconds: '450' }, '  budget: {"total_seconds":450}'],
+    [{ operation: 'set-bypass', enabled: 'true', marker: 'Gate-Bypass' }, '  bypass: {"enabled":true,"marker":"Gate-Bypass"}'],
+    [{ operation: 'remove-environment-file', file: '.env' }, '  evidence: {"sensitive_inputs":["DB_PASSWORD"],"environment_files":[]}'],
+  ];
+
+  for (const [revision, line] of revisions) {
+    const original = await readFile(configurationPath, 'utf8');
+    const preview = await frameworkSetup.previewGateRevision({ projectRoot, revision });
+
+    assert.deepEqual(await frameworkSetup.previewGateRevision({ projectRoot, revision }), preview, `${revision.operation}: a repeated preview differs.`);
+    assert.deepEqual(preview.changes.map((change) => change.after), [line]);
+    assert.equal(preview.proposedConfiguration, original.replace(preview.changes[0].before, line));
+    await assert.rejects(
+      frameworkSetup.reviseGate({ projectRoot, revision, confirmation: 'stale-preview' }),
+      (error) => error.reasonCode === 'preview-mismatch',
+    );
+    assert.equal(await readFile(configurationPath, 'utf8'), original);
+
+    await frameworkSetup.reviseGate({ projectRoot, revision, confirmation: preview.previewHash });
+
+    assert.equal(await readFile(configurationPath, 'utf8'), preview.proposedConfiguration);
+  }
+
+  assert.equal(await readFile(path.join(projectRoot, 'AGENTS.md'), 'utf8'), agents);
+
+  const refusals = [
+    [{ operation: 'set-bypass', enabled: 'true', marker: undefined, 'require-reference': 'yes' }, 'candidate-invalid', /evaluation_gate\.bypass\.require_reference: A required bypass reference must be stated as a boolean/],
+    [{ operation: 'set-bypass', enabled: 'true', value: 'x' }, 'revision-unknown', /does not take value/],
+    [{ operation: 'demote-check', check: 'absent' }, 'check-unbound', /check absent is not bound by the Gate policy/],
+    [{ operation: 'set-budget', seconds: '450' }, 'nothing-to-revise', /already 450 seconds/],
+  ];
+  const settled = await readFile(configurationPath, 'utf8');
+
+  for (const [revision, reasonCode, message] of refusals) {
+    await assert.rejects(
+      frameworkSetup.previewGateRevision({ projectRoot, revision }),
+      (error) => error.reasonCode === reasonCode && message.test(error.message),
+      JSON.stringify(revision),
+    );
+  }
+
+  assert.equal(await readFile(configurationPath, 'utf8'), settled);
+});
+
 test('exposes Gate revision through an explicit previewed command', async (context) => {
   const { projectRoot, configurationPath } = await configuredGateFixture(context, 'ai-framework-gate-revise-cli-');
   const original = await readFile(configurationPath, 'utf8');

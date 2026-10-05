@@ -1605,3 +1605,503 @@ test('TB-069: every named revision is in the usage, and a malformed revision is 
   assert.match((await agentFramework(root, ['config', 'bogus'])).stderr, /\[--provisioning <provisioning>\] \[--confirm <token>\]/);
   assert.equal(await cloneHash(root), before);
 });
+
+/* -------------------------------------------------------------------------
+ * TB-070: `agent-framework config <revision>` — evidence, checks, budget, and
+ * bypass.
+ *
+ * The same revision operation `TB-069` created, with one row per named change
+ * in each of the other four subcontracts. A Sensitive runtime input is
+ * declared by name and source only — nothing reads, asks for, or prints its
+ * value (`SG-GUIDE-002`, `SG-SECRET-001`) — and a weakening is reported only as
+ * the Gate's own `gate sync` preview reports it, which the Framework command
+ * reaches, acknowledged when the maintainer passes `--acknowledge-weakening`
+ * (`SG-CFG-001`, `RISK-008`).
+ * ------------------------------------------------------------------------- */
+
+const SECRET_CANARY = `secret-canary-${createHash('sha256').update('TB-070').digest('hex').slice(0, 20)}`;
+
+/** A configured clone holding a git-ignored `.env` whose `DB_PASSWORD` is the canary. */
+const secretClone = async (t, { activated = false, env } = {}) => {
+  const prepare = async (clone) => {
+    await writeFile(path.join(clone, '.gitignore'), '.env\n', 'utf8');
+    await writeFile(path.join(clone, '.env'), `DB_PASSWORD=${SECRET_CANARY}\nAPP_KEY=${SECRET_CANARY}-app\n`, 'utf8');
+  };
+
+  if (activated) {
+    return activatedClone(t, { policy: CONFIGURED_POLICY, env, prepare });
+  }
+
+  const root = await throwawayRepository(t);
+
+  await configuredThroughConfigureGate(root, CONFIGURED_POLICY);
+  await prepare(root);
+  await commit(root);
+
+  return root;
+};
+
+/**
+ * THE FIRST RED TEST OF TB-070.
+ *
+ * Declaring `DB_PASSWORD` from `.env` previews exactly one changed line — the
+ * `evidence` line — adding the name and the file it is resolved from, and no
+ * value: the canary in the environment and in `.env` appears nowhere, and
+ * nothing is written (`AC-GUIDE-003`, `SG-GUIDE-002`).
+ */
+test('TB-070 AC-GUIDE-003 / SG-GUIDE-002: declaring DB_PASSWORD from .env previews one added evidence entry by name and source, and no value', async (t) => {
+  const env = environment({ DB_PASSWORD: SECRET_CANARY });
+  const root = await secretClone(t);
+  const before = await cloneHash(root);
+  const argv = ['config', 'add-sensitive-input', 'DB_PASSWORD', '--environment-file', '.env'];
+  const text = await agentFramework(root, argv, { env });
+  const json = await agentFramework(root, [...argv, '--json'], { env });
+  const revision = json.document;
+  const evidenceLine = (await configurationOf(root)).split('\n').indexOf(sectionLine('evidence', {})) + 1;
+
+  assert.equal(await cloneHash(root), before, 'a revision preview changed a byte under the clone or .git.');
+  assert.equal(json.status, 1, json.stderr);
+  assert.equal(revision.failure, null);
+  assert.deepEqual(revision.revision, { operation: 'add-sensitive-input', name: 'DB_PASSWORD', 'environment-file': '.env' });
+  assert.equal(revision.subcontract, 'evidence');
+  assert.deepEqual(revision.changes, [{
+    subcontract: 'evidence',
+    line: evidenceLine,
+    before: sectionLine('evidence', {}),
+    after: sectionLine('evidence', { sensitive_inputs: ['DB_PASSWORD'], environment_files: ['.env'] }),
+  }]);
+
+  for (const output of [text.stdout, text.stderr, json.stdout, json.stderr]) {
+    assert.equal(output.includes(SECRET_CANARY), false, 'the secret canary was printed.');
+  }
+});
+
+/** The policy the TB-070 fixtures hold: one required and one advisory check. */
+const TWO_CHECK_POLICY = Object.freeze({
+  ...CONFIGURED_POLICY,
+  checks: { required: ['configuration.broad-tests.test'], advisory: ['configuration.static-analysis.lint'] },
+});
+
+/** Every TB-070 revision, in an order a configured clone accepts each, with the subcontract it leaves. */
+const TB070_STEPS = Object.freeze([
+  [['add-sensitive-input', 'DB_PASSWORD', '--environment-file', '.env'], 'evidence', { sensitive_inputs: ['DB_PASSWORD'], environment_files: ['.env'] }],
+  [['add-sensitive-input', 'APP_KEY'], 'evidence', { sensitive_inputs: ['DB_PASSWORD', 'APP_KEY'], environment_files: ['.env'] }],
+  [['add-environment-file', '.env.local'], 'evidence', { sensitive_inputs: ['DB_PASSWORD', 'APP_KEY'], environment_files: ['.env', '.env.local'] }],
+  [['remove-environment-file', '.env'], 'evidence', { sensitive_inputs: ['DB_PASSWORD', 'APP_KEY'], environment_files: ['.env.local'] }],
+  [['remove-sensitive-input', 'DB_PASSWORD'], 'evidence', { sensitive_inputs: ['APP_KEY'], environment_files: ['.env.local'] }],
+  [['demote-check', 'configuration.broad-tests.test'], 'checks', {
+    required: [], advisory: ['configuration.static-analysis.lint', 'configuration.broad-tests.test'],
+  }],
+  [['promote-check', 'configuration.static-analysis.lint'], 'checks', {
+    required: ['configuration.static-analysis.lint'], advisory: ['configuration.broad-tests.test'],
+  }],
+  [['remove-check', 'configuration.broad-tests.test'], 'checks', { required: ['configuration.static-analysis.lint'], advisory: [] }],
+  [['set-budget', '900'], 'budget', { total_seconds: 900 }],
+  [['set-bypass', 'true', '--marker', 'Gate-Bypass', '--require-reference', 'true'], 'bypass', {
+    enabled: true, marker: 'Gate-Bypass', require_reference: true,
+  }],
+  [['set-bypass', 'false'], 'bypass', { enabled: false, marker: 'Gate-Bypass', require_reference: true }],
+]);
+
+test('TB-070 AC-GUIDE-003 / SG-GUIDE-001: each evidence, checks, budget, and bypass revision previews one line and writes it only with its token', async (t) => {
+  const root = await configuredClone(t, { policy: TWO_CHECK_POLICY });
+  const agents = await readFile(path.join(root, 'AGENTS.md'));
+
+  for (const [argv, subcontract, value] of TB070_STEPS) {
+    const before = await cloneHash(root);
+    const preview = await agentFramework(root, ['config', ...argv, '--json']);
+    const again = await agentFramework(root, ['config', ...argv, '--json']);
+
+    assert.equal(await cloneHash(root), before, `${argv.join(' ')}: a preview changed a byte.`);
+    assert.equal(again.stdout, preview.stdout, `${argv.join(' ')}: a repeated preview printed a different document.`);
+    assert.equal(preview.status, 1, `${argv.join(' ')}: ${JSON.stringify(preview.document.failure)}`);
+
+    const refused = await agentFramework(root, ['config', ...argv, '--confirm', 'f'.repeat(64), '--json']);
+
+    assert.equal(refused.document.failure.reasonCode, 'preview-mismatch');
+    assert.equal(await cloneHash(root), before, `${argv.join(' ')}: a foreign token wrote.`);
+
+    const { original, confirmed, revised } = await reviseThroughFramework(root, argv);
+    const changed = onlyChangedLine(original, revised);
+
+    assert.equal(changed.after, sectionLine(subcontract, value), `${argv.join(' ')} wrote ${changed.after}.`);
+    assert.deepEqual(preview.document.changes, [{ subcontract, line: changed.index + 1, before: changed.before, after: changed.after }]);
+    assert.equal(confirmed.applied, true);
+    assert.equal(confirmed.subcontract, subcontract);
+    assert.equal(confirmed.exitStatus, 0);
+    assert.equal(confirmed.next, null);
+  }
+
+  assert.deepEqual(await readFile(path.join(root, 'AGENTS.md')), agents, 'a revision changed AGENTS.md.');
+});
+
+/**
+ * Each refusal is decided before anything is written: a revision that changes
+ * nothing, a check the policy does not bind, and every candidate the Gate
+ * policy validator refuses — an enabled bypass without its marker among them —
+ * carrying that validator's own path and message.
+ */
+test('TB-070 AC-GUIDE-003: an invalid bypass and every other invalid candidate are refused with the validator\'s own reason, writing nothing', async (t) => {
+  const policy = { ...TWO_CHECK_POLICY, execution: { budget_skippable: ['configuration.static-analysis.lint'] } };
+  const root = await configuredClone(t, { policy });
+  const before = await cloneHash(root);
+  const invalid = [
+    [['set-bypass', 'true'], { bypass: { enabled: true, marker: null } }],
+    [['set-bypass', 'maybe', '--marker', 'Gate-Bypass'], { bypass: { enabled: 'maybe', marker: 'Gate-Bypass' } }],
+    [['set-bypass', 'true', '--marker', 'Gate-Bypass', '--require-reference', 'sometimes'], {
+      bypass: { enabled: true, marker: 'Gate-Bypass', require_reference: 'sometimes' },
+    }],
+    [['add-sensitive-input', 'db-password'], { evidence: { sensitive_inputs: ['db-password'] } }],
+    [['add-environment-file', '../outside/.env'], { evidence: { environment_files: ['../outside/.env'] } }],
+    [['add-sensitive-input', 'DB_PASSWORD', '--environment-file', '/etc/environment'], {
+      evidence: { sensitive_inputs: ['DB_PASSWORD'], environment_files: ['/etc/environment'] },
+    }],
+    [['promote-check', 'configuration.static-analysis.lint'], {
+      checks: { required: ['configuration.broad-tests.test', 'configuration.static-analysis.lint'], advisory: [] },
+    }],
+  ];
+
+  for (const [argv, candidate] of invalid) {
+    const issues = validateGatePolicy({ ...policy, ...candidate });
+    const refused = await agentFramework(root, ['config', ...argv, '--json']);
+
+    assert.ok(issues.length > 0, `the validator accepts ${JSON.stringify(candidate)}.`);
+    assert.equal(refused.status, 2, argv.join(' '));
+    assert.equal(refused.document.failure.reasonCode, 'candidate-invalid', `${argv.join(' ')}: ${refused.document.failure.detail}`);
+    assert.equal(refused.document.applied, false);
+    assert.equal(refused.document.previewHash, null);
+
+    for (const issue of issues) {
+      assert.ok(refused.document.failure.detail.includes(`${issue.path}: ${issue.message}`), refused.document.failure.detail);
+    }
+  }
+
+  const budget = await agentFramework(root, ['config', 'set-budget', '0', '--json']);
+
+  assert.equal(budget.document.failure.reasonCode, 'candidate-invalid');
+  assert.match(budget.document.failure.detail, /positive total_seconds integer/);
+
+  const refusals = [
+    [['set-budget', '600'], 'nothing-to-revise', /the total budget is already 600 seconds/],
+    [['set-bypass', 'false'], 'nothing-to-revise', /bypass is already/],
+    [['promote-check', 'configuration.broad-tests.test'], 'nothing-to-revise', /already required/],
+    [['remove-sensitive-input', 'DB_PASSWORD'], 'nothing-to-revise', /DB_PASSWORD is not declared/],
+    [['remove-environment-file', '.env'], 'nothing-to-revise', /environment file \.env is not declared/],
+    [['remove-check', 'configuration.unknown.check'], 'nothing-to-revise', /is not bound by the Gate policy/],
+    // A severity change never binds a check the policy does not already bind (`SG-OWNER-001`).
+    [['demote-check', 'configuration.unknown.check'], 'check-unbound', /never binds a new one or edits a Verification profile command/],
+    [['promote-check', 'configuration.unknown.check'], 'check-unbound', /is not bound by the Gate policy/],
+  ];
+
+  for (const [argv, reasonCode, message] of refusals) {
+    const refused = await agentFramework(root, ['config', ...argv, '--json']);
+
+    assert.equal(refused.status, 2, argv.join(' '));
+    assert.equal(refused.document.failure.reasonCode, reasonCode, `${argv.join(' ')}: ${refused.document.failure.detail}`);
+    assert.match(refused.document.failure.detail, message);
+  }
+
+  assert.equal(await cloneHash(root), before);
+});
+
+/** `RISK-012` for every TB-070 revision: one line changes, and every byte before and after the section is kept. */
+test('TB-070 RISK-012: every byte outside the Gate section, comments included, is identical after each new revision', async (t) => {
+  const commented = [
+    '# Maintainer notes: this file is reviewed with every release.',
+    schemaV4Configuration({ gate: false }).trimEnd(),
+    '# The Gate section below is written by configure-gate.',
+    'history:',
+    '  path: docs/history   # where delivered work is recorded',
+    '  required: false',
+    '# end of configuration',
+    '',
+  ].join('\n');
+  const root = await throwawayRepository(t);
+
+  await configuredThroughConfigureGate(root, TWO_CHECK_POLICY, { configuration: commented });
+  await writeFile(
+    path.join(root, '.agent-framework.yaml'),
+    (await configurationOf(root)).replace('\nhistory:\n', '\n# The Gate section above is ours to revise.\nhistory:\n'),
+    'utf8',
+  );
+  await commit(root);
+
+  for (const [argv] of TB070_STEPS) {
+    const { original, revised } = await reviseThroughFramework(root, argv);
+    const sectionStart = original.indexOf('evaluation_gate:\n');
+
+    assert.ok(sectionStart > 0);
+    assert.equal(revised.slice(0, sectionStart), original.slice(0, sectionStart), `${argv.join(' ')}: a byte before the section changed.`);
+    assert.equal(
+      revised.slice(revised.indexOf('\n# The Gate section above')),
+      original.slice(original.indexOf('\n# The Gate section above')),
+      `${argv.join(' ')}: a byte after the section changed.`,
+    );
+    onlyChangedLine(original, revised);
+  }
+});
+
+/**
+ * `SG-GUIDE-002`, `SG-SECRET-001`. On an activated clone, a canary present in
+ * the environment and in the declared `.env` never appears in a preview, a
+ * confirmation, the chained re-pin preview, the configuration, or any other
+ * byte of the clone outside `.env` itself, in text or `--json`.
+ */
+test('TB-070 SG-GUIDE-002 / SG-SECRET-001: no secret canary from the environment or .env appears in any output or written byte', async (t) => {
+  const env = environment({ DB_PASSWORD: SECRET_CANARY, APP_KEY: `${SECRET_CANARY}-environment` });
+  const root = await secretClone(t, { activated: true, env });
+  const outputs = [];
+
+  for (const argv of [['add-sensitive-input', 'DB_PASSWORD', '--environment-file', '.env'], ['add-sensitive-input', 'APP_KEY'], ['remove-sensitive-input', 'APP_KEY']]) {
+    const previewText = await agentFramework(root, ['config', ...argv], { env });
+    const { preview, confirmed } = await reviseThroughFramework(root, argv, { env });
+
+    outputs.push(previewText.stdout, previewText.stderr, JSON.stringify(preview), JSON.stringify(confirmed));
+    assert.equal(confirmed.applied, true);
+    assert.equal(typeof confirmed.repin?.candidate?.identity, 'string', JSON.stringify(confirmed.failure));
+  }
+
+  const shown = await agentFramework(root, ['config', 'show'], { env });
+
+  outputs.push(shown.stdout, shown.stderr);
+
+  for (const output of outputs) {
+    assert.equal(output.includes(SECRET_CANARY), false, 'the secret canary was printed.');
+  }
+
+  const walk = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+
+      if (entry.isDirectory()) {
+        await walk(absolute);
+      } else if (entry.isFile() && absolute !== path.join(root, '.env')) {
+        assert.equal((await readFile(absolute)).includes(SECRET_CANARY), false, `${path.relative(root, absolute)} holds the canary.`);
+      }
+    }
+  };
+
+  await walk(root);
+  assert.match(await configurationOf(root), /^ {2}evidence: \{"sensitive_inputs":\["DB_PASSWORD"\],"environment_files":\[".env"\]\}$/m);
+});
+
+/** The chained re-pin preview fields a direct `gate sync --json` gives, compared one by one. */
+const REPIN_FIELDS = ['trusted', 'candidate', 'transition', 'acknowledgedWeakening', 'refusal', 'confirmationToken'];
+
+/**
+ * `SG-CFG-001`, `RISK-008`. Demoting the one required check of an activated
+ * clone is written with the revision's own token, and the chained `gate sync`
+ * preview then refuses it as the Gate does — the weakening named, no token —
+ * and names the Gate's own acknowledged preview as the next command. Pasting
+ * that command offers the token, and the acknowledged confirmation re-pins.
+ * The Framework command flags no weakening of its own: what it shows is
+ * exactly the direct `gate sync --json` document.
+ */
+test('TB-070 SG-CFG-001: a demoted required check reaches gate sync\'s weakening refusal, and the acknowledged preview offers the token', async (t) => {
+  const root = await activatedClone(t, { policy: TWO_CHECK_POLICY });
+  const argv = ['demote-check', 'configuration.broad-tests.test'];
+  const previewText = await agentFramework(root, ['config', ...argv]);
+
+  assert.match(previewText.stdout, /^state: activated — .*names any weakening of the trusted policy, and offers no token for one until it is acknowledged \(--acknowledge-weakening\)\.$/m);
+
+  const { preview, confirmed } = await reviseThroughFramework(root, argv);
+  const direct = await gateJson(root, ['sync']);
+
+  assert.equal(preview.acknowledgeWeakening, false);
+  assert.equal(preview.repin, null, 'the revision preview judged a weakening of its own.');
+  assert.equal(confirmed.applied, true);
+  assert.equal(confirmed.exitStatus, 1);
+
+  for (const field of REPIN_FIELDS) {
+    assert.deepEqual(confirmed.repin[field], direct.observation[field], `the chained preview's ${field} is not the direct gate sync's.`);
+  }
+
+  assert.equal(confirmed.repin.refusal.reasonCode, 'weakening-unacknowledged');
+  assert.equal(confirmed.repin.confirmationToken, null);
+  assert.deepEqual(confirmed.repin.transition.weakenings.map(({ code, checkId }) => ({ code, checkId })), [
+    { code: 'required-check-demoted', checkId: 'configuration.broad-tests.test' },
+  ]);
+  assert.ok(confirmed.next.command.endsWith(' sync --acknowledge-weakening'), confirmed.next.command);
+
+  // The next command, pasted as printed: the Gate's own acknowledged preview, with its token.
+  const acknowledged = JSON.parse((await pasteIntoShell(root, `${confirmed.next.command} --json`)).stdout);
+
+  assert.equal(acknowledged.observation.acknowledgedWeakening, true);
+  assert.match(acknowledged.observation.confirmationToken, /^sha256:[0-9a-f]{64}$/);
+
+  const pinned = await gateJson(root, ['sync', '--acknowledge-weakening', '--confirm', acknowledged.observation.confirmationToken]);
+
+  assert.equal(pinned.mutation.performed, true, pinned.mutation.summary);
+});
+
+/**
+ * The pass-through. A maintainer who passes `--acknowledge-weakening` has it
+ * printed into the revision's confirming command and passed, on confirmation,
+ * to the chained `gate sync` preview, which then offers its token for the
+ * weaker candidate; the confirming line it names carries the acknowledgement
+ * that token binds, and pasting it re-pins.
+ */
+test('TB-070 SG-CFG-001: --acknowledge-weakening passes through to the chained gate sync preview, which offers its token', async (t) => {
+  const root = await activatedClone(t, { policy: TWO_CHECK_POLICY });
+  const argv = ['demote-check', 'configuration.broad-tests.test', '--acknowledge-weakening'];
+  const preview = await agentFramework(root, ['config', ...argv, '--json']);
+
+  assert.equal(preview.document.acknowledgeWeakening, true);
+  assert.ok(preview.document.next.command.endsWith(`--confirm ${preview.document.previewHash} --acknowledge-weakening`), preview.document.next.command);
+
+  const confirmed = JSON.parse((await pasteIntoShell(root, `${preview.document.next.command} --json`)).stdout);
+  const direct = await gateJson(root, ['sync', '--acknowledge-weakening']);
+
+  assert.equal(confirmed.applied, true, JSON.stringify(confirmed.failure));
+
+  for (const field of REPIN_FIELDS) {
+    assert.deepEqual(confirmed.repin[field], direct.observation[field], `the chained preview's ${field} is not the direct acknowledged gate sync's.`);
+  }
+
+  assert.equal(confirmed.repin.acknowledgedWeakening, true);
+  assert.equal(confirmed.repin.refusal, null);
+  assert.match(confirmed.repin.confirmationToken, /^sha256:[0-9a-f]{64}$/);
+  assert.ok(
+    confirmed.next.command.endsWith(` sync --acknowledge-weakening --confirm ${confirmed.repin.confirmationToken}`),
+    confirmed.next.command,
+  );
+
+  const pinned = JSON.parse((await pasteIntoShell(root, `${confirmed.next.command} --json`)).stdout);
+
+  assert.equal(pinned.mutation.performed, true, pinned.mutation.summary);
+  assert.equal((await gateJson(root, ['status'])).observation.health, 'healthy');
+});
+
+/**
+ * `NFR-REL-004` for the TB-070 revisions: the Framework command and
+ * `configure.mjs --revise-gate`, each previewed and confirmed with its own
+ * token on twin clones, write byte-identical files, and so does
+ * `configure-gate` given the revised policy directly.
+ */
+test('TB-070 NFR-REL-004: the Framework command, the direct revision command, and configure-gate write the same file', async (t) => {
+  const cases = [
+    [['add-sensitive-input', 'DB_PASSWORD', '--environment-file', '.env'], ['--name', 'DB_PASSWORD', '--environment-file', '.env'], {
+      evidence: { sensitive_inputs: ['DB_PASSWORD'], environment_files: ['.env'] },
+    }],
+    [['demote-check', 'configuration.broad-tests.test'], ['--check', 'configuration.broad-tests.test'], {
+      checks: { required: [], advisory: ['configuration.static-analysis.lint', 'configuration.broad-tests.test'] },
+    }],
+    [['set-budget', '900'], ['--seconds', '900'], { budget: { total_seconds: 900 } }],
+    [['set-bypass', 'true', '--marker', 'Gate-Bypass'], ['--enabled', 'true', '--marker', 'Gate-Bypass'], {
+      bypass: { enabled: true, marker: 'Gate-Bypass' },
+    }],
+  ];
+
+  for (const [frameworkArgv, directOptions, revisedSubcontract] of cases) {
+    const throughFramework = await configuredClone(t, { policy: TWO_CHECK_POLICY });
+    const direct = await configuredClone(t, { policy: TWO_CHECK_POLICY });
+    const fresh = await throwawayRepository(t);
+    const { confirmed } = await reviseThroughFramework(throughFramework, frameworkArgv);
+    const configureArgv = ['--project', direct, '--revise-gate', frameworkArgv[0], ...directOptions];
+    const directPreview = JSON.parse((await run(process.execPath, [CONFIGURE, ...configureArgv], { cwd: direct })).stdout);
+    const directConfirmed = await run(process.execPath, [CONFIGURE, ...configureArgv, '--confirm', directPreview.previewHash], { cwd: direct });
+
+    assert.equal(directConfirmed.status, 0, directConfirmed.stderr);
+    assert.equal(directPreview.previewHash, confirmed.previewHash, frameworkArgv.join(' '));
+    assert.equal(await configurationOf(direct), await configurationOf(throughFramework), frameworkArgv.join(' '));
+
+    await configuredThroughConfigureGate(fresh, { ...TWO_CHECK_POLICY, ...revisedSubcontract });
+
+    assert.equal(await configurationOf(fresh), await configurationOf(throughFramework), frameworkArgv.join(' '));
+  }
+});
+
+test('TB-070: every new revision is in the usage, and --acknowledge-weakening is a revision flag only', async (t) => {
+  const root = await configuredClone(t);
+  const before = await cloneHash(root);
+
+  for (const argv of [
+    ['config', 'set-bypass'],
+    ['config', 'set-budget', '900', '--marker', 'x'],
+    ['config', 'add-sensitive-input', 'DB_PASSWORD', '--value', 'secret'],
+    ['config', 'show', '--acknowledge-weakening'],
+    ['setup', '--acknowledge-weakening'],
+  ]) {
+    const result = await agentFramework(root, argv);
+
+    assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}.`);
+    assert.equal(result.stdout, '');
+
+    for (const name of [
+      'add-sensitive-input', 'remove-sensitive-input', 'add-environment-file', 'remove-environment-file',
+      'promote-check', 'demote-check', 'remove-check', 'set-budget', 'set-bypass',
+    ]) {
+      assert.match(result.stderr, new RegExp(`agent-framework config ${name} <`));
+    }
+  }
+
+  const usage = (await agentFramework(root, ['config', 'bogus'])).stderr;
+
+  assert.match(usage, /config add-sensitive-input <name> \[--environment-file <environment-file>\] \[--confirm <token>\] \[--acknowledge-weakening\]/);
+  assert.match(usage, /config set-bypass <enabled> \[--marker <marker>\] \[--require-reference <require-reference>\]/);
+  assert.equal(await cloneHash(root), before);
+});
+
+/**
+ * `SG-GUIDE-002`. A value typed where a name, file, or check is expected —
+ * `DB_PASSWORD=<value>` as the argument or as an option's value — is refused
+ * as `value-supplied`, naming only the part before `=`. The value never
+ * reaches the validator and is repeated nowhere: not in a refusal, a usage
+ * text, a `--json` document, or an echoed command line, from the Framework
+ * command or from `configure.mjs --revise-gate`. Nothing is written.
+ */
+test('TB-070 SG-GUIDE-002: a value typed as NAME=value is refused as value-supplied and never repeated by either CLI', async (t) => {
+  const canary = `typed-canary-${createHash('sha256').update('typed value').digest('hex').slice(0, 20)}`;
+  const root = await configuredClone(t);
+  const unconfigured = await noConfigurationClone(t);
+  const before = await cloneHash(root);
+  const unconfiguredBefore = await cloneHash(unconfigured);
+  const frameworkCases = [
+    [root, ['config', 'add-sensitive-input', `DB_PASSWORD=${canary}`], 'DB_PASSWORD'],
+    [root, ['config', 'remove-sensitive-input', `DB_PASSWORD=${canary}`], 'DB_PASSWORD'],
+    [root, ['config', 'add-sensitive-input', 'DB_PASSWORD', '--environment-file', `.env=${canary}`], '.env'],
+    [root, ['config', 'add-environment-file', `.env=${canary}`], '.env'],
+    [root, ['config', 'demote-check', `configuration.broad-tests.test=${canary}`], 'configuration.broad-tests.test'],
+    [root, ['config', 'add-sensitive-input', `DB_PASSWORD=${canary}`, '--confirm', 'f'.repeat(64)], 'DB_PASSWORD'],
+    [unconfigured, ['config', 'add-sensitive-input', `DB_PASSWORD=${canary}`], 'DB_PASSWORD'],
+    [root, ['config', 'add-sensitive-input', '--name', `DB_PASSWORD=${canary}`], null],
+  ];
+
+  for (const [clone, argv, named] of frameworkCases) {
+    const text = await agentFramework(clone, argv);
+    // A malformed invocation prints only the usage, so there is no document to parse.
+    const json = named === null
+      ? await run(process.execPath, [ENTRY, ...argv, '--json'], { cwd: clone })
+      : await agentFramework(clone, [...argv, '--json']);
+
+    for (const result of [text, json]) {
+      assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}.`);
+      assert.equal(`${result.stdout}${result.stderr}`.includes(canary), false, `${argv[1]} repeated the typed value.`);
+    }
+
+    if (named !== null) {
+      assert.equal(json.document.failure.reasonCode, 'value-supplied', json.stdout);
+      assert.ok(json.document.failure.detail.includes(named), json.document.failure.detail);
+      assert.match(text.stdout, /^failed: value-supplied — /m);
+    }
+  }
+
+  const directCases = [
+    ['add-sensitive-input', '--name', `DB_PASSWORD=${canary}`],
+    ['add-sensitive-input', '--name', 'DB_PASSWORD', '--environment-file', `.env=${canary}`],
+    ['remove-sensitive-input', '--name', `DB_PASSWORD=${canary}`],
+    ['add-environment-file', '--file', `.env=${canary}`],
+    ['add-sensitive-input', '--name', `DB_PASSWORD=${canary}`, '--confirm', 'f'.repeat(64)],
+  ];
+
+  for (const argv of directCases) {
+    const result = await run(process.execPath, [CONFIGURE, '--project', root, '--revise-gate', ...argv], { cwd: root });
+
+    assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}: ${result.stderr}`);
+    assert.equal(`${result.stdout}${result.stderr}`.includes(canary), false, `--revise-gate ${argv[0]} repeated the typed value.`);
+    assert.equal(JSON.parse(result.stdout).reasonCode, 'value-supplied');
+  }
+
+  assert.equal(await cloneHash(root), before);
+  assert.equal(await cloneHash(unconfigured), unconfiguredBefore);
+});

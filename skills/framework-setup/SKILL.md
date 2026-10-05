@@ -70,16 +70,41 @@ run.
 
 ## Revising the Gate section by name: `agent-framework config <revision>`
 
-To add or remove a dependency root, set how roots are provided, or change the
-budget-skippable checks, never edit the YAML keys: name the revision.
+To add or remove a dependency root, set how roots are provided, change the
+budget-skippable checks, declare a Sensitive runtime input or an environment
+file, move a check between required and advisory, set the budget, or turn bypass
+on or off, never edit the YAML keys: name the revision.
 
 ```bash
-node <skill-directory>/scripts/agent-framework.mjs config add-dependency-root <root> [--provisioning link|copy] [--confirm <token>] [--json] [--project <directory>]
+node <skill-directory>/scripts/agent-framework.mjs config add-dependency-root <root> [--provisioning link|copy] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
 node <skill-directory>/scripts/agent-framework.mjs config remove-dependency-root <root> [--confirm <token>] ...
 node <skill-directory>/scripts/agent-framework.mjs config set-dependency-provisioning <link|copy> [--root <root>] [--confirm <token>] ...
 node <skill-directory>/scripts/agent-framework.mjs config add-budget-skippable <check> [--confirm <token>] ...
 node <skill-directory>/scripts/agent-framework.mjs config remove-budget-skippable <check> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config add-sensitive-input <NAME> [--environment-file <file>] [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config remove-sensitive-input <NAME> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config add-environment-file <file> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config remove-environment-file <file> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config promote-check <check> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config demote-check <check> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config remove-check <check> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config set-budget <seconds> [--confirm <token>] ...
+node <skill-directory>/scripts/agent-framework.mjs config set-bypass <true|false> [--marker <marker>] [--require-reference true|false] [--confirm <token>] ...
 ```
+
+A Sensitive runtime input is declared by name only (`evidence.sensitive_inputs`);
+`--environment-file .env` also declares the git-ignored file it may be resolved
+from besides the environment (`evidence.environment_files`), when that file is
+not declared yet. Nothing reads, asks for, or prints the value: any argument
+typed as `NAME=value` is refused as `value-supplied`, naming only `NAME`, and
+the value is repeated nowhere — not in the refusal, the document, or an echoed
+command. A check moves
+between required and advisory, or is removed, only when the policy already binds
+it; an identity bound as neither is refused (`check-unbound`), because binding a
+check or editing a Verification profile command is not a revision.
+`set-bypass true` keeps a marker already declared or takes `--marker`; an
+enabled bypass without one is refused with the Gate policy validator's own
+reason. Disabling keeps the marker and the reference rule as they are.
 
 Without `--confirm` it writes nothing: it shows each line of the Gate section
 the revision changes, before and after, its `previewHash`, and the exact
@@ -109,6 +134,17 @@ its own `--confirm` line. It never confirms that re-pin. A configured clone
 that is not activated has nothing to re-pin. `allowed_environment` and
 Verification profile commands are never revisable here.
 
+Whether a revision weakens the trusted policy is `gate sync`'s judgement, not
+this command's: the revision preview names no weakening, and the re-pin preview
+reports the weakenings and refusal exactly as the Gate states them. A demoted or
+removed required check is refused there as `weakening-unacknowledged` with no
+token, and the next command is the Gate's own acknowledged preview
+(`git gate sync --acknowledge-weakening`), which offers the token. Pass
+`--acknowledge-weakening` to the revision to have it passed through to the
+chained preview instead; the confirming line then carries the acknowledgement
+the Gate's token binds. A looser budget or an enabled bypass is not counted as
+weaker by the Gate today.
+
 The same operation runs without the Framework command:
 
 ```bash
@@ -116,7 +152,10 @@ node <skill-directory>/scripts/configure.mjs --project "$PWD" \
   --revise-gate add-dependency-root --root vendor --provisioning copy [--confirm <preview-hash>]
 ```
 
-(`--check <id>` for the budget-skippable revisions.) Both write the same file.
+Each revision's value is passed as its own option: `--root`, `--provisioning`,
+`--check`, `--name`, `--environment-file`, `--file`, `--seconds`, `--enabled`,
+`--marker`, `--require-reference`. Both write the same file. A refused revision
+prints `{ "status": "refused", "reasonCode", "detail" }` and exits `2`.
 Exit status is `0` when the revision is written and nothing follows, `1` when a
 confirmation or a re-pin remains, and `2` when it was refused.
 
@@ -324,8 +363,8 @@ The transaction rejects schema v3, stale confirmation, missing or extra
 subcontracts, command ownership, and activation state. It writes only
 `.agent-framework.yaml`, atomically, and reports `activated: false`. It never
 creates a hook, receipt, trust decision, or evidence runtime. It configures
-once: a clone already configured is refused, and its execution entries are
-revised by name instead (`agent-framework config <revision>`, above).
+once: a clone already configured is refused, and its entries are revised by
+name instead (`agent-framework config <revision>`, above).
 
 Completion criterion: the result reports `configured`, the exact preview was
 installed, and commit behavior remains unchanged.
