@@ -31,8 +31,10 @@ acknowledge it from there.
 - Left every judgement to the Gate policy validator. `true`/`false` and digit
   strings become the values they spell and anything else reaches the validator
   as typed, so an enabled bypass without a marker, a non-boolean reference
-  rule, a lowercase or `NAME=value` input, or an escaping environment file is
-  refused with the validator's own path and message.
+  rule, an input name the validator rejects (such as `db-password`), or an
+  escaping environment file is refused with the validator's own path and
+  message. A `NAME=value` argument never reaches the validator: it is refused
+  first as `value-supplied`, without repeating the value.
 - Passed `--acknowledge-weakening` through. Whether a candidate is weaker stays
   `gate sync`'s judgement (`evaluatePolicyTransition`); the revision preview
   names none. A confirmed demotion or removal of a required check reaches the
