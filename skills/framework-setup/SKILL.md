@@ -227,6 +227,38 @@ own refusal (`section-unrevisable`). Exit status is `0` with nothing to propose,
 `1` when proposals remain or there is no Gate section, and `2` when it could not
 run.
 
+## One page to read or share: `agent-framework report --html`
+
+To hand someone the clone's Gate state without asking them to run commands:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs report --html [--out <path>] [--project <directory>]
+```
+
+It writes one self-contained static HTML file and prints its path on a
+`report:` line. The page shows the Gate state and health, every remaining step
+with its command and the next command, the doctor's findings, and the effective
+Gate configuration section. The state, health, steps, and configuration are
+rendered from the documents `setup --json` and `config show --json` print, so
+the page cannot disagree with them; the doctor's findings are copied from
+`gate doctor --json`, which is asked only on a configured or activated clone.
+A schema v3 or unconfigured clone, or a clone without the Gate module, gets a
+page that says so in those commands' own words.
+
+The page holds no script, stylesheet, font, image, link, or control, escapes
+every string it shows, and carries its generation time and the command that
+regenerates it: it is a snapshot and goes stale when the clone changes. Two
+pages of an unchanged clone differ only in that time. A Sensitive runtime input
+appears by name and source only, never a value.
+
+By default it goes to a fresh name in the temporary directory; `--out` names
+another file. A path whose real location — after symbolic links and `..` — is
+inside the clone, a path that already exists, and a directory that does not
+exist are each refused with nothing written; it never overwrites a file. Nothing
+under the clone or `.git` changes. Exit status is `0` when the page is written
+and neither setup nor config show names anything further, `1` when it is written
+and something remains, and `2` when nothing was written.
+
 ## Process
 
 ### 1. Discover

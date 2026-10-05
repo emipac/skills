@@ -1,14 +1,14 @@
 # TB-073 — Write one page a maintainer can read
 
-Status: ready-for-agent
+Status: done
 Parent: guided-setup-feature-spec
 Assignee:
-Labels: ready-for-agent, enhancement
+Labels: done, enhancement
 Blocked by: 68-show-the-gate-configuration-a-clone-runs
 Tracker ID: 73-write-one-page-a-maintainer-can-read
 Draft key: TB-073
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** `.scratch/guided-setup/issues/guided-setup-feature-spec.md`
 
@@ -67,10 +67,10 @@ and the next step.
 
 ## Acceptance Criteria
 
-- [ ] `AC-GUIDE-004`: one file at the temporary or explicit path; no `http`,
+- [x] `AC-GUIDE-004`: one file at the temporary or explicit path; no `http`,
   `https`, or protocol-relative reference in it; an `--out` inside the clone is
   refused; the canary is absent; the clone is unchanged.
-- [ ] The page's health and next step equal `setup --json` for the same clone.
+- [x] The page's health and next step equal `setup --json` for the same clone.
 
 ## Verification Matrix
 

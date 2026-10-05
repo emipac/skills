@@ -2059,6 +2059,22 @@ git gate repair --confirm &lt;token&gt;        # performs exactly that preview</
         where it is.
       </p>
 
+      <p class="cmd-label">One page to read or hand to someone — written outside the clone</p>
+      <pre><code>agent-framework report --html                            # a fresh page in the temporary directory; prints its path
+agent-framework report --html --out ~/gate-report.html   # or a file you name, outside the clone</code></pre>
+      <p>
+        It writes one static HTML file holding the Gate state and health, every remaining step and
+        the next command, <code>gate doctor</code>'s findings, and the Gate section as
+        <code>agent-framework config show</code> lists it — built from the same documents
+        <code>agent-framework setup --json</code> and <code>config show --json</code> print, so it
+        never disagrees with them. The page has no script, stylesheet, font, image, or link, so
+        opening it fetches nothing. It states when it was generated and the command that
+        regenerates it, because it does not change when your clone does. Sensitive runtime inputs
+        appear by name and source only. A path inside the clone — however it is spelled, through a
+        link or <code>..</code> — or one that already exists is refused, and nothing is written;
+        nothing under the clone changes either way.
+      </p>
+
       <div class="note">
         <span class="note-tag">Two things this command is not</span>
         <p>

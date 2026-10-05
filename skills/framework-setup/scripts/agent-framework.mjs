@@ -84,21 +84,42 @@
  * Gate's token; without it the Gate refuses, and the next command is the
  * Gate's own acknowledged preview.
  *
+ * `report --html` writes one self-contained static HTML page a maintainer can
+ * read or share (`FR-GUIDE-008`, `TB-073`): Gate state and health, the
+ * remaining steps and next command, the doctor's findings, and the effective
+ * configuration. It is rendered from the documents `setup --json` and
+ * `config show --json` print, and from `gate doctor --json`'s findings copied
+ * field by field, so it cannot disagree with them. It holds no script,
+ * stylesheet, font, image, or link, escapes every string it shows, and carries
+ * its generation time and the command that regenerates it. It goes to a fresh
+ * name in the temporary directory, or to `--out`; a path whose real location
+ * is inside the clone, or that already exists, is refused with nothing written
+ * (`SG-GUIDE-002`). A Sensitive runtime input appears by name and source only.
+ *
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]       (guided in an interactive terminal)
  *   agent-framework config show [--json] [--project <directory>]
  *   agent-framework config suggest [--json] [--project <directory>]
+ *   agent-framework report --html [--out <path>] [--project <directory>]
  *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
  * value that differs from the pinned one; for `config suggest`: no Gate
  * section, or proposals; for a revision: its confirmation, or the re-pin it
- * continued into), `2` the command could not run or the revision was refused.
+ * continued into; for `report`: the page is written and setup or config show
+ * names something further), `2` the command could not run, the revision was
+ * refused, or no report was written.
  */
 
-import { createHash } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  lstat,
+  readFile,
+  realpath,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -145,6 +166,7 @@ const USAGE = [
   'usage: agent-framework setup [--json] [--project <directory>]',
   '       agent-framework config show [--json] [--project <directory>]',
   '       agent-framework config suggest [--json] [--project <directory>]',
+  '       agent-framework report --html [--out <path>] [--project <directory>]',
   ...Object.entries(gateRevisions).map(([name, { argument, options }]) => [
     `       agent-framework config ${name} <${argument}>`,
     ...options.map((option) => `[--${option} <${option}>]`),
@@ -517,13 +539,27 @@ const parseArguments = (argv) => {
   const revision = first === 'config' && Object.hasOwn(gateRevisions, second ?? '') ? gateRevisions[second] : null;
   const subcommand = first === 'config' && (['show', 'suggest'].includes(second) || revision !== null) ? `config ${second}` : first;
 
-  if (!['setup', 'config show', 'config suggest'].includes(subcommand) && revision === null) {
+  if (!['setup', 'config show', 'config suggest', 'report'].includes(subcommand) && revision === null) {
     return null;
   }
 
-  const rest = argv.slice(subcommand === 'setup' ? 1 : 2);
-  const options = { subcommand, json: false, project: null, revision: null, confirmation: null, acknowledgeWeakening: false };
-  const valued = new Set(['--project', ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)])]);
+  const report = subcommand === 'report';
+  const rest = argv.slice(['setup', 'report'].includes(subcommand) ? 1 : 2);
+  const options = {
+    subcommand,
+    json: false,
+    html: false,
+    out: null,
+    project: null,
+    revision: null,
+    confirmation: null,
+    acknowledgeWeakening: false,
+  };
+  const valued = new Set([
+    '--project',
+    ...(report ? ['--out'] : []),
+    ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)]),
+  ]);
 
   if (revision !== null) {
     options.revision = { operation: second };
@@ -532,8 +568,10 @@ const parseArguments = (argv) => {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
 
-    if (argument === '--json') {
+    if (argument === '--json' && !report) {
       options.json = true;
+    } else if (argument === '--html' && report) {
+      options.html = true;
     } else if (argument === ACKNOWLEDGE_WEAKENING && revision !== null) {
       options.acknowledgeWeakening = true;
     } else if (valued.has(argument) && rest[index + 1] !== undefined) {
@@ -541,6 +579,8 @@ const parseArguments = (argv) => {
 
       if (argument === '--project') {
         options.project = value;
+      } else if (argument === '--out') {
+        options.out = value;
       } else if (argument === '--confirm') {
         options.confirmation = value;
       } else {
@@ -555,8 +595,21 @@ const parseArguments = (argv) => {
     }
   }
 
-  return revision !== null && options.revision[revision.argument] === undefined ? null : options;
+  const incomplete = (revision !== null && options.revision[revision.argument] === undefined) || (report && !options.html);
+
+  return incomplete ? null : options;
 };
+
+/** The located Gate command, or why it is unavailable. */
+const gateText = (gate) => (gate.available ? `${gate.command} — ${gate.detail}` : `unavailable — ${gate.detail}`);
+
+/** What `gate doctor` predicted for activation, as setup's document holds it. */
+const setupDoctorText = (doctor) => (doctor.proceeds ? 'activation would proceed' : `activation would stop (${doctor.stop.reasonCode})`);
+
+/** The one next command, or the instruction when the step has none. */
+const nextText = (next) => (next === null ? 'nothing' : (next.command ?? next.instruction));
+
+const unavailableText = (unavailable) => `unavailable: ${unavailable.join(', ')} — Gate steps are unavailable because the Gate module is not installed.`;
 
 /** The plan as text. `limit` is false only where a guided run, which did confirm, ends with its own. */
 const render = (document, { limit = true } = {}) => {
@@ -577,12 +630,10 @@ const render = (document, { limit = true } = {}) => {
     lines.push(`health: ${document.health}`);
   }
 
-  lines.push(document.gate.available
-    ? `gate: ${document.gate.command} — ${document.gate.detail}`
-    : `gate: unavailable — ${document.gate.detail}`);
+  lines.push(`gate: ${gateText(document.gate)}`);
 
   if (document.doctor !== null) {
-    lines.push(`doctor: ${document.doctor.proceeds ? 'activation would proceed' : `activation would stop (${document.doctor.stop.reasonCode})`}`);
+    lines.push(`doctor: ${setupDoctorText(document.doctor)}`);
   }
 
   lines.push(`steps: ${document.steps.length}`);
@@ -604,11 +655,11 @@ const render = (document, { limit = true } = {}) => {
   }
 
   if (document.unavailable.length > 0) {
-    lines.push(`unavailable: ${document.unavailable.join(', ')} — Gate steps are unavailable because the Gate module is not installed.`);
+    lines.push(unavailableText(document.unavailable));
   }
 
   lines.push(
-    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `next: ${nextText(document.next)}`,
     `run every command from ${document.project}.`,
     ...(limit ? [LIMIT] : []),
     '',
@@ -848,21 +899,29 @@ const showConfiguration = async ({ projectRoot, environment }) => {
   };
 };
 
-/** One value's line: the working value, then how it compares with the pinned one. */
-const renderValue = (value) => {
-  const shown = value.declared ? JSON.stringify(value.value) : '(not set)';
+/** One shown value as text: its JSON, or `(not set)`. */
+const shownValueText = (value) => (value.declared ? JSON.stringify(value.value) : '(not set)');
+
+/** How one value compares with the pinned one, in words; `null` when nothing is pinned. */
+const markingText = (value) => {
   const pinned = value.pinned?.declared ? JSON.stringify(value.pinned.value) : '(not set)';
   const changes = [
     ...(value.added?.length ? [`added ${value.added.join(', ')}`] : []),
     ...(value.removed?.length ? [`removed ${value.removed.join(', ')}`] : []),
   ];
-  const marking = {
-    matches: ' — matches the pinned value',
-    differs: ` — differs from the pinned value ${pinned}${changes.map((change) => `; ${change}`).join('')}`,
-    unrecoverable: ' — unrecoverable: the pinned value is known only by the section identity',
-  }[value.marking] ?? '';
 
-  return `  ${value.key}: ${shown}${marking}`;
+  return {
+    matches: 'matches the pinned value',
+    differs: `differs from the pinned value ${pinned}${changes.map((change) => `; ${change}`).join('')}`,
+    unrecoverable: 'unrecoverable: the pinned value is known only by the section identity',
+  }[value.marking] ?? null;
+};
+
+/** One value's line: the working value, then how it compares with the pinned one. */
+const renderValue = (value) => {
+  const marking = markingText(value);
+
+  return `  ${value.key}: ${shownValueText(value)}${marking === null ? '' : ` — ${marking}`}`;
 };
 
 /** How the section as a whole stands against what the Activation receipt pinned. */
@@ -888,6 +947,13 @@ const renderSection = (section) => {
   return lines;
 };
 
+/** A Sensitive runtime input by name and source, or as unresolved; never a value (`SG-GUIDE-002`). */
+const resolvedInputText = (input) => `${input.name}: from ${input.source}`;
+
+const unresolvedInputText = (input) => `${input.name}: unresolved — no source sets it`;
+
+const environmentFileText = (file) => `environment file ${file.path}: ${file.status}`;
+
 const renderConfiguration = (document) => {
   const lines = [
     'agent-framework config show',
@@ -903,9 +969,7 @@ const renderConfiguration = (document) => {
   lines.push(`state: ${document.state}`);
 
   if (document.gate !== null) {
-    lines.push(document.gate.available
-      ? `gate: ${document.gate.command} — ${document.gate.detail}`
-      : `gate: unavailable — ${document.gate.detail}`);
+    lines.push(`gate: ${gateText(document.gate)}`);
   }
 
   if (document.section === null) {
@@ -921,14 +985,14 @@ const renderConfiguration = (document) => {
   if (document.runtimeInputs !== null) {
     lines.push(
       'runtime inputs:',
-      ...document.runtimeInputs.resolved.map((input) => `  - ${input.name}: from ${input.source}`),
-      ...document.runtimeInputs.unresolved.map((input) => `  - ${input.name}: unresolved — no source sets it`),
-      ...document.runtimeInputs.environmentFiles.map((file) => `  environment file ${file.path}: ${file.status}`),
+      ...document.runtimeInputs.resolved.map((input) => `  - ${resolvedInputText(input)}`),
+      ...document.runtimeInputs.unresolved.map((input) => `  - ${unresolvedInputText(input)}`),
+      ...document.runtimeInputs.environmentFiles.map((file) => `  ${environmentFileText(file)}`),
     );
   }
 
   lines.push(
-    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `next: ${nextText(document.next)}`,
     CONFIG_LIMIT,
     '',
   );
@@ -1300,7 +1364,7 @@ const renderRevision = (document) => {
   }
 
   lines.push(
-    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `next: ${nextText(document.next)}`,
     `run every command from ${document.project}.`,
     REVISION_LIMIT,
     '',
@@ -1436,9 +1500,7 @@ const renderSuggestion = (document) => {
   lines.push(`state: ${document.state}`);
 
   if (document.gate !== null) {
-    lines.push(document.gate.available
-      ? `gate: ${document.gate.command} — ${document.gate.detail}`
-      : `gate: unavailable — ${document.gate.detail}`);
+    lines.push(`gate: ${gateText(document.gate)}`);
   }
 
   if (document.section === null) {
@@ -1460,7 +1522,7 @@ const renderSuggestion = (document) => {
   }
 
   lines.push(
-    `next: ${document.next === null ? 'nothing' : (document.next.command ?? document.next.instruction)}`,
+    `next: ${nextText(document.next)}`,
     `run every command from ${document.project}.`,
     SUGGEST_LIMIT,
     '',
@@ -1495,6 +1557,395 @@ const runConfigSuggest = async ({ projectRoot, environment }) => {
       limit: SUGGEST_LIMIT,
     },
     render: renderSuggestion,
+  };
+};
+
+/* ---------------------------------------------------------------------------
+ * The report: one static page a maintainer can read or share (`FR-GUIDE-008`,
+ * `TB-073`).
+ *
+ * The page is rendered from the documents `setup --json` and
+ * `config show --json` print — the same functions build them — so it cannot
+ * disagree with either, and from the doctor's findings copied field by field
+ * out of `gate doctor --json`. It holds no script, stylesheet, font, image, or
+ * link, and every string it shows is escaped. It is written only outside the
+ * clone, judged on the real path, and never over an existing file; nothing
+ * under the clone changes (`SG-GUIDE-001`, `SG-GUIDE-002`). A Sensitive
+ * runtime input appears by name and source only (`SG-SECRET-001`).
+ * ------------------------------------------------------------------------- */
+
+const REPORT_LIMIT = 'report writes one static HTML file, only outside the clone and never over an existing file; it changes nothing under the clone, confirms nothing, and shows a Sensitive runtime input by name and source only.';
+
+const REPORT_PREFIX = 'agent-framework-report-';
+
+/** The lifecycle states `gate doctor` answers for: a configured Gate section. */
+const DOCTOR_STATES = Object.freeze(['configured', 'activated']);
+
+const HTML_ESCAPES = Object.freeze({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' });
+
+const MARKUP = Symbol('markup');
+
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
+
+const interpolate = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(interpolate).join('');
+  }
+
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return value[MARKUP] ?? escapeHtml(value);
+};
+
+/**
+ * Markup with every interpolated value escaped, unless it is itself markup
+ * built here; an array is each item in turn. Nothing reaches the page
+ * unescaped by forgetting to escape it.
+ */
+const html = (strings, ...values) => ({
+  [MARKUP]: strings.reduce((built, text, index) => built + text + (index < values.length ? interpolate(values[index]) : ''), ''),
+});
+
+const REPORT_STYLE = [
+  ':root { color-scheme: light dark; --ink: #1d232a; --muted: #5b6672; --line: #d5dbe1; --panel: #f4f6f8; --page: #ffffff; --warn: #8a4b00; }',
+  '@media (prefers-color-scheme: dark) { :root { --ink: #e4e8ec; --muted: #a3adb8; --line: #3a434d; --panel: #1f252b; --page: #14181c; --warn: #f0b35a; } }',
+  'body { margin: 0 auto; max-width: 60rem; padding: 1.5rem 1rem 3rem; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }',
+  'h1 { font-size: 1.6rem; margin: 0 0 0.5rem; } h2 { font-size: 1.2rem; margin: 2rem 0 0.5rem; border-bottom: 1px solid var(--line); padding-bottom: 0.25rem; } h3 { font-size: 1rem; margin: 1.25rem 0 0.25rem; }',
+  'dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0; } dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }',
+  'code, pre { font: 13px/1.45 ui-monospace, monospace; } pre { background: var(--panel); padding: 0.5rem 0.75rem; margin: 0.25rem 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }',
+  'table { border-collapse: collapse; width: 100%; margin: 0.25rem 0; } th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 0.3rem 0.5rem; overflow-wrap: anywhere; } th { color: var(--muted); font-weight: 600; }',
+  'li { margin: 0.25rem 0; } .muted { color: var(--muted); } .refused { color: var(--warn); } footer { margin-top: 2.5rem; color: var(--muted); font-size: 0.9rem; }',
+].join('\n');
+
+/**
+ * Where the page goes: `--out` as given, else a fresh name in the temporary
+ * directory. The directory is resolved by the operating system — symbolic
+ * links, then `..` — and the file named in it is the one checked and written,
+ * so no spelling of a path reaches the clone. Refused, with nothing written,
+ * when that path is inside the clone, already exists, or names no file in an
+ * existing directory.
+ */
+const reportTarget = async ({ cwd, projectRoot, out }) => {
+  let clone;
+
+  try {
+    clone = await realpath(projectRoot);
+  } catch {
+    return failure('project-missing', `${projectRoot} does not exist.`);
+  }
+
+  const requested = out === null
+    ? path.join(tmpdir(), `${REPORT_PREFIX}${randomUUID()}.html`)
+    : (path.isAbsolute(out) ? out : `${cwd}${path.sep}${out}`);
+  const name = path.basename(requested);
+
+  if (['', '.', '..'].includes(name) || requested.endsWith(path.sep)) {
+    return failure('report-target-invalid', `${requested} names no file to write the report to.`);
+  }
+
+  let directory;
+
+  try {
+    directory = await realpath(path.dirname(requested));
+  } catch {
+    directory = null;
+  }
+
+  if (directory === null || !(await stat(directory)).isDirectory()) {
+    return failure('report-directory-missing', `${path.dirname(requested)} is not an existing directory; report creates no directory.`);
+  }
+
+  const target = path.join(directory, name);
+
+  if (target === clone || target.startsWith(`${clone}${path.sep}`)) {
+    return failure(
+      'report-inside-clone',
+      `${requested} is ${target}, inside the clone ${clone}; a report is never written inside the clone (SG-GUIDE-002). Name a path outside it with --out, or omit --out for the temporary directory.`,
+    );
+  }
+
+  if (await lstat(target).then(() => true, () => false)) {
+    return failure('report-target-exists', `${target} already exists; report never overwrites a file. Remove it or name another path with --out.`);
+  }
+
+  return { target };
+};
+
+/**
+ * The doctor's findings for a configured clone, copied field by field out of
+ * `gate doctor --json` so no value can pass through (`SG-GUIDE-002`); its
+ * Sensitive runtime inputs are the configuration's, shown there. Not asked
+ * without the Gate module or a configured Gate section.
+ */
+const observeDoctor = async ({ projectRoot, environment, setup }) => {
+  if (setup.gate?.available !== true) {
+    return { asked: false, reason: `the Gate module is unavailable: ${setup.gate?.detail ?? 'it was not located'}.` };
+  }
+
+  if (!DOCTOR_STATES.includes(setup.state)) {
+    return { asked: false, reason: `gate doctor answers for a configured Gate section, and this clone is ${setup.state ?? 'not readable'}.` };
+  }
+
+  const gate = await locateGateCommand({ environment });
+  const doctored = await runGateCommand(gate, { cwd: projectRoot, args: ['doctor'], environment });
+  const asked = `${describeGate(gate).command} doctor --json`;
+
+  if (doctored.failure) {
+    return { asked: true, command: asked, failure: doctored.failure };
+  }
+
+  const { observation } = doctored.document;
+  const { verdict, runners, hooks } = observation;
+
+  return {
+    asked: true,
+    command: asked,
+    failure: null,
+    state: observation.state,
+    configuration: {
+      resolved: observation.configuration.resolved,
+      checks: [...(observation.configuration.checks ?? [])],
+      reasonCode: observation.configuration.reasonCode,
+      detail: observation.configuration.detail,
+    },
+    verdict: {
+      proceeds: verdict.proceeds,
+      reached: [...verdict.reached],
+      stop: verdict.stop === null ? null : { step: verdict.stop.step, reasonCode: verdict.stop.reasonCode, detail: verdict.stop.detail },
+    },
+    runners: runners === null ? null : {
+      resolved: runners.resolved.map(({ checkId, role, runner, executable, version }) => ({ checkId, role, runner, executable, version })),
+      unresolved: runners.unresolved.map(({ checkId, role, runner, reason }) => ({ checkId, role, runner, reason })),
+    },
+    dependencyRoots: (observation.dependencies?.roots ?? []).map(({ root, strategy, status, mechanism }) => ({ root, strategy, status, mechanism })),
+    hooks: hooks === null ? null : {
+      hook: hooks.hook,
+      ownership: hooks.ownership,
+      action: hooks.action,
+      valid: hooks.valid,
+      reasonCode: hooks.reasonCode,
+    },
+    answeredByActivation: observation.answeredByActivation.map(({ step }) => step),
+    limit: observation.limit,
+  };
+};
+
+const doctorVerdictText = (verdict) => (verdict.proceeds
+  ? 'activation would proceed'
+  : `activation would stop at ${verdict.stop.step ?? 'configuration'} (${verdict.stop.reasonCode})`);
+
+const dependencyRootText = (entry) => `${entry.root}: ${entry.strategy}, ${entry.status}${entry.mechanism === null ? '' : `, ${entry.mechanism}`}`;
+
+const failureMarkup = (id, failed) => html`<p id="${id}" class="refused">failed: ${failed.reasonCode} — ${failed.detail}</p>`;
+
+const commandMarkup = (run) => html`<pre><code>$ ${run}</code></pre>`;
+
+/** Gate state and health, as `setup --json` names them. */
+const stateMarkup = (setup) => html`<section>
+<h2>Gate state and health</h2>
+<dl>
+<dt>state</dt><dd id="state">${setup.state ?? '(none)'}</dd>
+<dt>health</dt><dd id="health">${setup.health ?? '(not reported)'}</dd>
+<dt>gate</dt><dd id="gate">${setup.gate === null ? 'not located' : gateText(setup.gate)}</dd>
+${setup.doctor === null ? '' : html`<dt>doctor</dt><dd id="setup-doctor">${setupDoctorText(setup.doctor)}</dd>`}
+</dl>
+${setup.failure === null ? '' : failureMarkup('setup-failure', setup.failure)}
+</section>`;
+
+/** Every remaining step and the next command, as `setup --json` names them. */
+const stepsMarkup = (setup) => html`<section>
+<h2>Next steps</h2>
+<p>next: <code id="next">${nextText(setup.next)}</code></p>
+${setup.steps.length === 0 ? '' : html`<ol>
+${setup.steps.map((step, index) => html`<li id="step-${index + 1}"><strong>${step.id}</strong> (${step.owner}) — ${step.summary}
+${step.decisions.map((decision) => html`<div>decide: ${decision}</div>`)}
+${step.refusal === null ? '' : html`<div class="refused">refused: ${step.refusal}</div>`}
+${step.commands.map((entry) => commandMarkup(entry.run))}
+</li>
+`)}</ol>`}
+${setup.unavailable.length === 0 ? '' : html`<p id="unavailable">${unavailableText(setup.unavailable)}</p>`}
+<p class="muted">Run every command from <code>${setup.project}</code>. Each step is performed only by the command it names, which previews first where it writes.</p>
+</section>`;
+
+/** The doctor's findings, in the Gate's own words. */
+const doctorMarkup = (doctor) => {
+  if (!doctor.asked) {
+    return html`<section>
+<h2>Doctor findings</h2>
+<p id="doctor-unasked">not asked — ${doctor.reason}</p>
+</section>`;
+  }
+
+  if (doctor.failure !== null) {
+    return html`<section>
+<h2>Doctor findings</h2>
+<p class="muted">From <code>${doctor.command}</code>.</p>
+${failureMarkup('doctor-failure', doctor.failure)}
+</section>`;
+  }
+
+  const { verdict, runners, hooks, configuration } = doctor;
+
+  return html`<section>
+<h2>Doctor findings</h2>
+<p class="muted">From <code>${doctor.command}</code>: what a new activation would find on this machine.</p>
+<dl>
+<dt>observed state</dt><dd>${doctor.state}</dd>
+<dt>verdict</dt><dd id="doctor-verdict">${doctorVerdictText(verdict)}</dd>
+${verdict.stop === null ? '' : html`<dt>stopped by</dt><dd class="refused">${verdict.stop.detail}</dd>`}
+<dt>steps reached</dt><dd>${verdict.reached.join(', ') || 'none'}</dd>
+<dt>configuration</dt><dd>${configuration.resolved ? `resolves; checks ${configuration.checks.join(', ') || 'none'}` : `does not resolve — ${configuration.reasonCode}: ${configuration.detail}`}</dd>
+<dt>dependency roots</dt><dd id="doctor-roots">${doctor.dependencyRoots.map(dependencyRootText).join('; ') || 'none declared'}</dd>
+<dt>hook</dt><dd>${hooks === null ? 'not inspected' : `${hooks.hook}: ${hooks.ownership}, ${hooks.action}${hooks.valid ? '' : ` (${hooks.reasonCode})`}`}</dd>
+<dt>answered only by activation</dt><dd>${doctor.answeredByActivation.join(', ')}</dd>
+</dl>
+${runners === null ? '' : html`<table>
+<tr><th>check</th><th>role</th><th>runner</th><th>resolves to</th></tr>
+${runners.resolved.map((entry) => html`<tr><td>${entry.checkId}</td><td>${entry.role}</td><td>${entry.runner}</td><td><code>${entry.executable}</code>${entry.version === null ? '' : ` (${entry.version})`}</td></tr>
+`)}${runners.unresolved.map((entry) => html`<tr class="refused"><td>${entry.checkId}</td><td>${entry.role}</td><td>${entry.runner}</td><td>unresolved — ${entry.reason}</td></tr>
+`)}</table>`}
+<p class="muted">${doctor.limit}</p>
+</section>`;
+};
+
+/** The effective Gate configuration section, as `config show --json` shows it. */
+const configurationMarkup = (shown) => {
+  if (shown.failure !== null) {
+    return html`<section>
+<h2>Effective configuration</h2>
+${failureMarkup('configuration-failure', shown.failure)}
+</section>`;
+  }
+
+  return html`<section>
+<h2>Effective configuration</h2>
+${shown.section === null
+    ? html`<p id="configuration-none">section: none — .agent-framework.yaml has no Gate configuration section.</p>`
+    : renderSection(shown.section).map((line) => html`<p>${line}</p>`)}
+${shown.subcontracts.map((subcontract) => html`<h3>${subcontract.name}</h3>
+${subcontract.values.length === 0 ? html`<p class="muted">no keys set</p>` : html`<table>
+<tr><th>key</th><th>value</th><th>against the pinned section</th></tr>
+${subcontract.values.map((value) => {
+    const id = `configuration.${subcontract.name}.${value.key}`;
+
+    return html`<tr><td>${value.key}</td><td><code id="${id}">${shownValueText(value)}</code></td><td id="${id}.marking">${markingText(value) ?? 'not compared — nothing is pinned'}</td></tr>
+`;
+  })}</table>`}
+`)}
+${shown.runtimeInputs === null ? '' : html`<h3>Sensitive runtime inputs</h3>
+<p class="muted">By name and the source each resolves from; never a value.</p>
+<ul>
+${shown.runtimeInputs.resolved.map((input) => html`<li id="runtime-input.${input.name}">${resolvedInputText(input)}</li>
+`)}${shown.runtimeInputs.unresolved.map((input) => html`<li id="runtime-input.${input.name}">${unresolvedInputText(input)}</li>
+`)}${shown.runtimeInputs.environmentFiles.map((file) => html`<li>${environmentFileText(file)}</li>
+`)}</ul>`}
+</section>`;
+};
+
+/** The whole page. Everything but `generatedAt` is a function of the documents. */
+const reportPage = ({ setup, shown, doctor, generatedAt, regenerate }) => html`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate report — ${path.basename(setup.project)}</title>
+<style>
+${{ [MARKUP]: REPORT_STYLE }}
+</style>
+</head>
+<body>
+<header>
+<h1>Gate report</h1>
+<dl>
+<dt>project</dt><dd><code id="project">${setup.project}</code></dd>
+<dt>generated</dt><dd><time id="generated" datetime="${generatedAt}">${generatedAt}</time></dd>
+<dt>regenerate</dt><dd><code id="regenerate">${regenerate}</code></dd>
+</dl>
+<p class="muted">A static snapshot: it does not change when the clone does. Run the command above for a current page; it writes a new file in the temporary directory.</p>
+</header>
+<main>
+${stateMarkup(setup)}
+${stepsMarkup(setup)}
+${doctorMarkup(doctor)}
+${configurationMarkup(shown)}
+</main>
+<footer>
+<p>Rendered by agent-framework report from the documents <code>agent-framework setup --json</code> and <code>agent-framework config show --json</code> print, with the findings of <code>gate doctor --json</code>. ${REPORT_LIMIT}</p>
+</footer>
+</body>
+</html>
+`[MARKUP];
+
+const renderReport = (document) => [
+  'agent-framework report',
+  `project: ${document.project}`,
+  ...(document.failure === null
+    ? [`report: ${document.report}`]
+    : [`failed: ${document.failure.reasonCode} — ${document.failure.detail}`]),
+  REPORT_LIMIT,
+  '',
+].join('\n');
+
+/**
+ * Write the page. Every refusal comes before anything is asked or written;
+ * the file is created exclusively, so a file that appears meanwhile is not
+ * overwritten either. Exit status: `0` the page is written and neither setup
+ * nor config show names anything further, `1` the page is written and one of
+ * them does (or could not run, which the page states), `2` nothing was
+ * written.
+ */
+const runReport = async ({ cwd, projectRoot, environment, out }) => {
+  const document = {
+    document: 'agent-framework/report/1',
+    command: 'report',
+    ok: false,
+    exitStatus: EXIT_UNRUNNABLE,
+    project: projectRoot,
+    report: null,
+    generatedAt: null,
+    failure: null,
+    limit: REPORT_LIMIT,
+  };
+  const located = await reportTarget({ cwd, projectRoot, out });
+
+  if (located.failure) {
+    return { document: { ...document, failure: located.failure }, render: renderReport };
+  }
+
+  const { document: setup } = await runSetup({ projectRoot, environment });
+  const { document: shown } = await runConfigShow({ projectRoot, environment });
+  const doctor = await observeDoctor({ projectRoot, environment, setup });
+  const generatedAt = new Date().toISOString();
+  const page = reportPage({
+    setup,
+    shown,
+    doctor,
+    generatedAt,
+    regenerate: command('regenerate', ['node', ENTRY_SCRIPT, 'report', '--html', '--project', projectRoot]).run,
+  });
+
+  try {
+    await writeFile(located.target, page, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    return {
+      document: {
+        ...document,
+        failure: error.code === 'EEXIST'
+          ? { reasonCode: 'report-target-exists', detail: `${located.target} already exists; report never overwrites a file. Remove it or name another path with --out.` }
+          : { reasonCode: 'report-unwritable', detail: `${located.target} could not be written: ${error.message}` },
+      },
+      render: renderReport,
+    };
+  }
+
+  const exitStatus = setup.exitStatus === EXIT_DONE && shown.exitStatus === EXIT_DONE ? EXIT_DONE : EXIT_STEPS_REMAIN;
+
+  return {
+    document: { ...document, ok: true, exitStatus, report: located.target, generatedAt },
+    render: renderReport,
   };
 };
 
@@ -1925,9 +2376,12 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
     setup: runSetup,
     'config show': runConfigShow,
     'config suggest': runConfigSuggest,
+    report: runReport,
   }[options.subcommand] ?? runConfigRevision;
   const { document, render: rendered } = await run({
+    cwd,
     projectRoot,
+    out: options.out,
     environment,
     revision: options.revision,
     confirmation: options.confirmation,

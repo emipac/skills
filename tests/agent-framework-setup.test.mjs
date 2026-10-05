@@ -3026,3 +3026,378 @@ test('TB-072 GAP-004: the process terminal is interactive only on a terminal and
   terminal.close();
   assert.equal(written.join(''), 'first? second? third? fourth? done\n');
 });
+
+/* -------------------------------------------------------------------------
+ * TB-073: `agent-framework report --html`.
+ *
+ * One static page built from the documents `setup --json` and
+ * `config show --json` produce, with the doctor's findings as
+ * `gate doctor --json` states them: written to the temporary directory or an
+ * explicit path outside the clone, never over an existing file, never inside
+ * the clone, and never holding a Sensitive runtime value (`FR-GUIDE-008`,
+ * `AC-GUIDE-004`, `SG-GUIDE-001`, `SG-GUIDE-002`, `SG-SECRET-001`,
+ * `RISK-006`). Each run gets its own `TMPDIR`, so everything a report writes
+ * to the temporary directory can be listed.
+ * ------------------------------------------------------------------------- */
+
+/** A fresh, empty directory for the command to use as its temporary directory. */
+const reportEnvironment = async (t, overrides = {}) => {
+  const temporary = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-report-tmp-')));
+
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+
+  return { temporary, env: environment({ TMPDIR: temporary, ...overrides }) };
+};
+
+/** The path a report run printed, or null. */
+const reportedPath = (stdout) => stdout.match(/^report: (.+)$/m)?.[1] ?? null;
+
+const decodeHtml = (text) => text
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&amp;/g, '&');
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The text of the one element whose id is `id`, tags stripped and entities decoded; null when absent. */
+const textOf = (page, id) => {
+  const pattern = new RegExp(`<([a-z0-9]+)[^>]*\\sid="${escapeRegExp(id)}"[^>]*>([\\s\\S]*?)</\\1>`, 'g');
+  const matches = [...page.matchAll(pattern)];
+
+  assert.ok(matches.length <= 1, `more than one element has the id ${id}.`);
+
+  return matches.length === 0 ? null : decodeHtml(matches[0][2].replace(/<[^>]*>/g, ''));
+};
+
+/** The page with its generation time taken out, which is all two reports of one clone may differ by. */
+const withoutGenerationTime = (page) => page.replace(/<time id="generated" datetime="[^"]*">[^<]*<\/time>/, '<time id="generated"></time>');
+
+/**
+ * `report --html` in `root`, proving it changed nothing under the clone or
+ * `.git`, printed nothing to standard error, and wrote exactly the one file it
+ * names; returns the page.
+ */
+const writeReport = async (root, { env, argv = [], entry } = {}) => {
+  const before = await cloneHash(root);
+  const result = await agentFramework(root, ['report', '--html', ...argv], { env, entry });
+  const written = reportedPath(result.stdout);
+
+  assert.equal(await cloneHash(root), before, 'report changed a byte under the clone or .git.');
+  assert.equal(result.stderr, '', result.stderr);
+  assert.notEqual(written, null, result.stdout);
+  assert.match(result.stdout, /^agent-framework report$/m);
+  assert.ok(result.stdout.includes(`project: ${root}\n`), result.stdout);
+
+  return { ...result, written, page: await readFile(written, 'utf8') };
+};
+
+/** How the page names a setup document's health and next step. */
+const shownHealth = (plan) => plan.health ?? '(not reported)';
+
+const shownNext = (plan) => (plan.next === null ? 'nothing' : (plan.next.command ?? plan.next.instruction));
+
+/** The page shows the setup document's state, health, next step, and every step with its commands. */
+const assertPageMatchesSetup = (page, plan) => {
+  assert.equal(textOf(page, 'state'), plan.state ?? '(none)');
+  assert.equal(textOf(page, 'health'), shownHealth(plan));
+  assert.equal(textOf(page, 'next'), shownNext(plan));
+
+  for (const [index, step] of plan.steps.entries()) {
+    const shown = textOf(page, `step-${index + 1}`);
+
+    assert.ok(shown.startsWith(`${step.id} (${step.owner})`), shown);
+
+    for (const entry of step.commands) {
+      assert.ok(shown.includes(`$ ${entry.run}`), `step ${step.id} does not show ${entry.run}.`);
+    }
+  }
+
+  assert.equal(textOf(page, `step-${plan.steps.length + 1}`), null);
+};
+
+/** The page shows each value of the config show document, and its marking, by subcontract and key. */
+const assertPageMatchesConfiguration = (page, shown) => {
+  for (const subcontract of shown.subcontracts) {
+    for (const value of subcontract.values) {
+      const id = `configuration.${subcontract.name}.${value.key}`;
+
+      assert.equal(textOf(page, id), value.declared ? JSON.stringify(value.value) : '(not set)', id);
+      assert.ok(textOf(page, `${id}.marking`).startsWith(value.marking ?? 'not compared'), id);
+    }
+  }
+
+  for (const input of shown.runtimeInputs?.resolved ?? []) {
+    assert.equal(textOf(page, `runtime-input.${input.name}`), `${input.name}: from ${input.source}`);
+  }
+
+  for (const input of shown.runtimeInputs?.unresolved ?? []) {
+    assert.equal(textOf(page, `runtime-input.${input.name}`), `${input.name}: unresolved — no source sets it`);
+  }
+
+  assert.equal(textOf(page, 'configuration-failure'), shown.failure === null ? null : `failed: ${shown.failure.reasonCode} — ${shown.failure.detail}`);
+};
+
+/**
+ * THE FIRST RED TEST OF TB-073.
+ *
+ * On an activated clone `report --html` prints a path under the temporary
+ * directory, the only file written there, and that page holds the clone's
+ * health and its next step exactly as `setup --json` names them — where before
+ * this slice `report` was refused with the usage (`AC-GUIDE-004`,
+ * `FR-GUIDE-008`).
+ */
+test('TB-073 AC-GUIDE-004: on an activated clone report --html writes one page under the temporary directory with the health and next step', async (t) => {
+  const { temporary, env } = await reportEnvironment(t);
+  const root = await activatedClone(t);
+  const report = await writeReport(root, { env });
+  const plan = (await agentFramework(root, ['setup', '--json'], { env })).document;
+
+  assert.equal(report.status, 0, report.stdout);
+  assert.equal(path.dirname(report.written), temporary);
+  assert.match(path.basename(report.written), /^agent-framework-report-.+\.html$/);
+  assert.deepEqual(await readdir(temporary), [path.basename(report.written)]);
+  assert.equal(plan.health, 'healthy');
+  assert.equal(textOf(report.page, 'health'), 'healthy');
+  assert.equal(textOf(report.page, 'next'), 'nothing');
+  assertPageMatchesSetup(report.page, plan);
+});
+
+test('TB-073 AC-GUIDE-004: the page\'s state, health, steps, and next step equal setup --json for the same clone', async (t) => {
+  const { env } = await reportEnvironment(t);
+  const drifted = await activatedClone(t);
+
+  await writeFile(path.join(drifted, '.agent-framework.yaml'), schemaV4Configuration({ totalSeconds: 900 }), 'utf8');
+
+  for (const root of [drifted, await schemaV4Clone(t)]) {
+    const report = await writeReport(root, { env });
+    const plan = (await agentFramework(root, ['setup', '--json'], { env })).document;
+
+    assert.notEqual(plan.next, null);
+    assert.equal(report.status, 1, report.stdout);
+    assertPageMatchesSetup(report.page, plan);
+
+    if (plan.doctor !== null) {
+      assert.equal(textOf(report.page, 'setup-doctor'), plan.doctor.proceeds ? 'activation would proceed' : `activation would stop (${plan.doctor.stop.reasonCode})`);
+    }
+  }
+});
+
+test('TB-073 AC-GUIDE-004: the page\'s configuration equals config show --json, and the doctor\'s findings are the Gate\'s own', async (t) => {
+  const { env } = await reportEnvironment(t);
+  const root = await activatedClone(t);
+
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration({ dependencyRoots: ['vendor'] }), 'utf8');
+
+  const report = await writeReport(root, { env });
+  const shown = (await agentFramework(root, ['config', 'show', '--json'], { env })).document;
+  const doctor = (await gateJson(root, ['doctor'], env)).observation;
+
+  assert.equal(valueAt(shown, 'execution.dependency_roots').marking, 'differs');
+  assertPageMatchesConfiguration(report.page, shown);
+  assert.match(textOf(report.page, 'configuration.execution.dependency_roots.marking'), /^differs from the pinned value \(not set\); added vendor$/);
+  assert.equal(textOf(report.page, 'doctor-verdict'), doctor.verdict.proceeds
+    ? 'activation would proceed'
+    : `activation would stop at ${doctor.verdict.stop.step} (${doctor.verdict.stop.reasonCode})`);
+  assert.equal(textOf(report.page, 'doctor-roots'), 'vendor: link, missing');
+});
+
+test('TB-073 AC-GUIDE-004: an explicit --out outside the clone is written exactly there, and an existing target is refused untouched', async (t) => {
+  const { temporary, env } = await reportEnvironment(t);
+  const root = await schemaV4Clone(t);
+  const elsewhere = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-report-out-')));
+  const target = path.join(elsewhere, 'gate.html');
+
+  t.after(() => rm(elsewhere, { recursive: true, force: true }));
+
+  const report = await writeReport(root, { env, argv: ['--out', target] });
+
+  assert.equal(report.written, target);
+  assert.deepEqual(await readdir(elsewhere), ['gate.html']);
+  assert.deepEqual(await readdir(temporary), [], 'a report with --out wrote to the temporary directory.');
+  assert.match(report.page, /^<!doctype html>/);
+
+  // Never overwritten: the second run is refused, writes nothing, and the page is the first one.
+  const before = await cloneHash(root);
+  const again = await agentFramework(root, ['report', '--html', '--out', target], { env });
+
+  assert.equal(again.status, 2);
+  assert.match(again.stdout, /^failed: report-target-exists — /m);
+  assert.equal(reportedPath(again.stdout), null);
+  assert.equal(await readFile(target, 'utf8'), report.page);
+  assert.deepEqual(await readdir(elsewhere), ['gate.html']);
+  assert.deepEqual(await readdir(temporary), []);
+  assert.equal(await cloneHash(root), before);
+
+  // A directory that does not exist is not created.
+  const missing = await agentFramework(root, ['report', '--html', '--out', path.join(elsewhere, 'absent', 'gate.html')], { env });
+
+  assert.equal(missing.status, 2);
+  assert.match(missing.stdout, /^failed: report-directory-missing — /m);
+  assert.deepEqual(await readdir(elsewhere), ['gate.html']);
+});
+
+test('TB-073 SG-GUIDE-002: an --out inside the clone is refused, through a symlink and through .., with nothing written anywhere', async (t) => {
+  const { temporary, env } = await reportEnvironment(t);
+  const root = await schemaV4Clone(t);
+  const links = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-report-links-')));
+
+  t.after(() => rm(links, { recursive: true, force: true }));
+  await symlink(root, path.join(links, 'clone'));
+  await symlink(path.join(root, 'app'), path.join(links, 'app'));
+
+  const before = await cloneHash(root);
+  const insides = [
+    ['report.html'],
+    [path.join(root, 'report.html')],
+    [path.join(root, '.git', 'report.html')],
+    [`${root}/app/../report.html`],
+    [path.join(links, 'clone', 'report.html')],
+    // The OS resolves the link before `..`: this is the clone, though the text says `links`.
+    [`${links}/app/../report.html`],
+    [root],
+  ];
+
+  for (const [out] of insides) {
+    const refused = await agentFramework(root, ['report', '--html', '--out', out], { env });
+
+    assert.equal(refused.status, 2, `${out}: ${refused.stdout}`);
+    assert.match(refused.stdout, /^failed: report-inside-clone — /m, out);
+    assert.equal(reportedPath(refused.stdout), null);
+  }
+
+  // The temporary directory inside the clone is refused the same way.
+  const temporaryInside = await agentFramework(root, ['report', '--html'], { env: environment({ TMPDIR: path.join(root, 'app') }) });
+
+  assert.equal(temporaryInside.status, 2);
+  assert.match(temporaryInside.stdout, /^failed: report-inside-clone — /m);
+  assert.equal(await cloneHash(root), before);
+  assert.deepEqual(await readdir(temporary), []);
+  assert.deepEqual((await readdir(links)).sort(), ['app', 'clone']);
+});
+
+test('TB-073 AC-GUIDE-004: the page references nothing outside itself and holds no script or control', async (t) => {
+  const { env } = await reportEnvironment(t);
+  const root = await activatedClone(t);
+  const { page } = await writeReport(root, { env });
+
+  assert.match(page, /^<!doctype html>\n<html lang="en">/);
+  assert.match(page, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">/);
+  assert.doesNotMatch(page, /https?:/i, 'the page names an http or https URL.');
+  assert.doesNotMatch(page, /["'(=\s]\/\/[^\s]/, 'the page holds a protocol-relative reference.');
+  assert.doesNotMatch(page, /\b(?:src|href|srcset|action|poster|data)\s*=/i, 'the page references a resource.');
+  assert.doesNotMatch(page, /url\(|@import|@font-face/i, 'the style references a resource.');
+  assert.doesNotMatch(page, /<(?:script|link|img|iframe|object|embed|svg|video|audio|source|form|input|button|select|textarea|details|a)\b/i);
+  assert.doesNotMatch(page, /\son[a-z]+\s*=/i, 'the page holds an event handler.');
+});
+
+test('TB-073: every interpolated string is escaped, so a path holding <script> and a quote is inert', async (t) => {
+  const { env } = await reportEnvironment(t);
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'agent-framework-<script>alert("x")<\\script>-\'-')));
+
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await seedRepository(root);
+  await writeFile(path.join(root, '.agent-framework.yaml'), schemaV4Configuration(), 'utf8');
+  await commit(root);
+
+  const { page } = await writeReport(root, { env });
+  const plan = (await agentFramework(root, ['setup', '--json'], { env })).document;
+
+  assert.equal(page.includes('<script'), false, 'a <script> from the path reached the page unescaped.');
+  assert.ok(page.includes('&lt;script&gt;alert(&quot;x&quot;)'), 'the path is not shown escaped.');
+  assert.equal(textOf(page, 'project'), root);
+  assertPageMatchesSetup(page, plan);
+});
+
+/**
+ * `SG-GUIDE-002`, `SG-SECRET-001`, `RISK-006`. A canary set in the
+ * environment and in a declared, git-ignored `.env` appears nowhere in the page
+ * or the output, and the inputs are shown by name and source.
+ */
+test('TB-073 SG-SECRET-001 / RISK-006: no secret canary from the environment or .env appears in the page or the output', async (t) => {
+  const { env } = await reportEnvironment(t, { APP_KEY: SECRET_CANARY });
+  const root = await activatedClone(t, {
+    env,
+    evidence: { sensitive_inputs: ['APP_KEY', 'DB_PASSWORD'], environment_files: ['.env'] },
+    prepare: async (clone) => {
+      await writeFile(path.join(clone, '.gitignore'), '.env\n', 'utf8');
+      await writeFile(path.join(clone, '.env'), `APP_KEY=${SECRET_CANARY}-shadowed\nDB_PASSWORD=${SECRET_CANARY}-file\n`, 'utf8');
+    },
+  });
+  const report = await writeReport(root, { env });
+
+  for (const output of [report.page, report.stdout, report.stderr]) {
+    assert.equal(output.includes(SECRET_CANARY), false, 'the secret canary was written.');
+  }
+
+  assert.equal(textOf(report.page, 'runtime-input.APP_KEY'), 'APP_KEY: from environment');
+  assert.equal(textOf(report.page, 'runtime-input.DB_PASSWORD'), 'DB_PASSWORD: from .env');
+  assertPageMatchesConfiguration(report.page, (await agentFramework(root, ['config', 'show', '--json'], { env })).document);
+});
+
+test('TB-073: apart from its generation time the page is the same on every run, and the output differs only by the path', async (t) => {
+  const { env } = await reportEnvironment(t);
+  const root = await activatedClone(t);
+  const first = await writeReport(root, { env });
+  const second = await writeReport(root, { env });
+
+  assert.notEqual(first.written, second.written, 'two reports went to the same file.');
+  assert.equal(withoutGenerationTime(second.page), withoutGenerationTime(first.page));
+  assert.notEqual(withoutGenerationTime(first.page), first.page);
+  assert.equal(second.stdout.replace(second.written, '<path>'), first.stdout.replace(first.written, '<path>'));
+  assert.match(textOf(first.page, 'generated'), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+  // The page says how to regenerate it, and that command writes a fresh page.
+  const regenerate = textOf(first.page, 'regenerate');
+  const regenerated = await pasteIntoShell(root, regenerate, env);
+
+  assert.equal(regenerated.status, 0, regenerated.stderr);
+  assert.equal(withoutGenerationTime(await readFile(reportedPath(regenerated.stdout), 'utf8')), withoutGenerationTime(first.page));
+});
+
+test('TB-073 FR-GUIDE-009: a schema v3 clone, an unconfigured clone, and a missing Gate module each get an honest page', async (t) => {
+  const { env } = await reportEnvironment(t);
+
+  for (const root of [await schemaV3Clone(t), await schemaV4Clone(t, { gate: false })]) {
+    const report = await writeReport(root, { env });
+    const plan = (await agentFramework(root, ['setup', '--json'], { env })).document;
+
+    assert.equal(report.status, 1);
+    assertPageMatchesSetup(report.page, plan);
+    assert.equal(textOf(report.page, 'configuration-none'), 'section: none — .agent-framework.yaml has no Gate configuration section.');
+    assert.match(textOf(report.page, 'doctor-unasked'), /^not asked — gate doctor answers for a configured Gate section, and this clone is (schema-v3|gate-unconfigured)\.$/);
+  }
+
+  const { entry } = await setupOnlyInstall(t);
+  const configured = await schemaV4Clone(t);
+  const report = await writeReport(configured, { env, entry });
+  const plan = (await agentFramework(configured, ['setup', '--json'], { env, entry })).document;
+  const shown = (await agentFramework(configured, ['config', 'show', '--json'], { env, entry })).document;
+
+  assert.equal(report.status, 1);
+  assertPageMatchesSetup(report.page, plan);
+  assert.equal(plan.gate.available, false);
+  assert.match(textOf(report.page, 'gate'), /^unavailable — /);
+  assert.equal(textOf(report.page, 'unavailable'), 'unavailable: configure-gate, doctor, activate — Gate steps are unavailable because the Gate module is not installed.');
+  assert.equal(shown.failure.reasonCode, 'gate-unavailable');
+  assertPageMatchesConfiguration(report.page, shown);
+  assert.match(textOf(report.page, 'doctor-unasked'), /^not asked — the Gate module is unavailable: /);
+});
+
+test('TB-073: report takes --html, --out, and --project only, and is in the usage', async (t) => {
+  const { temporary, env } = await reportEnvironment(t);
+  const root = await noConfigurationClone(t);
+  const before = await cloneHash(root);
+
+  for (const argv of [['report'], ['report', '--json'], ['report', '--html', '--json'], ['report', '--html', '--out'], ['report', '--out', '/x.html'], ['report', '--html', '--confirm', 'x']]) {
+    const result = await run(process.execPath, [ENTRY, ...argv], { cwd: root, env });
+
+    assert.equal(result.status, 2, `${argv.join(' ')} exited ${result.status}.`);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /agent-framework report --html \[--out <path>\] \[--project <directory>\]/);
+  }
+
+  assert.equal(await cloneHash(root), before);
+  assert.deepEqual(await readdir(temporary), []);
+});

@@ -97,3 +97,21 @@ confirmation appends records it as `consent: { channel, provenance:
 "self-declared" }`, and a confirmation without it records exactly what it did
 before. The Activation receipt is unchanged, so a guided run and the same
 commands typed directly pin the same receipt.
+
+`agent-framework report --html [--out <path>]` writes one self-contained static
+HTML page a maintainer can read or share: the Gate state and health, every
+remaining step with its command and the next command, the doctor's findings,
+and the effective Gate configuration section. The state, health, steps, and
+configuration are rendered from the same documents `setup --json` and
+`config show --json` print, and the doctor's findings are copied from
+`gate doctor --json`, so the page cannot disagree with them. It holds no
+script, stylesheet, font, image, link, or control, escapes every string it
+shows, and carries its generation time and the command that regenerates it;
+apart from that time, two pages of an unchanged clone are identical. A
+Sensitive runtime input appears by name and source only. The page goes to a
+fresh name in the temporary directory, or to `--out`, and the command prints
+its path. A path whose real location is inside the clone, through a link or
+`..` included, an existing file, and a missing directory are each refused with
+nothing written; nothing under the clone changes. Exit status is `0` when the
+page is written and nothing further remains, `1` when it is written and setup
+or config show names something further, and `2` when nothing was written.
