@@ -96,12 +96,13 @@
  * is inside the clone, or that already exists, is refused with nothing written
  * (`SG-GUIDE-002`). A Sensitive runtime input appears by name and source only.
  *
- * `guardrail add claude-code` and `guardrail remove claude-code` register and
- * unregister the destructive-command guardrail (FS-006) through
- * `framework-setup`'s own previewed operation: without `--confirm` they show
- * the exact `.claude/settings.json` change and its token; with `--confirm
- * <token>` that operation writes exactly that change. `setup` never registers
- * it and never names it as a step.
+ * `guardrail add <client>` and `guardrail remove <client>` register and
+ * unregister the destructive-command guardrail with Claude Code (FS-006) or
+ * Cursor (FS-007) through `framework-setup`'s own previewed operation: without
+ * `--confirm` they show the exact `.claude/settings.json` or
+ * `.cursor/hooks.json` change and its token; with `--confirm <token>` that
+ * operation writes exactly that change. `setup` never registers it and never
+ * names it as a step.
  *
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]       (guided in an interactive terminal)
@@ -109,7 +110,7 @@
  *   agent-framework config suggest [--json] [--project <directory>]
  *   agent-framework report --html [--out <path>] [--project <directory>]
  *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
- *   agent-framework guardrail add|remove claude-code [--confirm <token>] [--json] [--project <directory>]
+ *   agent-framework guardrail add|remove claude-code|cursor [--confirm <token>] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
@@ -143,6 +144,7 @@ import {
   draftMigrationMapping,
   gatePolicyKeys,
   gateRevisions,
+  guardrailClients,
   guardrailOperations,
   migrateConfiguration,
   previewConfigurationMigration,
@@ -187,7 +189,7 @@ const USAGE = [
     ...options.map((option) => `[--${option} <${option}>]`),
     '[--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]',
   ].join(' ')),
-  `       agent-framework guardrail ${guardrailOperations.join('|')} claude-code [--confirm <token>] [--json] [--project <directory>]`,
+  `       agent-framework guardrail ${guardrailOperations.join('|')} ${guardrailClients.join('|')} [--confirm <token>] [--json] [--project <directory>]`,
 ].join('\n');
 
 const ENTRY_SCRIPT = fileURLToPath(import.meta.url);
@@ -1485,7 +1487,7 @@ const renderGuardrail = (document) => {
 
   lines.push(
     `guardrail: ${document.script} — blocks a shell command that destroys uncommitted or unpushed work before the client runs it (owned by ${document.owner})`,
-    `${document.applied ? 'applied' : 'preview'}: ${document.file}${document.created ? ' (created)' : ''} — ${document.applied ? '' : 'would '}${adding ? (document.applied ? 'added' : 'add') : (document.applied ? 'removed' : 'remove')} one ${document.event} matcher group (${document.entry.matcher}); every other key and hook is kept:`,
+    `${document.applied ? 'applied' : 'preview'}: ${document.file}${document.created ? ' (created)' : ''} — ${document.applied ? '' : 'would '}${adding ? (document.applied ? 'added' : 'add') : (document.applied ? 'removed' : 'remove')} one ${document.event} ${document.entry.matcher === undefined ? 'entry' : `matcher group (${document.entry.matcher})`}; every other key and hook is kept:`,
     `  line ${changes.line}:`,
     ...(changes.before === null ? [] : [`  ${changes.before}`]),
     ...changes.removed.map((line) => `- ${line}`),

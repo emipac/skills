@@ -25,3 +25,19 @@ missing. A duplicate, a missing entry, a file that is not JSON or does not
 round-trip as two-space JSON, a skill installed outside the repository or
 ignored by Git, and a stale token are refused with nothing written. Setup never
 registers it. It guards against accidents and is not a security boundary.
+
+The guardrail also stops Cursor's agent (FS-007).
+`agent-framework guardrail add cursor` and `guardrail remove cursor` (and
+`configure.mjs --guardrail add|remove --client cursor`) preview and confirm one
+flat `beforeShellExecution` entry in `.cursor/hooks.json`, beside any Gate entry,
+which keeps every byte, so `gate status` stays healthy. The entry runs
+`node <repository-relative path>/guardrail.mjs --client cursor` from the project
+root, where Cursor runs its hooks. The file is created with `"version": 1` only
+when missing, its version is never changed, and it keeps its own indentation.
+A skill at a path a shell would need quoted is refused. With `--client cursor`
+the guardrail answers in the contract observed on Cursor 3.23.23: it reads
+`command`, prints `{"permission":"deny","userMessage":…,"agentMessage":…}`, both
+carrying the `BLOCKED: …` line, or `{"permission":"allow"}`, and exits 0. It
+never echoes the payload, which carries the person's email. Whether Cursor shows
+either message, and how it treats a non-zero exit, was not established. Without
+an argument the guardrail answers Claude Code exactly as before.

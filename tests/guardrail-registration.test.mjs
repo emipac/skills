@@ -234,7 +234,7 @@ test('FS-006: every refusal states its reason, exits 2, and leaves the clone byt
     ['hooks that are not an object', await repository(t), ['add', 'claude-code'], 'settings-unrevisable', '{\n  "hooks": []\n}\n'],
     ['a top level that is not an object', await repository(t), ['add', 'claude-code'], 'settings-unrevisable', '[]\n'],
     ['a stale token', await repository(t), ['add', 'claude-code', '--confirm', '0'.repeat(64)], 'preview-mismatch'],
-    ['a client not supported yet', await repository(t), ['add', 'cursor'], 'client-unsupported'],
+    ['a client not supported yet', await repository(t), ['add', 'codex'], 'client-unsupported'],
   ];
 
   for (const [name, root, argv, reasonCode, settings] of cases) {

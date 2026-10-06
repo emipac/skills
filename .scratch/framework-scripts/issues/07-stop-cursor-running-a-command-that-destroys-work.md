@@ -1,12 +1,12 @@
 # FS-007 — Stop Cursor running a command that destroys work
 
-Status: ready-for-agent
-Labels: ready-for-agent, enhancement
+Status: done
+Labels: done, enhancement
 Blocked by: 06-stop-an-agent-running-a-command-that-destroys-work
 Tracker ID: 07-stop-cursor-running-a-command-that-destroys-work
 Draft key: FS-007
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. Extends FS-006's guardrail to Cursor, per
 the maintainer's decision of 2026-10-06 to cover every client with hooks.
@@ -59,12 +59,12 @@ for `git reset --hard` produces the observed blocking answer.
 
 ## Acceptance Criteria
 
-- [ ] The observed Cursor contract (input fields, blocking answer, agent-visible
+- [x] The observed Cursor contract (input fields, blocking answer, agent-visible
   message) is recorded in the repository with the client version it was
   observed on.
-- [ ] A Cursor payload for each FS-006 rule is blocked with the observed
+- [x] A Cursor payload for each FS-006 rule is blocked with the observed
   answer, and an allowed command passes.
-- [ ] `guardrail add cursor` and `remove cursor` preview, confirm, and keep the
+- [x] `guardrail add cursor` and `remove cursor` preview, confirm, and keep the
   Gate's entry and every other entry unchanged. On an activated fixture,
   `gate status` stays `healthy`.
 

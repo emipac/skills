@@ -195,24 +195,29 @@ Completion criterion: the plan's `state` is `activated` with health `healthy`.
 
 ### 7. Offer the guardrail
 
-Ask the maintainer whether Claude Code should be stopped before it runs a
-command that destroys uncommitted or unpushed work (`git reset --hard`,
+Ask the maintainer whether the team's agents should be stopped before they run
+a command that destroys uncommitted or unpushed work (`git reset --hard`,
 `git clean -f`, `git push --force`, and the rest in
-[framework-command.md](./references/framework-command.md#stopping-commands-that-destroy-work-agent-framework-guardrail)).
-Say it is a guardrail against accidents, not a security boundary. If not, go to
-step 8.
+[framework-command.md](./references/framework-command.md#stopping-commands-that-destroy-work-agent-framework-guardrail)),
+and for which clients: `claude-code`, `cursor`, or both. Say it is a guardrail
+against accidents, not a security boundary. If not, go to step 8.
 
-If yes, run the preview, show it, and confirm with its token on approval:
+For each chosen client, run the preview, show it, and confirm with its token on
+approval:
 
 ```bash
 node <skill-directory>/scripts/agent-framework.mjs guardrail add claude-code --json
+node <skill-directory>/scripts/agent-framework.mjs guardrail add cursor --json
 ```
 
-It writes the shared `.claude/settings.json`, so run it from the copy of this
-skill installed inside the repository; it refuses one outside it or ignored by
-Git. `guardrail remove claude-code` reverses it the same way.
+`claude-code` writes the shared `.claude/settings.json`; `cursor` writes
+`.cursor/hooks.json` beside any Gate entry, creating it with `"version": 1`
+only when missing. Run it from the copy of this skill installed inside the
+repository; it refuses one outside it, ignored by Git, or, for Cursor, at a
+path with spaces. `guardrail remove <client>` reverses it the same way.
 
-Completion criterion: the maintainer declined, or the guardrail is registered.
+Completion criterion: the maintainer declined, or the guardrail is registered
+for each chosen client.
 
 ### 8. Verify and report
 
@@ -226,8 +231,9 @@ Run `setup --json` once more. Report:
 - any value left `null` or empty.
 
 Recommend committing `.agent-framework.yaml`, `.cursor/hooks.json` when
-Cursor was activated, and `.claude/settings.json` with the installed skill when
-the guardrail was registered; until then the Gate reports the configuration as
+Cursor was activated or the guardrail registered for it, and
+`.claude/settings.json` when the guardrail was registered for Claude Code, with
+the installed skill; until then the Gate reports the configuration as
 unversioned. `agent-framework report --html` writes a one-page summary the
 maintainer can read or share.
 

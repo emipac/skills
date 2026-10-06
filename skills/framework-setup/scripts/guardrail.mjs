@@ -1,17 +1,30 @@
 #!/usr/bin/env node
 /**
- * The destructive-command guardrail (FS-006).
+ * The destructive-command guardrail (FS-006, FS-007).
  *
- * A Claude Code `PreToolUse` hook for the `Bash` tool. It reads the hook's JSON
- * payload on standard input and takes the shell command from
- * `tool_input.command`. When the command would silently destroy uncommitted or
- * unpushed work it exits 2 with one line on standard error, which Claude Code
- * hands back to the model as the reason the call was blocked:
+ * A hook that runs before a client's agent runs a shell command. It reads the
+ * hook's JSON payload on standard input and decides whether the command would
+ * silently destroy uncommitted or unpushed work. Each client hears the answer
+ * in its own format; the rules and the message are shared:
  *
  *   BLOCKED: '<command>' matches dangerous pattern '<rule>'. The user has prevented you from doing this.
  *
- * Otherwise it exits 0 and prints nothing. It never runs, rewrites, or fixes a
- * command; it only allows or blocks.
+ * - **Claude Code** (no argument): a `PreToolUse` hook for the `Bash` tool. The
+ *   command is `tool_input.command`. A blocked command exits 2 with the message
+ *   on standard error, which Claude Code hands back to the model; anything else
+ *   exits 0 and prints nothing.
+ * - **Cursor** (`--client cursor`): a `beforeShellExecution` hook. The command
+ *   is the payload's `command`. The answer is one JSON object on standard
+ *   output, and the exit status is always 0: `{"permission":"deny",
+ *   "userMessage":…,"agentMessage":…}`, both messages carrying the line above,
+ *   stops the command, and `{"permission":"allow"}` lets it run. That is the
+ *   contract observed on Cursor 3.23.23; whether Cursor shows either message,
+ *   and how it treats a non-zero exit or output that is not JSON, was not
+ *   established, so nothing here depends on them. The payload also carries the
+ *   person's `user_email`, which is why nothing of the payload but the command
+ *   is ever echoed.
+ *
+ * It never runs, rewrites, or fixes a command; it only allows or blocks.
  *
  * The command is read as arguments, not as raw text: it is split on `&&`, `||`,
  * `;`, `|`, `&`, parentheses, backticks, and newlines; each part is split into
@@ -22,14 +35,15 @@
  * — an unbalanced quote, say — is matched against the plain text instead, and
  * blocked only when that text is plainly destructive.
  *
- * A payload that is not what the hook reference describes is allowed with a
- * one-line notice on standard error: a broken guardrail must not stop every
- * tool call. This is a guardrail against accidents, not a security boundary;
- * a script file the agent writes and runs, a Git alias, or a shell the hook
- * does not see is not stopped.
+ * A payload that is not what the client's contract describes, or arguments
+ * this program does not know, allow the command with a one-line notice on
+ * standard error: a broken guardrail must not stop every command. This is a
+ * guardrail against accidents, not a security boundary; a script file the
+ * agent writes and runs, a Git alias, or a shell the hook does not see is not
+ * stopped.
  *
- * It has no dependency beyond Node, reads nothing but standard input, writes
- * nothing, logs nothing, and makes no network access.
+ * It has no dependency beyond Node, reads nothing but its arguments and
+ * standard input, writes nothing, logs nothing, and makes no network access.
  */
 
 import path from 'node:path';
@@ -396,34 +410,64 @@ const dangerousRule = (command, depth = 0) => {
   return null;
 };
 
+const NOTICE = (reason) => `guardrail: ${reason}; the command was allowed unchecked.\n`;
+
 /**
- * Decide one hook payload: `{ exitCode, stderr }`. Anything but a JSON object
- * carrying a string `tool_input.command` is allowed with a notice.
+ * How each client is answered: where its payload carries the command, and how
+ * an allowed or a blocked command is told back to it. Claude Code is the
+ * client answered when no argument is given, exactly as before Cursor was.
  */
-const decide = (input) => {
-  const allowWithNotice = (reason) => ({
-    exitCode: 0,
-    stderr: `guardrail: ${reason}; the command was allowed unchecked.\n`,
-  });
+const CLIENTS = Object.freeze({
+  'claude-code': Object.freeze({
+    field: 'tool_input.command',
+    command: (hookPayload) => hookPayload?.tool_input?.command,
+    allow: (notice = '') => ({ exitCode: 0, stdout: '', stderr: notice }),
+    block: (message) => ({ exitCode: EXIT_BLOCK, stdout: '', stderr: `${message}\n` }),
+  }),
+  cursor: Object.freeze({
+    field: 'command',
+    command: (hookPayload) => hookPayload?.command,
+    allow: (notice = '') => ({ exitCode: 0, stdout: `${JSON.stringify({ permission: 'allow' })}\n`, stderr: notice }),
+    block: (message) => ({
+      exitCode: 0,
+      stdout: `${JSON.stringify({ permission: 'deny', userMessage: message, agentMessage: message })}\n`,
+      stderr: '',
+    }),
+  }),
+});
+
+/** The client the arguments name: none is Claude Code, `--client cursor` is Cursor, anything else is `null`. */
+const clientFor = (argv) => {
+  if (argv.length === 0) {
+    return CLIENTS['claude-code'];
+  }
+
+  return argv.length === 2 && argv[0] === '--client' && argv[1] === 'cursor' ? CLIENTS.cursor : null;
+};
+
+/**
+ * Decide one hook payload for one client: `{ exitCode, stdout, stderr }`.
+ * Anything but a JSON object carrying the client's command string is allowed
+ * with a notice that names no part of the payload.
+ */
+const decide = (client, input) => {
   let hookPayload;
 
   try {
     hookPayload = JSON.parse(input);
   } catch {
-    return allowWithNotice('the hook payload on standard input is not JSON');
+    return client.allow(NOTICE('the hook payload on standard input is not JSON'));
   }
 
-  const command = hookPayload?.tool_input?.command;
+  const command = client.command(hookPayload);
 
   if (typeof command !== 'string') {
-    return allowWithNotice('the hook payload carries no tool_input.command string');
+    return client.allow(NOTICE(`the hook payload carries no ${client.field} string`));
   }
 
   const rule = dangerousRule(command);
 
-  return rule === null
-    ? { exitCode: 0, stderr: '' }
-    : { exitCode: EXIT_BLOCK, stderr: `${blockedMessage(command, rule)}\n` };
+  return rule === null ? client.allow() : client.block(blockedMessage(command, rule));
 };
 
 const readStandardInput = async () => {
@@ -438,7 +482,15 @@ const readStandardInput = async () => {
 
 // A program, not a module: it always runs, through whatever path the client
 // invoked it by, so it carries no entry-point guard and exports nothing.
-const { exitCode, stderr } = decide(await readStandardInput());
+// Standard input is read in full either way, so the client never writes into
+// a closed pipe.
+const input = await readStandardInput();
+const client = clientFor(process.argv.slice(2));
+const { exitCode, stdout, stderr } = client === null
+  // Arguments it does not know name no client format it could answer in.
+  ? { exitCode: 0, stdout: '', stderr: NOTICE('its arguments name no client it answers') }
+  : decide(client, input);
 
+process.stdout.write(stdout);
 process.stderr.write(stderr);
 process.exitCode = exitCode;

@@ -1877,25 +1877,78 @@ export const discoverGateConfigurationFacts = async ({ projectRoot, environment 
 };
 
 /**
- * Where each client reads the destructive-command guardrail from (FS-006):
- * the shared, committed settings file, the hook event, and the matcher for
- * its shell tool. Cursor and Codex follow, each after its hook is observed.
+ * A script path a single command string can name bare: letters, digits, `.`,
+ * `_`, `-`, and `/`, not starting with `-`. A shell — POSIX, `cmd`, or
+ * PowerShell — passes such a word through as it is, and `node` does not read
+ * it as an option, so no quoting is needed.
+ */
+const BARE_PATH = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+
+/** The indentation a JSON document already uses, read the way the Gate's registration reads it. */
+const ownIndentation = (contents) => {
+  const match = /\n([ \t]+)\S/.exec(contents);
+
+  return match === null ? 2 : (match[1].includes('\t') ? '\t' : match[1].length);
+};
+
+/**
+ * Where each client reads the destructive-command guardrail from, and the
+ * one entry registration writes there: the shared, committed hooks file, the
+ * hook event, the entry, the hooks one entry runs (to find a duplicate), the
+ * document a missing file starts as, the indentation the file round-trips
+ * with, and whether removing the last entry also removes an empty `hooks`.
+ *
+ * - **Claude Code** (FS-006): one `PreToolUse` matcher group for `Bash` in
+ *   `.claude/settings.json`, in exec form — `node` spawned directly with the
+ *   script as its one argument under `${CLAUDE_PROJECT_DIR}`, which Claude
+ *   Code substitutes, so a path with spaces needs no quoting and no shell is
+ *   involved. Settings are two-space JSON, as Claude Code writes them.
+ * - **Cursor** (FS-007): one flat `{ command }` entry under
+ *   `beforeShellExecution` in `.cursor/hooks.json`, the file the Gate's Cursor
+ *   adapter registers in. Observed on Cursor 3.23.23, the hook runs in the
+ *   project root, so the command names the script by its path relative to the
+ *   repository — the form the observation's own probe ran — and passes
+ *   `--client cursor` so the guardrail answers in Cursor's format. A missing
+ *   file starts as `{ "version": 1 }`; an existing file's version is never
+ *   touched. The file keeps its own indentation, as the Gate's registration
+ *   keeps it, and its `hooks` object stays when the last entry goes, as in the
+ *   `{ "version": 1, "hooks": {} }` file the skill seeds.
+ *
+ * Codex follows after its hook is observed (FS-008).
  */
 const GUARDRAIL_CLIENTS = Object.freeze({
-  'claude-code': Object.freeze({ file: '.claude/settings.json', event: 'PreToolUse', matcher: 'Bash' }),
+  'claude-code': Object.freeze({
+    file: '.claude/settings.json',
+    event: 'PreToolUse',
+    noun: 'matcher group',
+    entry: (script) => ({ matcher: 'Bash', hooks: [{ type: 'command', command: 'node', args: [`\${CLAUDE_PROJECT_DIR}/${script}`] }] }),
+    barePathOnly: false,
+    hooksOf: (entry) => entry?.hooks,
+    seed: () => ({}),
+    indentation: () => 2,
+    writtenAs: 'the way Claude Code writes settings — two-space JSON, each key once',
+    keepsEmptyHooks: false,
+  }),
+  cursor: Object.freeze({
+    file: '.cursor/hooks.json',
+    event: 'beforeShellExecution',
+    noun: 'entry',
+    entry: (script) => ({ command: `node ${script} --client cursor` }),
+    // Cursor's quoting of its one command string was not observed, so none is relied on.
+    barePathOnly: true,
+    hooksOf: (entry) => [entry],
+    seed: () => ({ version: 1 }),
+    indentation: ownIndentation,
+    writtenAs: 'as JSON in its own indentation throughout, the way the Gate rewrites it — each key once',
+    keepsEmptyHooks: true,
+  }),
 });
 
 export const guardrailOperations = Object.freeze(['add', 'remove']);
 
-const GUARDRAIL_SCRIPT = fileURLToPath(new URL('./guardrail.mjs', import.meta.url));
+export const guardrailClients = Object.freeze(Object.keys(GUARDRAIL_CLIENTS));
 
-/**
- * The hook that runs the guardrail, in Claude Code's exec form: `node` spawned
- * directly with the script as its one argument, `${CLAUDE_PROJECT_DIR}`
- * substituted by Claude Code, so a path with spaces needs no quoting and no
- * shell is involved on any platform.
- */
-const guardrailHook = (script) => ({ type: 'command', command: 'node', args: [`\${CLAUDE_PROJECT_DIR}/${script}`] });
+const GUARDRAIL_SCRIPT = fileURLToPath(new URL('./guardrail.mjs', import.meta.url));
 
 /** A value as JSON with every object's keys sorted, so two spellings of one value compare equal. */
 const canonicalJson = (value) => JSON.stringify(value, (key, entry) => (
@@ -1932,25 +1985,28 @@ const guardrailScript = async (resolvedProjectRoot, environment) => {
   return posix;
 };
 
-/** Settings as Claude Code writes them: two-space JSON, with or without a final newline. */
-const renderSettings = (settings, finalNewline) => `${JSON.stringify(settings, null, 2)}${finalNewline ? '\n' : ''}`;
+/** A client hooks file as JSON in `indent`, with or without a final newline. */
+const renderSettings = (settings, finalNewline, indent) => `${JSON.stringify(settings, null, indent)}${finalNewline ? '\n' : ''}`;
 
 /**
- * Read a client settings file the guardrail can be merged into or removed
- * from without changing anything else. A missing file reads as `{}`. A file
- * that is not JSON, whose hooks are not where the client reads them, or that
- * does not round-trip — re-rendered as two-space JSON it is not the same bytes,
- * as with other indentation, a key declared twice, or CRLF line ends — is
- * refused: rewriting it would change bytes outside the guardrail entry.
+ * Read a client hooks file the guardrail can be merged into or removed from
+ * without changing anything else. A missing file reads as the client's seed.
+ * A file that is not JSON, whose hooks are not where the client reads them, or
+ * that does not round-trip — re-rendered in the client's indentation it is not
+ * the same bytes, as with other or mixed indentation, a key declared twice, or
+ * CRLF line ends — is refused: rewriting it would change bytes outside the
+ * guardrail entry.
  */
-const readClientSettings = async (settingsPath, file, event) => {
+const readClientSettings = async (settingsPath, client) => {
+  const { file, event } = client;
+
   let contents;
 
   try {
     contents = await readFile(settingsPath, 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return { contents: null, settings: {}, finalNewline: true };
+      return { contents: null, settings: client.seed(), finalNewline: true, indent: 2 };
     }
 
     throw error;
@@ -1979,12 +2035,13 @@ const readClientSettings = async (settingsPath, file, event) => {
   }
 
   const finalNewline = contents.endsWith('\n');
+  const indent = client.indentation(contents);
 
-  if (renderSettings(settings, finalNewline) !== contents) {
-    throw unrevisable('is not written the way Claude Code writes settings — two-space JSON, each key once');
+  if (renderSettings(settings, finalNewline, indent) !== contents) {
+    throw unrevisable(`is not written ${client.writtenAs}`);
   }
 
-  return { contents, settings, finalNewline };
+  return { contents, settings, finalNewline, indent };
 };
 
 /**
@@ -2019,12 +2076,13 @@ const changedLines = (before, after) => {
   };
 };
 
-/** The settings with the guardrail's matcher group appended, or a refusal when its hook is already there. */
-const withGuardrail = (settings, event, entry) => {
+/** The settings with the guardrail's entry appended, or a refusal when its hook is already there. */
+const withGuardrail = (settings, client, entry) => {
+  const { event } = client;
   const groups = settings.hooks?.[event] ?? [];
-  const [hook] = entry.hooks;
+  const [hook] = client.hooksOf(entry);
 
-  if (groups.some((group) => Array.isArray(group?.hooks) && group.hooks.some((registered) => canonicalJson(registered) === canonicalJson(hook)))) {
+  if (groups.some((group) => Array.isArray(client.hooksOf(group)) && client.hooksOf(group).some((registered) => canonicalJson(registered) === canonicalJson(hook)))) {
     throw revisionRefusal('guardrail-registered', `The guardrail is already registered under hooks.${event}. Nothing was written.`);
   }
 
@@ -2037,22 +2095,24 @@ const withGuardrail = (settings, event, entry) => {
 };
 
 /**
- * The settings without the one matcher group the guardrail's add wrote. A list
- * or `hooks` object that only it filled is removed with it.
+ * The settings without the one entry the guardrail's add wrote. A list that
+ * only it filled is removed with it, and so is a `hooks` object left empty,
+ * unless the client keeps one.
  */
-const withoutGuardrail = (settings, event, entry) => {
+const withoutGuardrail = (settings, client, entry) => {
+  const { event, noun } = client;
   const groups = settings.hooks?.[event] ?? [];
   const matching = groups.flatMap((group, index) => (canonicalJson(group) === canonicalJson(entry) ? [index] : []));
 
   if (matching.length === 0) {
     throw revisionRefusal(
       'guardrail-not-registered',
-      `No hooks.${event} matcher group is the one guardrail add writes for this script, so there is nothing to remove. A hand-written entry that runs it is left for you to remove by hand. Nothing was written.`,
+      `No hooks.${event} ${noun} is the one guardrail add writes for this script, so there is nothing to remove. A hand-written entry that runs it is left for you to remove by hand. Nothing was written.`,
     );
   }
 
   if (matching.length > 1) {
-    throw revisionRefusal('guardrail-ambiguous', `hooks.${event} holds the guardrail's matcher group ${matching.length} times; remove the extra copies by hand. Nothing was written.`);
+    throw revisionRefusal('guardrail-ambiguous', `hooks.${event} holds the guardrail's ${noun} ${matching.length} times; remove the extra copies by hand. Nothing was written.`);
   }
 
   const candidate = structuredClone(settings);
@@ -2064,7 +2124,7 @@ const withoutGuardrail = (settings, event, entry) => {
     candidate.hooks[event] = remaining;
   }
 
-  if (Object.keys(candidate.hooks).length === 0) {
+  if (Object.keys(candidate.hooks).length === 0 && !client.keepsEmptyHooks) {
     delete candidate.hooks;
   }
 
@@ -2077,10 +2137,13 @@ const withoutGuardrail = (settings, event, entry) => {
  *
  * For Claude Code it merges one `PreToolUse` matcher group, matcher `Bash`,
  * whose one hook runs the guardrail script by its path inside the repository
- * under `${CLAUDE_PROJECT_DIR}`, into the shared `.claude/settings.json` —
- * created only when missing — or removes exactly that group. Every other key
- * and hook is kept. `previewHash` binds the file as it is now (empty when
- * missing) to the file the operation would write. Nothing is written.
+ * under `${CLAUDE_PROJECT_DIR}`, into the shared `.claude/settings.json`. For
+ * Cursor it merges one `beforeShellExecution` entry whose command runs the
+ * script by that same path, relative to the project root Cursor runs hooks in,
+ * into `.cursor/hooks.json` beside any Gate entry. Either file is created only
+ * when missing; `remove` takes away exactly that entry. Every other key and
+ * hook is kept. `previewHash` binds the file as it is now (empty when missing)
+ * to the file the operation would write. Nothing is written.
  */
 export const previewGuardrail = async ({ projectRoot, operation, client, environment = process.env }) => {
   if (!guardrailOperations.includes(operation)) {
@@ -2092,7 +2155,7 @@ export const previewGuardrail = async ({ projectRoot, operation, client, environ
   if (target === null) {
     throw revisionRefusal(
       'client-unsupported',
-      `The guardrail registers with ${Object.keys(GUARDRAIL_CLIENTS).join(', ')} only, not ${client}; Cursor and Codex follow once their hooks are observed. Nothing was written.`,
+      `The guardrail registers with ${Object.keys(GUARDRAIL_CLIENTS).join(', ')} only, not ${client}; Codex follows once its hook is observed. Nothing was written.`,
     );
   }
 
@@ -2103,12 +2166,20 @@ export const previewGuardrail = async ({ projectRoot, operation, client, environ
   }
 
   const script = await guardrailScript(resolvedProjectRoot, environment);
-  const { contents, settings, finalNewline } = await readClientSettings(path.join(resolvedProjectRoot, target.file), target.file, target.event);
-  const entry = { matcher: target.matcher, hooks: [guardrailHook(script)] };
+
+  if (target.barePathOnly && !BARE_PATH.test(script)) {
+    throw revisionRefusal(
+      'guardrail-path-unsafe',
+      `The guardrail is at ${script} in the repository, and ${client} runs a hook from one command string, which names a path without quoting only when it holds letters, digits, . _ - and / alone and does not start with -; its quoting was not observed, so none is relied on. Install the framework-setup skill at a path without spaces or other characters, then register again. Nothing was written.`,
+    );
+  }
+
+  const { contents, settings, finalNewline, indent } = await readClientSettings(path.join(resolvedProjectRoot, target.file), target);
+  const entry = target.entry(script);
   const candidate = operation === 'add'
-    ? withGuardrail(settings, target.event, entry)
-    : withoutGuardrail(settings, target.event, entry);
-  const proposedSettings = renderSettings(candidate, finalNewline);
+    ? withGuardrail(settings, target, entry)
+    : withoutGuardrail(settings, target, entry);
+  const proposedSettings = renderSettings(candidate, finalNewline, indent);
   const previewHash = createHash('sha256')
     .update(contents ?? '')
     .update('\0')

@@ -260,20 +260,34 @@ and something remains, and `2` when nothing was written.
 
 ## Stopping commands that destroy work: `agent-framework guardrail`
 
-To have Claude Code stop before it runs a shell command that silently destroys
-uncommitted or unpushed work, register this skill's guardrail:
+To have Claude Code or Cursor stop before it runs a shell command that silently
+destroys uncommitted or unpushed work, register this skill's guardrail with that
+client:
 
 ```bash
-node <skill-directory>/scripts/agent-framework.mjs guardrail add claude-code [--confirm <token>] [--json] [--project <directory>]
-node <skill-directory>/scripts/agent-framework.mjs guardrail remove claude-code [--confirm <token>] [--json] [--project <directory>]
+node <skill-directory>/scripts/agent-framework.mjs guardrail add claude-code|cursor [--confirm <token>] [--json] [--project <directory>]
+node <skill-directory>/scripts/agent-framework.mjs guardrail remove claude-code|cursor [--confirm <token>] [--json] [--project <directory>]
 ```
 
-The guardrail is `scripts/guardrail.mjs`, a Claude Code `PreToolUse` hook for
-the `Bash` tool with no dependency beyond Node. It reads the hook's JSON on
-standard input and the command from `tool_input.command`, and blocks it — exit
-`2`, with
-`BLOCKED: '<command>' matches dangerous pattern '<rule>'. The user has prevented you from doing this.`
-on standard error, which Claude Code hands to the model — when it runs:
+The guardrail is `scripts/guardrail.mjs`, with no dependency beyond Node. It
+reads the hook's JSON on standard input and blocks the command, with
+`BLOCKED: '<command>' matches dangerous pattern '<rule>'. The user has prevented you from doing this.`,
+in the client's own format:
+
+- **Claude Code** — a `PreToolUse` hook for the `Bash` tool, run with no
+  argument. The command is `tool_input.command`. A blocked command exits `2`
+  with the message on standard error, which Claude Code hands to the model.
+- **Cursor** — a `beforeShellExecution` hook, run with `--client cursor`. The
+  command is the payload's `command`. It always exits `0` and answers on
+  standard output: `{"permission":"deny","userMessage":"BLOCKED: …","agentMessage":"BLOCKED: …"}`
+  blocks, and `{"permission":"allow"}` lets the command run. That contract was
+  observed on Cursor 3.23.23, where the denied command did not run and the
+  agent reported that a hook blocked it. Not established: whether Cursor shows
+  either message to the person or the model, and how it treats a non-zero exit
+  or output that is not JSON. The payload also carries the person's
+  `user_email`; the guardrail echoes nothing of the payload but the command.
+
+It blocks a command when it runs:
 
 | Rule | Blocked | Allowed |
 | --- | --- | --- |
@@ -286,7 +300,8 @@ on standard error, which Claude Code hands to the model — when it runs:
 | `git stash clear` | `git stash clear` | `git stash list` |
 | `git stash drop` | `git stash drop`, `git stash drop stash@{1}` | `git stash pop` |
 
-Anything else exits `0` with no output. It reads arguments, not text: the
+Anything else is allowed: Claude Code's hook exits `0` with no output, and
+Cursor's answers `{"permission":"allow"}`. It reads arguments, not text: the
 command is split on `&&`, `||`, `;`, `|`, `&`, parentheses, backticks, and
 newlines; each part is split into words as a POSIX shell would; `sh -c` and
 `bash -c` strings are read the same way; leading assignments, `sudo`, `env`,
@@ -295,8 +310,10 @@ newlines; each part is split into words as a POSIX shell would; `sh -c` and
 and its flags. So `echo "git reset --hard"` is allowed. Only a command it
 cannot split into words, such as one with an unbalanced quote, is matched as
 plain text, and blocked only when that text spells a rule out. A payload that
-is not JSON or carries no `tool_input.command` string is allowed, with one line
-on standard error: a broken guardrail must not stop every tool call.
+is not JSON or carries no command string where the client puts it, and
+arguments the guardrail does not know, allow the command, with one line on
+standard error that names nothing from the payload: a broken guardrail must not
+stop every command.
 
 It guards against accidents and is not a security boundary: a script the agent
 writes and runs, a Git alias, a command substitution inside double quotes, and
@@ -304,15 +321,17 @@ a tool the hook does not see are not stopped. It never runs, rewrites, or logs a
 command.
 
 Without `--confirm` the command writes nothing: it shows the exact
-`.claude/settings.json` change — the first changed line, the lines removed and
+`.claude/settings.json` or `.cursor/hooks.json` change — the first changed line, the lines removed and
 added with one unchanged line on each side, whether the file would be created —
 its `previewHash`, and the exact confirming command. `--confirm <previewHash>`
 writes exactly that change, and only while the file is still the one previewed;
 the hash binds the file as it is (empty when missing) to the file it would
-write. `add` appends one `PreToolUse` matcher group and creates the file only
-when it is missing; `remove` takes away exactly that group, and the
-`PreToolUse` list and `hooks` object when nothing else is left in them. Every
-other key and hook is kept. The group, in Claude Code's exec form:
+write. `add` appends one entry and creates the file only when it is missing;
+`remove` takes away exactly that entry. Every other key and hook is kept.
+
+For Claude Code, the entry is one `PreToolUse` matcher group; `remove` also
+takes away the `PreToolUse` list and the `hooks` object when nothing else is
+left in them. The group, in Claude Code's exec form:
 
 ```json
 {
@@ -336,25 +355,66 @@ resolved through any linked client directory, so every teammate's clone runs
 the same file. Run the command from the copy of the skill installed inside the
 repository and commit it with `.claude/settings.json`.
 
+For Cursor, the entry is one flat `beforeShellExecution` entry in
+`.cursor/hooks.json`, the file the Gate's Cursor adapter registers its own
+`stop` entry in:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "\"/usr/local/bin/node\" \"…/gate-precommit.mjs\" \"--adapter\" \"cursor\""
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node .agents/skills/framework-setup/scripts/guardrail.mjs --client cursor"
+      }
+    ]
+  }
+}
+```
+
+Cursor's `command` is one string, and on Cursor 3.23.23 a hook ran in the
+project root with `CURSOR_PROJECT_DIR` set; the observation's own probe ran as
+`node .probe/recorder.mjs`. So the command names the script by its path
+relative to the repository, the same in every clone, and uses no variable,
+which POSIX shells, `cmd`, and PowerShell would each spell differently. Every
+shell passes a word of letters, digits, `.`, `_`, `-`, and `/` through
+unchanged, so the path needs no quoting; a skill installed at a path with any
+other character, such as a space, or one starting with `-`, is refused,
+because Cursor's quoting was not observed. A missing file is created as `{"version": 1, …}`; an
+existing file's `version` is never changed or added. The Gate's entry, and
+every other entry, keep every byte, so `gate status` stays `healthy`. `remove`
+takes away the `beforeShellExecution` list when nothing else is left in it,
+but keeps the `hooks` object, so the `{"version": 1, "hooks": {}}` file the
+skill seeds for the Gate comes back exactly. Commit `.cursor/hooks.json` with
+the installed skill.
+
 Each refusal writes nothing and states its reason: `guardrail-registered` (the
 same hook is already there), `guardrail-not-registered` (no group to remove;
 a hand-written one is left for you), `guardrail-ambiguous` (the group appears
 more than once), `settings-unparseable` (not JSON), `settings-unrevisable`
-(not an object, `hooks` or `hooks.PreToolUse` of the wrong type, or a file that
-does not round-trip: re-rendered as two-space JSON, the way Claude Code writes
-settings, with its final newline kept or left out as it was, it is not the same
-bytes — other indentation, a key declared twice, CRLF line ends),
-`guardrail-outside-project` (this skill is installed outside the repository, so
-a clone would not have it), `guardrail-ignored` (Git ignores the script),
-`client-unsupported` (only `claude-code` today; Cursor and Codex follow), and
-`preview-mismatch` (a stale or foreign token).
+(not an object, `hooks` or the event's list of the wrong type, or a file that
+does not round-trip, with its final newline kept or left out as it was: for
+Claude Code, re-rendered as two-space JSON, the way Claude Code writes
+settings; for Cursor, re-rendered in the file's own indentation, the way the
+Gate rewrites it — so other or mixed indentation, a key declared twice, or
+CRLF line ends are refused), `guardrail-outside-project` (this skill is
+installed outside the repository, so a clone would not have it),
+`guardrail-ignored` (Git ignores the script), `guardrail-path-unsafe` (Cursor
+only: the script's path holds a space or another character a shell would need
+quoted), `client-unsupported` (only `claude-code` and `cursor` today; Codex
+follows), and `preview-mismatch` (a stale or foreign token).
 
 `setup`, `setup --json`, and base setup never register the guardrail, and an
 installed skill is not a registration. The same operation runs without the
 Framework command:
 
 ```bash
-node <skill-directory>/scripts/configure.mjs --project "$PWD" --guardrail add --client claude-code [--confirm <preview-hash>]
+node <skill-directory>/scripts/configure.mjs --project "$PWD" --guardrail add|remove --client claude-code|cursor [--confirm <preview-hash>]
 ```
 
 It prints the preview (`status: "ready"`) or the written result (`status:

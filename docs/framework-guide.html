@@ -817,8 +817,9 @@
         Now and then a coding agent runs a Git command that quietly throws away work nobody has
         committed or pushed yet, such as <code>git reset --hard</code>.
         <strong>framework-setup</strong> ships a small guardrail for <strong>Claude Code</strong>
-        that stops these commands before they run and tells the agent which rule stopped it. It
-        is off until you turn it on, and the agent shortcut above asks you first.
+        and <strong>Cursor</strong> that stops these commands before they run; Claude Code also
+        tells the agent which rule stopped it. It is off until
+        you turn it on, for each editor separately, and the agent shortcut above asks you first.
       </p>
       <div class="table-wrap">
         <table>
@@ -835,20 +836,35 @@
         </table>
       </div>
       <p class="cmd-label">See what would change</p>
-      <pre><code>agent-framework guardrail add claude-code</code></pre>
+      <pre><code>agent-framework guardrail add claude-code
+agent-framework guardrail add cursor</code></pre>
       <p>
-        This prints the exact lines it would add to <code>.claude/settings.json</code>, the
-        shared settings file the whole team commits, and a token. Nothing is written yet. To
-        apply it, run the same command again with <code>--confirm &lt;token&gt;</code>. Then
-        commit <code>.claude/settings.json</code> together with the installed skills folder, so
-        everyone who clones the project gets the guardrail too. To take it out again, run
-        <code>agent-framework guardrail remove claude-code</code>: same preview, same token step.
+        Each prints the exact lines it would add and a token. Nothing is written yet. To apply
+        it, run the same command again with <code>--confirm &lt;token&gt;</code>. For Claude Code
+        it writes <code>.claude/settings.json</code>; for Cursor, <code>.cursor/hooks.json</code>.
+        Commit that file together with the installed skills folder, so everyone who clones the
+        project gets the guardrail too. To take it out again, run
+        <code>agent-framework guardrail remove claude-code</code> (or <code>cursor</code>): same
+        preview, same token step.
       </p>
       <p>
         Run it from the copy of the skill installed inside the project (under
         <code>.agents/skills</code> or <code>.claude/skills</code>), because the setting points at
         that copy. If the skill lives outside the project, or Git ignores it, the command refuses
-        and says why.
+        and says why. For Cursor, the folder path must also have no spaces.
+      </p>
+      <p>
+        If the Gate is active for Cursor, its own entry already sits in
+        <code>.cursor/hooks.json</code>. The guardrail adds its entry next to it and never
+        touches the Gate's, so <code>gate status</code> stays healthy, and removing the guardrail
+        puts the file back exactly as it was.
+      </p>
+      <p>
+        <strong>What we saw Cursor do.</strong> We tried this on Cursor 3.23.23. Cursor asked the
+        hook before each shell command, and when the hook said no, the command did not run and the
+        agent said a hook had blocked it. We did not see whether Cursor shows the guardrail's own
+        message to you or to the agent, so in Cursor you may only see that a hook blocked the
+        command, not which rule did.
       </p>
       <div class="note note-caution">
         <span class="note-tag">Protection against accidents, not a security boundary</span>
@@ -856,8 +872,7 @@
           It reads each command the way a shell would, so <code>git checkout .env.example</code>
           is fine and <code>git -C app reset --hard</code> is not. But an agent that writes a
           script and runs it, uses a Git alias, or runs commands through a tool the hook does not
-          watch is not stopped. Keep committing and pushing often. Cursor and Codex follow in
-          FS-007 and FS-008.
+          watch is not stopped. Keep committing and pushing often. Codex follows in FS-008.
         </p>
       </div>
 

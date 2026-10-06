@@ -81,8 +81,8 @@ const bashPayload = (command) => JSON.stringify({ hook_event_name: 'PreToolUse',
 /**
  * The installed guardrail blocks a destructive payload and allows an ordinary
  * one through the installed and the linked path, and registers with Claude
- * Code through both: previewed, confirmed with the preview's own token, run as
- * Claude Code's exec form runs it, then removed again (FS-006).
+ * Code and with Cursor through both: previewed, confirmed with the preview's
+ * own token, run as each client runs it, then removed again (FS-006, FS-007).
  */
 const assertInstalledGuardrail = async (agent, installedRoot, linkedClientRoot) => {
   const installedScripts = path.join(temporaryRoot, installedRoot, 'framework-setup', 'scripts');
@@ -135,6 +135,54 @@ const assertInstalledGuardrail = async (agent, installedRoot, linkedClientRoot) 
 
   // The file `add` created holds nothing now; the install root must hold no adoption state.
   await rm(settingsFile);
+
+  // Cursor (FS-007): the same operation writes one `beforeShellExecution`
+  // entry into `.cursor/hooks.json`, created with `"version": 1`, whose
+  // command — run in the project root, as Cursor was observed to run it —
+  // answers in Cursor's format.
+  const hooksFile = path.join(temporaryRoot, '.cursor', 'hooks.json');
+  const cursorDirectoryExisted = await access(path.dirname(hooksFile)).then(() => true, () => false);
+  const cursorCommand = (scripts, operation, ...argv) => {
+    const result = runInstalledCommand(path.join(scripts, 'agent-framework.mjs'), ['guardrail', operation, 'cursor', '--json', ...argv], temporaryRoot);
+
+    return { ...result, document: JSON.parse(result.stdout) };
+  };
+  const cursorPreview = cursorCommand(installedScripts, 'add');
+  const cursorThroughLink = cursorCommand(linkedScripts, 'add');
+  const expectedCommand = `node ${installedRoot}/framework-setup/scripts/guardrail.mjs --client cursor`;
+
+  if (
+    cursorPreview.status !== 1
+    || cursorThroughLink.stdout !== cursorPreview.stdout
+    || cursorPreview.document.entry.command !== expectedCommand
+    || (await access(hooksFile).then(() => true, () => false))
+  ) {
+    throw new Error(`${agent}: installed agent-framework guardrail add cursor did not preview the installed script alike through both paths: ${cursorPreview.stdout}`);
+  }
+
+  const cursorAdded = cursorCommand(linkedScripts, 'add', '--confirm', cursorPreview.document.previewHash);
+  const cursorHooks = JSON.parse(await readFile(hooksFile, 'utf8'));
+  const [cursorEntry] = cursorHooks.hooks.beforeShellExecution;
+  const cursorRun = execFileSync('sh', ['-c', cursorEntry.command], {
+    cwd: temporaryRoot,
+    env: { ...process.env, CURSOR_PROJECT_DIR: temporaryRoot },
+    input: JSON.stringify({ command: 'git push -f origin main', cwd: '', hook_event_name: 'beforeShellExecution' }),
+    encoding: 'utf8',
+  });
+  const deniedLine = `${JSON.stringify({ permission: 'deny', userMessage: blockedLine.trimEnd(), agentMessage: blockedLine.trimEnd() })}\n`;
+
+  if (cursorAdded.status !== 0 || cursorHooks.version !== 1 || cursorRun !== deniedLine) {
+    throw new Error(`${agent}: the guardrail registered for Cursor through the linked path did not deny a forced push: ${cursorAdded.stdout} ${cursorRun}`);
+  }
+
+  const cursorRemoval = cursorCommand(installedScripts, 'remove');
+  const cursorRemoved = cursorCommand(installedScripts, 'remove', '--confirm', cursorRemoval.document.previewHash);
+
+  if (cursorRemoved.status !== 0 || (await readFile(hooksFile, 'utf8')) !== '{\n  "version": 1,\n  "hooks": {}\n}\n') {
+    throw new Error(`${agent}: installed agent-framework guardrail remove cursor did not reverse the entry: ${cursorRemoved.stdout}`);
+  }
+
+  await rm(cursorDirectoryExisted ? hooksFile : path.dirname(hooksFile), { recursive: true });
 };
 
 const assertNoAdoptionState = async (actor) => {
@@ -148,8 +196,9 @@ const assertNoAdoptionState = async (actor) => {
     // (SG-DIST-001, FR-ADAPT-002).
     '.git/change-evaluation-gate/evidence/activation/receipt.json',
     // The destructive-command guardrail is registered only by a confirmed
-    // `agent-framework guardrail add` (FS-006); installing never does it.
+    // `agent-framework guardrail add` (FS-006, FS-007); installing never does it.
     '.claude/settings.json',
+    '.cursor/hooks.json',
   ]) {
     try {
       await access(path.join(temporaryRoot, dormantPath));
