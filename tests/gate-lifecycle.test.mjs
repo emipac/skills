@@ -43,6 +43,32 @@ const runFile = promisify(execFile);
  */
 const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+test('lifecycle decomposition preserves the public exports', async () => {
+  const lifecycle = await import('../skills/change-evaluation-gate/scripts/lib/lifecycle.mjs');
+
+  assert.deepEqual(Object.keys(lifecycle).sort(), [
+    'GATE_CONFIGURATION_KEYS',
+    'GATE_HEALTH',
+    'SHARED_CONFIGURATION_FILE',
+    'UPDATE_STEPS',
+    'activeRelease',
+    'authorizedReceiptIds',
+    'confirmConfigurationCleanup',
+    'confirmEvidencePrune',
+    'confirmRepair',
+    'deactivateGate',
+    'inspectCoordination',
+    'inspectRelease',
+    'previewConfigurationCleanup',
+    'previewEvidencePrune',
+    'previewRepair',
+    'previewUpdate',
+    'statusGate',
+    'uninstallGate',
+    'updateGate',
+  ].sort());
+});
+
 const isInside = (parent, candidate) => candidate === parent
   || candidate.startsWith(`${parent}${path.sep}`);
 

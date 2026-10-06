@@ -617,7 +617,7 @@ test('SG-OWNER-001: no client name and no native feedback field lives outside th
     assert.doesNotMatch(source, nativeFields, `${path.basename(file)} names a native feedback field.`);
   }
 
-  const declarations = await readFile(path.join(libraryRoot, 'adapters.mjs'), 'utf8');
+  const declarations = await readFile(path.join(libraryRoot, 'adapters/declarations/registry.mjs'), 'utf8');
 
   assert.match(declarations, nativeFields);
   assert.match(declarations, /\bcursor\b/i);

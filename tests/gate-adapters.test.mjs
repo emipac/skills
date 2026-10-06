@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -35,6 +35,40 @@ import {
 import { REMEDIES, remedyInstruction } from '../skills/change-evaluation-gate/scripts/lib/remedies.mjs';
 
 const runFile = promisify(execFile);
+
+test('adapter decomposition preserves the public exports', async () => {
+  const adapters = await import('../skills/change-evaluation-gate/scripts/lib/adapters.mjs');
+
+  assert.deepEqual(Object.keys(adapters).sort(), [
+    'ADAPTER_CAPABILITY_CATEGORIES',
+    'ADAPTER_FAILURE_REASONS',
+    'ADAPTER_IDS',
+    'ADAPTER_TRUST_MODELS',
+    'BASELINE_CHECKS',
+    'BASELINE_PAYLOAD_SOURCES',
+    'CAPTURED_BASELINE_CHECKS',
+    'DESKTOP_ADAPTER_IDS',
+    'FEEDBACK_ABSENCES',
+    'FEEDBACK_LIMITS',
+    'REGISTRATION_BLOCK_SCHEMAS',
+    'REGISTRATION_SURFACE_KINDS',
+    'SUPPORT_TIERS',
+    'buildNativePayload',
+    'classifySupport',
+    'describeAdapter',
+    'formatFeedback',
+    'normalizeNativeInvocation',
+    'normalizeTrigger',
+    'normalizeTurn',
+    'presentDecision',
+    'resolveRepositoryRoot',
+    'runAdapterEvaluation',
+    'runCompatibilityBaseline',
+    'unreportableSurface',
+    'validateAdapterDeclaration',
+    'validateRegistrationDeclaration',
+  ].sort());
+});
 
 /**
  * These fixtures create real Git repositories. Every one of them must be a
@@ -1288,7 +1322,18 @@ test('FR-ADAPT-003 prohibited behavior: gate core carries no client-name branch,
 
   // The client names live in exactly one place: the adapter layer that owns
   // the native boundary.
-  assert.match(await readFile(path.join(coreRoot, 'adapters.mjs'), 'utf8'), clientNames);
+  assert.match(await readFile(path.join(coreRoot, 'adapters/declarations/registry.mjs'), 'utf8'), clientNames);
+
+  const adapterModules = (await readdir(path.join(coreRoot, 'adapters'), { recursive: true }))
+    .filter((entry) => entry.endsWith('.mjs') && entry !== path.join('declarations', 'registry.mjs'));
+
+  for (const module of ['../adapters.mjs', ...adapterModules]) {
+    assert.doesNotMatch(
+      await readFile(path.join(coreRoot, 'adapters', module), 'utf8'),
+      clientNames,
+      `Adapter module ${module} branches on a client name outside the registry.`,
+    );
+  }
 
   // FR-ADAPT-001 / FR-ADAPT-007: whatever the decision says, a preflight
   // surface presents `not-authoritative` and never allow or deny.

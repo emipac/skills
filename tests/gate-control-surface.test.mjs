@@ -545,7 +545,19 @@ test('TB-031 SG-OWNER-001: exactly one function assembles the observed control s
   const readers = ['hook-runner.mjs', 'operator-surface.mjs', 'preflight-runner.mjs'];
 
   for (const source of sources) {
-    const contents = await readFile(path.join(LIBRARY, source), 'utf8');
+    const files = [source];
+
+    if (source === 'operator-surface.mjs') {
+      const implementation = (await readdir(path.join(LIBRARY, 'operator-surface'), { recursive: true }))
+        .filter((entry) => entry.endsWith('.mjs'))
+        .sort()
+        .map((entry) => path.join('operator-surface', entry));
+
+      files.push(...implementation);
+    }
+
+    const contents = (await Promise.all(files.map((file) => readFile(path.join(LIBRARY, file), 'utf8'))))
+      .join('\n');
 
     if (contents.includes('export const observeControlSurface')) {
       definitions.push(source);

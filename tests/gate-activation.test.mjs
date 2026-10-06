@@ -30,6 +30,50 @@ const runFile = promisify(execFile);
  */
 const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+test('activation decomposition preserves the public exports', async () => {
+  const activation = await import('../skills/change-evaluation-gate/scripts/lib/activation.mjs');
+
+  assert.deepEqual(Object.keys(activation).sort(), [
+    'ACTIVATION_RECEIPT_VERSION',
+    'ACTIVATION_STATES',
+    'ACTIVATION_STEPS',
+    'AUTHORITATIVE_HOOK',
+    'HOOK_BLOCK_BEGIN',
+    'HOOK_BLOCK_END',
+    'HOOK_PROGRAM_SELF_TEST_ENV',
+    'HOOK_PROGRAM_SELF_TEST_SUBJECT_VERSION',
+    'HOOK_RECEIPT_PLACEHOLDER',
+    'HOOK_RECEIPT_PREFIX',
+    'HOOK_STRATEGIES',
+    'OBSERVABLE_ACTIVATION_STEPS',
+    'STEPS_ANSWERED_BY_ACTIVATION',
+    'activate',
+    'activationTransactionIdentity',
+    'adapterIdentity',
+    'configurationIdentity',
+    'detectHookManager',
+    'hookBlockIdentity',
+    'hookRegistrationReceiptId',
+    'inspectActivation',
+    'normalizeHookRegistration',
+    'plannedHookRegistration',
+    'previewActivation',
+    'previewSync',
+    'readHookRegistration',
+    'recoverTrustedConfiguration',
+    'registerManagedBlock',
+    'registerOwnedHook',
+    'removeManagedBlock',
+    'removeOwnedHook',
+    'repositoryIdentity',
+    'restoreHookRegistration',
+    'selfTestHookProgramDenial',
+    'syncActivation',
+    'unreportableAdapterRefusal',
+    'withdrawHookRegistration',
+  ].sort());
+});
+
 const isInside = (parent, candidate) => candidate === parent
   || candidate.startsWith(`${parent}${path.sep}`);
 
@@ -1060,7 +1104,14 @@ test('AC-ADAPT-003: activation registers a declared desktop surface without bran
   const libraryRoot = path.join(FRAMEWORK_ROOT, 'skills/change-evaluation-gate/scripts/lib');
   const clientNames = /\b(cursor|codex|claude|copilot|vscode|jetbrains|intellij|windsurf|zed)\b/i;
 
-  for (const module of ['activation.mjs', 'lifecycle.mjs', 'adapter-registration.mjs']) {
+  const activationModules = (await readdir(path.join(libraryRoot, 'activation'), { recursive: true }))
+    .filter((entry) => entry.endsWith('.mjs'))
+    .map((entry) => path.join('activation', entry));
+  const lifecycleModules = (await readdir(path.join(libraryRoot, 'lifecycle'), { recursive: true }))
+    .filter((entry) => entry.endsWith('.mjs'))
+    .map((entry) => path.join('lifecycle', entry));
+
+  for (const module of ['activation.mjs', ...activationModules, 'lifecycle.mjs', ...lifecycleModules, 'adapter-registration.mjs']) {
     assert.doesNotMatch(
       await readFile(path.join(libraryRoot, module), 'utf8'),
       clientNames,
