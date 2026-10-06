@@ -201,3 +201,14 @@ values, session URL removal, report download, and responsive tables. The final
 browser run reported no console errors and no secret-canary output. Loopback
 tests required approved execution outside the sandbox; activation smoke used
 an isolated temporary directory to avoid cross-suite directory-list changes.
+
+Added a dashboard usage guide to `docs/framework-guide.html` as Section 16,
+with contents, installation, and quick-start links. It covers launch options,
+the seven screens, reviewed setup, checks and evidence, maintenance, session
+credentials, and static report downloads while preserving existing anchors
+and policy examples. Updated the displayed release to 0.12.0.
+
+Verification: all 23 guide and Gate configuration tests passed, along with
+repository validation and whitespace checks. Browser checks confirmed the
+new section, seven-screen table, desktop and mobile widths without horizontal
+page overflow, and no console errors or warnings.

@@ -455,7 +455,7 @@
   <div class="masthead-inner">
     <p class="eyebrow">
       <span>AI Skills Framework</span>
-      <span class="ver">Release 0.8.0 · Gate-capable</span>
+      <span class="ver">Release 0.12.0 · Gate-capable</span>
     </p>
     <h1>Setting up the framework, and switching on the Change Evaluation Gate</h1>
     <p class="standfirst">
@@ -489,6 +489,7 @@
       <li><a href="#gate-trouble">When the Gate disagrees with your terminal</a></li>
       <li><a href="#limits">Limits you should know</a></li>
       <li><a href="#glossary">Glossary</a></li>
+      <li><a href="#project-dashboard">The local project dashboard</a></li>
     </ol>
   </nav>
 
@@ -663,6 +664,12 @@
       </p>
 
       <p>
+        Prefer visual controls? Run <code>agent-framework ui</code> to open the
+        <a href="#project-dashboard">local project dashboard in Section 16</a>. It uses the
+        same operations, with forms, readable previews, health information, and evidence history.
+      </p>
+
+      <p>
         New to all this? Section 04 starts with a
         <a href="#quick-start">start-to-finish checklist for a new project</a>.
       </p>
@@ -713,6 +720,11 @@
       </div>
 
       <h3 id="quick-start">Quick start: a new project, start to finish</h3>
+      <p>
+        You can also follow these stages in the
+        <a href="#project-dashboard">dashboard’s Guided setup screen</a>, reviewing and
+        confirming each change in your browser.
+      </p>
       <p>
         If you just want a working setup with the Gate switched on, follow these seven steps in
         order. Run every command from your project's root folder, which must be a Git
@@ -2820,11 +2832,139 @@ Remedy, the maintainer's and not this agent's: commit each unversioned Grader su
       </dl>
     </section>
 
+    <section id="project-dashboard">
+      <div class="sec-head">
+        <span class="sec-num">Section 16</span>
+        <h2>The local project dashboard</h2>
+      </div>
+
+      <p>
+        The dashboard is a lightweight interface for <strong>one project on your machine</strong>.
+        It explains setup, health, checks, configuration, and maintenance through the existing
+        Framework and Gate operations. You need <strong>Node.js 20 or later</strong> and the
+        installed <code>framework-setup</code> skill; no additional UI dependencies, database,
+        or cloud account are required. Install <code>change-evaluation-gate</code> for Gate controls.
+        Starting the dashboard configures and activates nothing.
+      </p>
+
+      <h3>Start it from your project</h3>
+      <p class="cmd-label">Run from the target project’s root directory</p>
+      <pre><code>node .agents/skills/framework-setup/scripts/agent-framework.mjs ui</code></pre>
+      <p>
+        Use the equivalent installed script path if your client stores skills elsewhere. If the
+        package executable or your shell alias is available, the shorter command is:
+      </p>
+      <pre><code>agent-framework ui</code></pre>
+      <p>
+        The server binds to <code>127.0.0.1</code> and chooses an available port automatically.
+        Open the <strong>complete URL printed in the terminal</strong> in your browser. To select
+        a project or port explicitly:
+      </p>
+      <pre><code>agent-framework ui --project /path/to/project --port 4318</code></pre>
+      <p>
+        <code>--project</code> selects the directory once at startup; the session cannot switch
+        projects. <code>--port</code> accepts integers from <code>0</code> to <code>65535</code>;
+        <code>0</code>, the default, chooses an available port. Keep the terminal running.
+        Press <kbd>Ctrl</kbd> + <kbd>C</kbd> to stop: queued work is canceled, while an active
+        owner operation can finish its atomic changes before shutdown.
+      </p>
+      <div class="note">
+        <span class="note-tag">The session URL is a credential</span>
+        <p>
+          Its fragment authenticates this local session. The browser removes the fragment from
+          the address bar and keeps the credential in that tab’s session storage for refreshes.
+          After restarting the server, open its newly printed URL. A bare address or old session
+          URL cannot authenticate the new session.
+        </p>
+      </div>
+
+      <h3>Choose the screen you need</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>The seven dashboard screens</caption>
+          <thead><tr><th scope="col">Screen</th><th scope="col">How to use it</th></tr></thead>
+          <tbody>
+            <tr data-screen="overview"><td><strong>Overview</strong></td><td>Read Framework state, activation, health findings, and next steps. Use <strong>Refresh health</strong> for a current observation.</td></tr>
+            <tr data-screen="setup"><td><strong>Guided setup</strong></td><td>Open the next setup step, review discovered choices, load drafts, and confirm each change separately.</td></tr>
+            <tr data-screen="checks"><td><strong>Checks &amp; snapshots</strong></td><td>Choose working-tree or staged checking, run the operation, and read snapshot identity, base revision, outcomes, and diagnostics.</td></tr>
+            <tr data-screen="configuration"><td><strong>Configuration</strong></td><td>Compare effective values with activation pins, review suggestions, and preview a revision. Sensitive inputs appear by name and source, never value.</td></tr>
+            <tr data-screen="activity"><td><strong>Activity &amp; evidence</strong></td><td>Follow queued, running, and finished dashboard jobs. Load retained evidence, inspect authorized logs, coordination, or Git worktrees.</td></tr>
+            <tr data-screen="maintenance"><td><strong>Maintenance</strong></td><td>Select an installed operation, supply its declared fields, then review its preview. Advanced operations remain available here.</td></tr>
+            <tr data-screen="help"><td><strong>Help &amp; guides</strong></td><td>Read explanations of activation, drift, snapshots, policy changes, removal, and the local session.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>First setup, step by step</h3>
+      <ol>
+        <li>
+          <strong>Initialize Framework</strong> if the project has no configuration. Choose the
+          tracker and review discovered stack selections. The explicit preview names
+          <code>.agent-framework.yaml</code>, <code>docs/agents/issue-tracker.md</code>,
+          <code>docs/agents/domain.md</code>, and <code>docs/agents/triage-labels.md</code>.
+          Existing configuration and unsafe linked destination paths are refused.
+        </li>
+        <li>
+          <strong>Migrate configuration</strong> when schema version 3 needs migration. Choose
+          <strong>Load owner’s draft</strong>, resolve unanswered mapping decisions in the editable
+          JSON, and preview the proposed schema version 4 file.
+        </li>
+        <li>
+          <strong>Configure Gate</strong>: load the provider’s policy draft, review its checks,
+          budgets, and dependency declarations, then preview and confirm the dormant policy.
+        </li>
+        <li>
+          Run <strong>Gate doctor</strong> to check machine readiness. Address its findings,
+          then open <strong>Gate activate</strong>, choose the client if needed, and review and
+          confirm activation. Doctor’s proceeding verdict is not activation.
+        </li>
+      </ol>
+      <p>
+        A change begins with <strong>Preview this operation</strong>. Read the result, select
+        <strong>Review &amp; confirm</strong>, and confirm only the displayed change. Cancel or
+        press <kbd>Esc</kbd> to dismiss the review without confirming files or registrations.
+        A stale or expired preview requires another review; setup never confirms later steps
+        automatically. After a configuration revision, <strong>Sync configuration</strong> is a
+        separate preview and confirmation that adopts the new values into activation pins.
+      </p>
+
+      <h3>Checks, evidence, and maintenance</h3>
+      <p>
+        Working-tree checks evaluate current changes against <code>HEAD</code>; staged checks
+        evaluate the Git index as the pre-commit Gate would. Results name the exact snapshot,
+        base revision, check outcomes, and diagnostics. A pass authorizes no commit. Passing
+        operator checks are not durably recorded; their dashboard results remain in the bounded,
+        in-memory job history for that server session.
+      </p>
+      <p>
+        Durable evidence is clone-wide, including linked worktrees. Activity reads retained,
+        verified metadata and authorized redacted logs, with bounded history and log output.
+        Coordination shows an observed lock holder; refresh it for current facts. Git worktrees
+        are separate working directories, not Gate evaluation snapshots. Temporary snapshots
+        disappear after checks: there is no snapshot file browser or live per-check progress.
+        Health and evidence refresh are explicit; running dashboard jobs are polled automatically.
+      </p>
+      <p>
+        Maintenance offers sync, update, repair, deactivate, uninstall, cleanup, pruning, lock
+        recovery, bypass, and destructive-command guardrail controls. Read what each owner would
+        change or preserve. Follow refusal instructions rather than forcing an override. If the
+        Gate is absent, its actions report that fact while Framework operations remain usable.
+      </p>
+      <p>
+        To share a snapshot of health and configuration, choose <strong>Export static report</strong>
+        from Overview or Configuration, then <strong>Run operation</strong> and
+        <strong>Download HTML report</strong>. The existing report renderer produces a sanitized,
+        static HTML file with its generation time. It has no interactive controls and does not
+        update when the project changes. Dashboard controls delegate to the owning commands;
+        their previews, ownership checks, and refusal rules still apply.
+      </p>
+    </section>
+
   </main>
 </div>
 
 <footer class="footer">
-  AI Skills Framework 0.8.0 · 29 released skills · Gate module optional and dormant by default ·
+  AI Skills Framework 0.12.0 · 29 released skills · Gate module optional and dormant by default ·
   Derived from Matt Pocock's skills, with concepts from OpenSPDD
 </footer>
 </body>
