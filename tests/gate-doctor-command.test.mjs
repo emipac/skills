@@ -473,7 +473,11 @@ test('TB-063 AC-PORT-001, NFR-PORT-002: clone capability, same volume, and direc
   assert.match(doctor.stdout, /^ {2}- vendor \(copy\): available, /m);
 
   // No operating-system branch reaches the answer: capabilities are probed.
-  for (const file of ['operator-surface.mjs', 'snapshot.mjs']) {
+  const operatorModules = (await readdir(path.join(LIBRARY_ROOT, 'operator-surface'), { recursive: true }))
+    .filter((entry) => entry.endsWith('.mjs'))
+    .map((entry) => path.join('operator-surface', entry));
+
+  for (const file of ['operator-surface.mjs', ...operatorModules, 'snapshot.mjs']) {
     // eslint-disable-next-line no-await-in-loop
     const source = await readFile(path.join(LIBRARY_ROOT, file), 'utf8');
 

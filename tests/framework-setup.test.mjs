@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as frameworkSetup from '../skills/framework-setup/scripts/configure.mjs';
 import {
@@ -112,6 +112,65 @@ const createExpressFixture = async () => {
 
   return projectRoot;
 };
+
+test('the configure entry preserves its public exports', () => {
+  const functions = [
+    'applyGuardrail',
+    'configureGate',
+    'configureProject',
+    'discoverGateConfigurationFacts',
+    'discoverProject',
+    'discoverVerification',
+    'draftGatePolicy',
+    'draftMigrationMapping',
+    'migrateConfiguration',
+    'previewConfigurationMigration',
+    'previewGateConfiguration',
+    'previewGateRevision',
+    'previewGuardrail',
+    'reviseGate',
+    'withheldRevision',
+  ];
+
+  assert.deepEqual(Object.keys(frameworkSetup).sort(), [
+    ...functions,
+    'gatePolicyKeys',
+    'gateRevisions',
+    'guardrailClients',
+    'guardrailOperations',
+  ].sort());
+
+  for (const name of functions) {
+    assert.equal(typeof frameworkSetup[name], 'function', name);
+  }
+
+  assert.deepEqual(frameworkSetup.gatePolicyKeys, ['checks', 'budget', 'bypass', 'execution', 'evidence']);
+  assert.deepEqual(frameworkSetup.guardrailClients, ['claude-code', 'cursor']);
+  assert.deepEqual(frameworkSetup.guardrailOperations, ['add', 'remove']);
+});
+
+test('configure imports and discovers a project when installed without the Gate skill', async (context) => {
+  const projectRoot = await createLaravelFixture();
+  const installRoot = await mkdtemp(path.join(tmpdir(), 'framework-setup-standalone-'));
+  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  context.after(() => rm(installRoot, { recursive: true, force: true }));
+
+  const installedSkill = path.join(installRoot, 'framework-setup');
+  await cp(path.dirname(path.dirname(configureScript)), installedSkill, { recursive: true });
+  const entry = path.join(installedSkill, 'scripts', 'configure.mjs');
+  const imported = await execFileAsync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    `await import(${JSON.stringify(pathToFileURL(entry).href)});`,
+  ]);
+
+  assert.equal(imported.stdout, '');
+  assert.equal(imported.stderr, '');
+
+  const discovered = await execFileAsync(process.execPath, [entry, '--discover', '--project', projectRoot]);
+  assert.equal(discovered.stderr, '');
+  assert.deepEqual(JSON.parse(discovered.stdout), await discoverProject(projectRoot));
+});
 
 test('discovers Laravel, frontend, and existing project guidance', async (context) => {
   const projectRoot = await createLaravelFixture();

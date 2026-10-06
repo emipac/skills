@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -415,24 +415,38 @@ test('TB-059 FR-LIFE-013: a non-Laravel draft declares no evidence defaults, exa
 });
 
 test('SG-OWNER-001: framework-setup keeps no copy of the check catalogue', async () => {
-  const source = await readFile(
-    fileURLToPath(new URL('../skills/framework-setup/scripts/configure.mjs', import.meta.url)),
-    'utf8',
-  );
+  const entryPoint = fileURLToPath(new URL('../skills/framework-setup/scripts/configure.mjs', import.meta.url));
+  const implementation = path.join(path.dirname(entryPoint), 'lib', 'configure');
+  const implementationModules = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const modules = await Promise.all(entries.map((entry) => {
+      const file = path.join(directory, entry.name);
 
-  for (const entry of [...laravelCheckPlan, ...nodePackageCheckPlan]) {
+      return entry.isDirectory()
+        ? implementationModules(file)
+        : (entry.isFile() && entry.name.endsWith('.mjs') ? [file] : []);
+    }));
+
+    return modules.flat();
+  };
+
+  for (const file of [entryPoint, ...await implementationModules(implementation)]) {
+    const source = await readFile(file, 'utf8');
+
+    for (const entry of [...laravelCheckPlan, ...nodePackageCheckPlan]) {
+      assert.equal(
+        source.includes(entry.id),
+        false,
+        `${path.relative(path.dirname(entryPoint), file)} restates the check identity ${entry.id}`,
+      );
+    }
+
     assert.equal(
-      source.includes(entry.id),
+      /['"]configuration\./.test(source),
       false,
-      `configure.mjs restates the check identity ${entry.id}`,
+      `${path.relative(path.dirname(entryPoint), file)} hardcodes a literal configuration.<stage>.<capability> identity prefix`,
     );
   }
-
-  assert.equal(
-    /['"]configuration\./.test(source),
-    false,
-    'configure.mjs hardcodes a literal configuration.<stage>.<capability> identity prefix',
-  );
 });
 
 test('FR-EVAL-001: a project with no schema v4 configuration is refused with a migration message', async (context) => {

@@ -19,6 +19,17 @@ listed in the top-level `README.md`; the Claude manifest must list the exact
 same set. Experimental and deprecated skills must never be referenced by a
 release manifest.
 
+## Module size and structure
+
+Keep every script file under 1000 lines. When a file approaches that, split it
+before adding to it: move each responsibility into its own well-named module in
+a folder beside the entry point (as `framework-setup`'s `scripts/lib/configure/`
+and `scripts/lib/agent-framework/`, and the Gate's `scripts/lib/operator-surface/`
+do), and keep the original entry path and its public exports stable. Modules
+must not import each other in a cycle. This applies to library code, commands,
+smoke and conformance scripts, and tests alike; a new feature that would push a
+file past the limit includes the split.
+
 ## Versioning and verification
 
 `package.json` is the authoritative version. Run `npm run sync-version` after

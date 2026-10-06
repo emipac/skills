@@ -63,6 +63,128 @@ const runInstalledCommand = (scriptPath, argv, cwd) => {
 
 const sourceRoot = process.cwd();
 
+/** Run an installed script with `input` on standard input, as a client hook runs it. */
+const runWithInput = (program, argv, input) => {
+  try {
+    return { status: 0, stdout: execFileSync(program, argv, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), stderr: '' };
+  } catch (error) {
+    if (typeof error.status !== 'number') {
+      throw error;
+    }
+
+    return { status: error.status, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+  }
+};
+
+const bashPayload = (command) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } });
+
+/**
+ * The installed guardrail blocks a destructive payload and allows an ordinary
+ * one through the installed and the linked path, and registers with Claude
+ * Code and with Cursor through both: previewed, confirmed with the preview's
+ * own token, run as each client runs it, then removed again (FS-006, FS-007).
+ */
+const assertInstalledGuardrail = async (agent, installedRoot, linkedClientRoot) => {
+  const installedScripts = path.join(temporaryRoot, installedRoot, 'framework-setup', 'scripts');
+  const linkedScripts = path.join(linkedClientRoot, 'framework-setup', 'scripts');
+  const blockedLine = "BLOCKED: 'git push -f origin main' matches dangerous pattern 'git push --force'. The user has prevented you from doing this.\n";
+
+  for (const scripts of [installedScripts, linkedScripts]) {
+    const blocked = runWithInput(process.execPath, [path.join(scripts, 'guardrail.mjs')], bashPayload('git push -f origin main'));
+    const allowed = runWithInput(process.execPath, [path.join(scripts, 'guardrail.mjs')], bashPayload('git checkout .env.example'));
+
+    if (blocked.status !== 2 || blocked.stderr !== blockedLine || allowed.status !== 0 || `${allowed.stdout}${allowed.stderr}` !== '') {
+      throw new Error(`${agent}: the installed guardrail at ${scripts} did not block a forced push and allow a checkout: exit ${blocked.status} ${blocked.stderr}`);
+    }
+  }
+
+  const settingsFile = path.join(temporaryRoot, '.claude', 'settings.json');
+  const guardrailCommand = (scripts, operation, ...argv) => {
+    const result = runInstalledCommand(path.join(scripts, 'agent-framework.mjs'), ['guardrail', operation, 'claude-code', '--json', ...argv], temporaryRoot);
+
+    return { ...result, document: JSON.parse(result.stdout) };
+  };
+  const throughInstalledPath = guardrailCommand(installedScripts, 'add');
+  const throughLink = guardrailCommand(linkedScripts, 'add');
+  const expectedArgs = [`\${CLAUDE_PROJECT_DIR}/${installedRoot}/framework-setup/scripts/guardrail.mjs`];
+
+  if (
+    throughInstalledPath.status !== 1
+    || throughLink.stdout !== throughInstalledPath.stdout
+    || JSON.stringify(throughInstalledPath.document.entry.hooks[0].args) !== JSON.stringify(expectedArgs)
+    || (await access(settingsFile).then(() => true, () => false))
+  ) {
+    throw new Error(`${agent}: installed agent-framework guardrail add did not preview the installed script alike through both paths: ${throughInstalledPath.stdout}`);
+  }
+
+  const added = guardrailCommand(linkedScripts, 'add', '--confirm', throughInstalledPath.document.previewHash);
+  const [registered] = JSON.parse(await readFile(settingsFile, 'utf8')).hooks.PreToolUse;
+  const [hook] = registered.hooks;
+  const hookRun = runWithInput(hook.command === 'node' ? process.execPath : hook.command, hook.args.map((argument) => argument.replaceAll('${CLAUDE_PROJECT_DIR}', temporaryRoot)), bashPayload('git push -f origin main'));
+
+  if (added.status !== 0 || registered.matcher !== 'Bash' || hookRun.status !== 2 || hookRun.stderr !== blockedLine) {
+    throw new Error(`${agent}: the guardrail registered through the linked path did not block a forced push: ${added.stdout} exit ${hookRun.status} ${hookRun.stderr}`);
+  }
+
+  const removal = guardrailCommand(installedScripts, 'remove');
+  const removed = guardrailCommand(installedScripts, 'remove', '--confirm', removal.document.previewHash);
+
+  if (removed.status !== 0 || (await readFile(settingsFile, 'utf8')) !== '{}\n') {
+    throw new Error(`${agent}: installed agent-framework guardrail remove did not reverse the entry: ${removed.stdout}`);
+  }
+
+  // The file `add` created holds nothing now; the install root must hold no adoption state.
+  await rm(settingsFile);
+
+  // Cursor (FS-007): the same operation writes one `beforeShellExecution`
+  // entry into `.cursor/hooks.json`, created with `"version": 1`, whose
+  // command — run in the project root, as Cursor was observed to run it —
+  // answers in Cursor's format.
+  const hooksFile = path.join(temporaryRoot, '.cursor', 'hooks.json');
+  const cursorDirectoryExisted = await access(path.dirname(hooksFile)).then(() => true, () => false);
+  const cursorCommand = (scripts, operation, ...argv) => {
+    const result = runInstalledCommand(path.join(scripts, 'agent-framework.mjs'), ['guardrail', operation, 'cursor', '--json', ...argv], temporaryRoot);
+
+    return { ...result, document: JSON.parse(result.stdout) };
+  };
+  const cursorPreview = cursorCommand(installedScripts, 'add');
+  const cursorThroughLink = cursorCommand(linkedScripts, 'add');
+  const expectedCommand = `node ${installedRoot}/framework-setup/scripts/guardrail.mjs --client cursor`;
+
+  if (
+    cursorPreview.status !== 1
+    || cursorThroughLink.stdout !== cursorPreview.stdout
+    || cursorPreview.document.entry.command !== expectedCommand
+    || (await access(hooksFile).then(() => true, () => false))
+  ) {
+    throw new Error(`${agent}: installed agent-framework guardrail add cursor did not preview the installed script alike through both paths: ${cursorPreview.stdout}`);
+  }
+
+  const cursorAdded = cursorCommand(linkedScripts, 'add', '--confirm', cursorPreview.document.previewHash);
+  const cursorHooks = JSON.parse(await readFile(hooksFile, 'utf8'));
+  const [cursorEntry] = cursorHooks.hooks.beforeShellExecution;
+  const cursorRun = execFileSync('sh', ['-c', cursorEntry.command], {
+    cwd: temporaryRoot,
+    env: { ...process.env, CURSOR_PROJECT_DIR: temporaryRoot },
+    input: JSON.stringify({ command: 'git push -f origin main', cwd: '', hook_event_name: 'beforeShellExecution' }),
+    encoding: 'utf8',
+  });
+  const deniedLine = `${JSON.stringify({ permission: 'deny', userMessage: blockedLine.trimEnd(), agentMessage: blockedLine.trimEnd() })}\n`;
+
+  if (cursorAdded.status !== 0 || cursorHooks.version !== 1 || cursorRun !== deniedLine) {
+    throw new Error(`${agent}: the guardrail registered for Cursor through the linked path did not deny a forced push: ${cursorAdded.stdout} ${cursorRun}`);
+  }
+
+  const cursorRemoval = cursorCommand(installedScripts, 'remove');
+  const cursorRemoved = cursorCommand(installedScripts, 'remove', '--confirm', cursorRemoval.document.previewHash);
+
+  if (cursorRemoved.status !== 0 || (await readFile(hooksFile, 'utf8')) !== '{\n  "version": 1,\n  "hooks": {}\n}\n') {
+    throw new Error(`${agent}: installed agent-framework guardrail remove cursor did not reverse the entry: ${cursorRemoved.stdout}`);
+  }
+
+  await rm(cursorDirectoryExisted ? hooksFile : path.dirname(hooksFile), { recursive: true });
+};
+
 const assertNoAdoptionState = async (actor) => {
   for (const dormantPath of [
     '.agent-framework.yaml',
@@ -73,6 +195,10 @@ const assertNoAdoptionState = async (actor) => {
     // an installed adapter is a dormant asset, not a registered integration
     // (SG-DIST-001, FR-ADAPT-002).
     '.git/change-evaluation-gate/evidence/activation/receipt.json',
+    // The destructive-command guardrail is registered only by a confirmed
+    // `agent-framework guardrail add` (FS-006, FS-007); installing never does it.
+    '.claude/settings.json',
+    '.cursor/hooks.json',
   ]) {
     try {
       await access(path.join(temporaryRoot, dormantPath));
@@ -401,7 +527,7 @@ try {
     }
 
     const installedAdapters = await readFile(
-      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters.mjs'),
+      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters', 'declarations', 'registry.mjs'),
       'utf8',
     );
 
@@ -440,8 +566,13 @@ try {
     // tokens, not a sentence, so a reflow of the skill's prose cannot read as
     // a failed install. The generated section itself is proved by the unit
     // suite that owns `draftGatePolicy`.
+    const installedGateDraft = await readFile(
+      path.join(path.dirname(setupScript), 'lib', 'configure', 'gate', 'draft.mjs'),
+      'utf8',
+    );
+
     if (
-      !installedSetupScript.includes('environment_files')
+      !installedGateDraft.includes('environment_files')
       || !(await readFile(setupDocument, 'utf8')).includes('environment_files')
     ) {
       throw new Error(`${agent}: installed framework-setup does not declare the Laravel evidence default`);
@@ -577,6 +708,34 @@ try {
         );
       }
 
+      // Base setup refuses a schema v4 file rather than rewriting it as v3
+      // (FS-005): through either path it states the refusal, exits 2, and the
+      // configured clone keeps every byte and gains no tracker document.
+      if (script === 'configure.mjs') {
+        const configuration = path.join(configuredRoot, '.agent-framework.yaml');
+        const before = await readFile(configuration, 'utf8');
+        const baseSetupArgv = ['--project', configuredRoot, '--tracker', 'local-markdown'];
+
+        for (const scriptPath of [installedScript, linkedScript]) {
+          const refused = runInstalledCommand(scriptPath, baseSetupArgv, configuredRoot);
+          const refusal = refused.status === 2 ? JSON.parse(refused.stdout) : null;
+          const trackerDocumentWritten = await access(path.join(configuredRoot, 'docs', 'agents'))
+            .then(() => true, () => false);
+
+          if (
+            refusal?.status !== 'refused'
+            || refusal.reasonCode !== 'schema-v4-configured'
+            || (await readFile(configuration, 'utf8')) !== before
+            || trackerDocumentWritten
+          ) {
+            throw new Error(
+              `${agent}: installed ${skill}/${script} did not refuse base setup on a schema v4 file: `
+              + `exit ${refused.status} ${refused.stdout}${refused.stderr}`,
+            );
+          }
+        }
+      }
+
       // The Framework command names base setup for this unconfigured project
       // and reaches the Gate installed beside it, never the source checkout.
       if (script === 'agent-framework.mjs') {
@@ -621,6 +780,8 @@ try {
         }
       }
     }
+
+    await assertInstalledGuardrail(agent, installedRoot, linkedClientRoot);
   }
 
   // Running the installed commands changed nothing either (SG-GUIDE-001).

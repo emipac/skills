@@ -91,6 +91,13 @@
  *    `interactive-guided-setup` consent channel as self-declared, and real
  *    commits are then allowed and denied by the hook it registered (TB-072,
  *    AC-GUIDE-001, FR-GUIDE-003, RISK-011).
+ *    `guardrail-beside-activated-cursor` — on a clone the packaged command
+ *    activated for Cursor, the destructive-command guardrail registered
+ *    through the `framework-setup` installed in that clone sits in
+ *    `.cursor/hooks.json` beside the Gate's own entry, which keeps every
+ *    byte; the clone stays healthy, the registered command denies a
+ *    destructive command in Cursor's observed answer, and removing it
+ *    restores the file exactly, still healthy (FS-007).
  * 8. `interrupted-commit-leaves-no-root` — a real `git commit` interrupted with
  *    `SIGINT` mid-evaluation, the way a maintainer presses Ctrl-C on a slow
  *    commit, terminates under the signal, moves no HEAD, and leaves no
@@ -128,7 +135,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  lstat, mkdtemp, mkdir, readdir, readFile, readlink, realpath, rm, stat, symlink, utimes, writeFile,
+  cp, lstat, mkdtemp, mkdir, readdir, readFile, readlink, realpath, rm, stat, symlink, utimes, writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -3668,6 +3675,123 @@ const commentedConfigurationPinsWhatTheFileHolds = async () => {
   return { name: 'commented-configuration-pins-what-the-file-holds', ok: findings.length === 0, findings };
 };
 
+/**
+ * The destructive-command guardrail registered beside an activated Gate's
+ * Cursor entry (FS-007).
+ *
+ * Two owners share `.cursor/hooks.json`: the Gate pins only its own `stop`
+ * entry, and `framework-setup` adds and removes one `beforeShellExecution`
+ * entry. This activates a real clone for Cursor through the packaged Gate
+ * command, then drives the `framework-setup` installed inside that clone —
+ * the copy a teammate's clone holds — through `guardrail add cursor` and
+ * `guardrail remove cursor`, each previewed and confirmed with its own token.
+ * The Gate's entry keeps every byte, `gate status` stays healthy throughout,
+ * the registered command — run as Cursor was observed to run it, in the
+ * project root — denies a destructive command, and removal restores the file
+ * the Gate wrote.
+ */
+const guardrailBesideActivatedCursor = async () => {
+  const findings = [];
+  const declared = describeAdapter('cursor');
+  const surface = declared.registration.file;
+  const root = await fixtureRepository({
+    files: { [surface]: { contents: '{\n  "version": 1,\n  "hooks": {}\n}\n' } },
+  });
+
+  await assertThrowawayRepository(root);
+
+  const installed = path.join(root, '.agents', 'skills', 'framework-setup');
+
+  await cp(path.dirname(path.dirname(FRAMEWORK_COMMAND)), installed, { recursive: true });
+
+  const preview = JSON.parse((await runPackagedCommand(root, ['activate', '--client', 'cursor', '--json'])).stdout || '{}');
+  const activated = JSON.parse((await runPackagedCommand(root, [
+    'activate', '--client', 'cursor', '--confirm', preview.observation?.confirmationToken ?? '', '--json',
+  ])).stdout || '{}');
+
+  if (activated.mutation?.state !== 'activated') {
+    findings.push(`The clone could not be activated for Cursor: ${JSON.stringify(activated.mutation)}`);
+
+    return { name: 'guardrail-beside-activated-cursor', ok: false, findings };
+  }
+
+  const healthy = async (moment) => {
+    const status = JSON.parse((await runPackagedCommand(root, ['status', '--json'])).stdout || '{}');
+
+    check(
+      findings,
+      status.observation?.state === 'activated' && status.observation?.health === 'healthy',
+      `The clone is not healthy ${moment}: ${JSON.stringify(status.observation?.next)}`,
+    );
+  };
+  const readSurface = () => readFile(path.join(root, surface), 'utf8');
+  const activatedFile = await readSurface();
+  const gateEntries = JSON.parse(activatedFile).hooks?.stop ?? [];
+  const gateEntryText = gateEntries.length === 1 ? `{\n        "command": ${JSON.stringify(gateEntries[0].command)}\n      }` : null;
+
+  check(findings, gateEntryText !== null && activatedFile.includes(gateEntryText), `The activated ${surface} does not hold one Gate entry: ${activatedFile}`);
+  await healthy('after activation');
+
+  const guardrail = async (operation, confirmation = null) => {
+    const result = await runFile(process.execPath, [
+      path.join(installed, 'scripts', 'agent-framework.mjs'),
+      'guardrail', operation, 'cursor', '--json',
+      ...(confirmation === null ? [] : ['--confirm', confirmation]),
+    ], { cwd: root, env: gitEnvironment() }).then(
+      ({ stdout }) => ({ exitCode: 0, stdout }),
+      (error) => ({ exitCode: error.code ?? 1, stdout: error.stdout ?? '' }),
+    );
+
+    return { ...result, document: JSON.parse(result.stdout || '{}') };
+  };
+  const confirm = async (operation) => {
+    const previewed = await guardrail(operation);
+    const applied = await guardrail(operation, previewed.document.previewHash ?? '');
+
+    check(
+      findings,
+      previewed.exitCode === 1 && applied.exitCode === 0 && applied.document.applied === true,
+      `guardrail ${operation} cursor was not previewed and confirmed: ${previewed.stdout}${applied.stdout}`,
+    );
+  };
+
+  await confirm('add');
+
+  const withGuardrail = await readSurface();
+  const registered = JSON.parse(withGuardrail).hooks ?? {};
+  const command = registered.beforeShellExecution?.[0]?.command ?? '';
+
+  check(
+    findings,
+    JSON.stringify(registered.stop) === JSON.stringify(gateEntries) && withGuardrail.includes(gateEntryText),
+    `guardrail add changed the Gate's entry: ${withGuardrail}`,
+  );
+  check(
+    findings,
+    command === 'node .agents/skills/framework-setup/scripts/guardrail.mjs --client cursor',
+    `guardrail add registered an unexpected entry: ${JSON.stringify(registered.beforeShellExecution)}`,
+  );
+  await healthy('with the guardrail registered beside the Gate');
+
+  // The payload is piped in by the shell, the way the client hands it over on
+  // standard input; `runFile` cannot feed standard input itself.
+  const answerTo = (shellCommand) => runFile('sh', ['-c', `printf '%s' '{"command":"${shellCommand}","cwd":"","hook_event_name":"beforeShellExecution"}' | ${command}`], {
+    cwd: root,
+    env: { ...gitEnvironment(), CURSOR_PROJECT_DIR: root },
+  }).then(({ stdout }) => stdout, (error) => `exit ${error.code}: ${error.stdout ?? ''}${error.stderr ?? ''}`);
+  const allowed = await answerTo('echo hello');
+  const denied = await answerTo('git reset --hard');
+
+  check(findings, allowed === '{"permission":"allow"}\n', `The registered command did not allow echo hello: ${JSON.stringify(allowed)}`);
+  check(findings, /^\{"permission":"deny","userMessage":"BLOCKED: 'git reset --hard'/.test(denied), `The registered command did not deny git reset --hard: ${JSON.stringify(denied)}`);
+
+  await confirm('remove');
+  check(findings, await readSurface() === activatedFile, `guardrail remove did not restore ${surface} as the Gate wrote it.`);
+  await healthy('after the guardrail was removed');
+
+  return { name: 'guardrail-beside-activated-cursor', ok: findings.length === 0, findings };
+};
+
 const main = async () => {
   const asJson = process.argv.includes('--json');
   let scenarios = [];
@@ -3704,6 +3828,7 @@ const main = async () => {
       await mixedProvisioningCommit(),
       await revisedRootChainsIntoSync(),
       await guidedSetupToActivated(),
+      await guardrailBesideActivatedCursor(),
       await providedBinaryCommit(),
       await derivedConfigurationRoundTrip(),
       await interruptedCommitLeavesNoRoot(),

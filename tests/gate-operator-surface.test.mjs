@@ -49,6 +49,33 @@ import { CONTROL_SURFACES } from '../skills/change-evaluation-gate/scripts/lib/s
 
 const runFile = promisify(execFile);
 
+test('operator decomposition preserves the public exports and packaged program paths', async () => {
+  const operator = await import('../skills/change-evaluation-gate/scripts/lib/operator-surface.mjs');
+  const activationSeams = await import('../skills/change-evaluation-gate/scripts/lib/activation-seams.mjs');
+
+  assert.deepEqual(Object.keys(operator).sort(), [
+    'COMMANDS',
+    'CONFIRMABLE_COMMANDS',
+    'CONFIRMED_COMMANDS',
+    'CONFIRMED_SELECTORS',
+    'DOCUMENT_VERSION',
+    'EXIT_OBSERVED',
+    'EXIT_UNHEALTHY',
+    'EXIT_UNRUNNABLE',
+    'PACKAGED_COMMAND',
+    'PACKAGED_HOOK_PROGRAM',
+    'USAGE',
+    'instructionSelectors',
+    'quoteForShell',
+    'renderDocument',
+    'runOperatorCommand',
+  ].sort());
+  assert.equal(operator.PACKAGED_COMMAND, activationSeams.PACKAGED_COMMAND);
+  assert.equal(operator.PACKAGED_HOOK_PROGRAM, fileURLToPath(
+    new URL('../skills/change-evaluation-gate/scripts/gate-precommit.mjs', import.meta.url),
+  ));
+});
+
 /**
  * This suite activates real clones and registers real hooks. Every fixture is
  * therefore a throwaway repository under the OS temporary directory and never
@@ -2581,7 +2608,7 @@ test('TB-060: next: uses git gate only where the shortcut activation records is 
  * printing a finding nobody is told how to act on.
  */
 test('TB-060 NFR-OPER-001: every finding status can emit maps to a remedy or an explicit informational marker', async () => {
-  const lifecycle = await readFile(path.join(LIBRARY, 'lifecycle.mjs'), 'utf8');
+  const lifecycle = await readFile(path.join(LIBRARY, 'lifecycle/status.mjs'), 'utf8');
   const hookRunner = await readFile(path.join(LIBRARY, 'hook-runner.mjs'), 'utf8');
   const configurationSource = await readFile(path.join(LIBRARY, 'configuration.mjs'), 'utf8');
   const literals = (source) => [...source.matchAll(/'([a-z][a-z0-9-]+)'/g)].map((match) => match[1]);
@@ -3199,7 +3226,7 @@ test('TB-065 NFR-OPER-001: every control surface and every runner-pin reason cod
  * usage text lists them; neither tells a maintainer what recovers a drift.
  */
 test('TB-065: one remedy table serves every site, and no inline remedy string remains', async () => {
-  const sources = (await readdir(LIBRARY)).filter((entry) => entry.endsWith('.mjs'));
+  const sources = (await readdir(LIBRARY, { recursive: true })).filter((entry) => entry.endsWith('.mjs'));
   const inline = /gate repair|gate deactivate|deactivate, then|`gate sync`|'gate sync'|re-pin what this clone was activated with/;
 
   for (const source of sources) {
