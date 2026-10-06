@@ -27,6 +27,7 @@ export const EXIT_UNRUNNABLE = 2;
 export const COMMANDS = Object.freeze([
   'activate',
   'status',
+  'history',
   'check',
   'doctor',
   'locks',
@@ -119,6 +120,7 @@ export const SELECTORS = Object.freeze({
     '--confirm': 'confirmation',
   }),
   status: Object.freeze({}),
+  history: Object.freeze({ '--limit': 'value', '--evidence': 'value', '--blob': 'value' }),
   // The index instead of the working tree. A flag, because the scope is one of
   // exactly two, and neither is inferred from the other (`TB-061`).
   check: Object.freeze({ '--staged': 'flag' }),
@@ -158,6 +160,9 @@ export const SELECTORS = Object.freeze({
  * from a second look at the argument vector (`TB-053`).
  */
 export const SELECTOR_FIELDS = Object.freeze({
+  '--limit': 'historyLimit',
+  '--evidence': 'evidenceId',
+  '--blob': 'blobId',
   '--client': 'client',
   '--actor': 'actor',
   '--resume': 'resume',

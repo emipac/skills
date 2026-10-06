@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Framework · Project dashboard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to project controls</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-icon" aria-hidden="true">F</span><div>Framework<span class="brand-subtitle">YOUR PROJECT, IN VIEW</span></div></div>
+      <div class="project-badge"><span class="dot" aria-hidden="true"></span><span id="project-label">Local project</span></div>
+      <nav aria-label="Project dashboard" id="navigation">
+        <button type="button" data-screen="overview" aria-current="page">Overview</button>
+        <button type="button" data-screen="setup">Guided setup</button>
+        <button type="button" data-screen="checks">Checks &amp; snapshots</button>
+        <button type="button" data-screen="configuration">Configuration</button>
+        <button type="button" data-screen="activity">Activity &amp; evidence</button>
+        <button type="button" data-screen="maintenance">Maintenance</button>
+        <button type="button" data-screen="help">Help &amp; guides</button>
+      </nav>
+      <div class="sidebar-footer"><strong>Runs on your machine</strong><p>One project. Existing Framework and Gate commands. Your approval before changes.</p></div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><span class="eyebrow">PROJECT CONTROL CENTER</span><button type="button" id="refresh" class="button secondary">Refresh health</button></header>
+      <main id="content" tabindex="-1">
+        <div id="screen"></div>
+        <section id="operation-panel" aria-label="Selected operation" hidden></section>
+        <section id="result-panel" aria-label="Operation result" hidden></section>
+      </main>
+      <footer class="footer"><span id="connection">Connecting to your local dashboard…</span><span>Framework · Local session</span></footer>
+    </div>
+  </div>
+  <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+  <dialog id="review-dialog" aria-labelledby="review-title"><div class="dialog-header"><h2 id="review-title">Review this change</h2><button type="button" id="dismiss-review" class="button secondary">Cancel</button></div><div id="review-content"></div><div class="dialog-actions"><button type="button" id="confirm-review" class="button primary">Confirm reviewed change</button></div></dialog>
+  <noscript><p>This dashboard needs JavaScript. You can still run Framework commands from your project terminal.</p></noscript>
+</body>
+</html>

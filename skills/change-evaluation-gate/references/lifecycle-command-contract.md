@@ -53,6 +53,7 @@ is the [evaluation coordination contract](evaluation-coordination-contract.md).
 | candidate release | `inspectRelease({ receipt, distribution })` | nothing |
 | `gate update` | `previewUpdate(...)`, `updateGate(...)` | one atomic receipt write, last |
 | `gate status` | `observeControlSurface(...)`, `statusGate(...)` | nothing |
+| `gate history` | `readHistory(...)`, `inspectCoordination(...)` | nothing; never creates an Evidence store |
 | `gate check` | `evaluateActivatedTree(...)` (`preflight-runner.mjs`), the one evaluation the preflight calls | nothing under the clone; one Evidence append when the decision did not pass |
 | `gate doctor` | `inspectActivation(...)` (`activation.mjs`), `probeDependencyProvisioning(...)` (`snapshot.mjs`), `resolveSensitiveInputs(...)` (`hook-runner.mjs`) | nothing under the clone; one probe directory under the temporary directory, removed |
 | `gate repair` | `previewRepair(...)`, `confirmRepair(...)` | one registration, confirmed |
@@ -87,6 +88,7 @@ Every lifecycle operation is reached here:
 
 ```
 gate status     [--json]
+gate history    [--limit <1..100>] [--evidence <sha256:id>] [--blob <sha256:id>] [--json]
 gate check      [--staged] [--json]
 gate doctor     [--json]
 gate locks      [--recover <token>] [--json]
@@ -106,9 +108,19 @@ preview printed. There is no flag that does both: `--confirm` with no token, and
 `--preview` given alongside a confirmation, are both refused as
 `preview-and-confirm-refused` and say why. That does not stop a caller running
 both commands back to back, and it is not meant to — it means no single command
-destroys anything. `status`, `check`, and `doctor` have no confirmed form at
+destroys anything. `status`, `history`, `check`, and `doctor` have no confirmed form at
 all: none of them mutates anything under the clone, so none has anything to
 confirm.
+
+`history` reads the newest distinct clone-wide Evidence identities (30 by
+default), verifies envelopes before summarizing snapshot identities and check
+outcomes, and reports coordination holder/liveness facts. `--evidence` selects
+one verified envelope; `--blob` requires that selection and membership in its
+log descriptors. Retained log bytes are hash-verified and display is bounded.
+Missing, malformed, partially appended, or inaccessible data produces warnings;
+merely viewing history creates no store or project state. Linked worktrees
+share the clone's store. Temporary execution paths are historical and are not
+returned as browsable files, and no live per-check progress is inferred.
 
 **A confirmation may declare its consent channel.** `gate activate`, `gate
 sync`, `gate repair`, and `gate deactivate` accept `--consent-channel

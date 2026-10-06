@@ -152,6 +152,16 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
 
   const projectRoot = path.resolve(cwd, options.project ?? '.');
 
+  if (options.subcommand === 'ui') {
+    try {
+      const { runUi } = await import('../ui/server.mjs');
+      const result = await runUi({ projectRoot, environment, port: options.port });
+      return { exitCode: result.document.exitStatus, stdout: result.render(result.document), stderr: '', document: result.document };
+    } catch {
+      return { exitCode: EXIT_UNRUNNABLE, stdout: '', stderr: 'The project dashboard could not start. Check the project directory and local port.\n', document: null };
+    }
+  }
+
   if (options.subcommand === 'setup' && !options.json && terminal?.interactive === true) {
     return runGuidedSetup({ projectRoot, environment, terminal });
   }

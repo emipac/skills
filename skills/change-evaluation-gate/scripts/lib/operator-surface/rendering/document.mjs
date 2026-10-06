@@ -11,6 +11,13 @@ import { renderSync } from './sync.mjs';
 const RENDERERS = Object.freeze({
   activate: renderActivate,
   status: renderStatus,
+  history: ({ history, coordination }) => [
+    `evidence: ${history.entries.length} recorded evaluations (clone-wide)`,
+    `activity: ${coordination?.held ? coordination.liveness : 'idle'}`,
+    ...history.entries.map((entry) => `  ${entry.appendedAt} ${entry.outcome} ${entry.evidenceId}`),
+    ...history.warnings.map((warning) => `warning: ${warning}`),
+    ...(history.selected?.log?.text ? [history.selected.log.text] : []),
+  ],
   check: renderCheck,
   doctor: renderDoctor,
   locks: renderLocks,
@@ -56,7 +63,7 @@ export const renderDocument = (document) => [
   // what it is, so the preview sentence would be false there (`TB-061`).
   // Nor is a doctor: it writes nothing under the clone, and its own
   // `footprint:` line states the one probe it made (`TB-063`).
-  ...(['check', 'doctor'].includes(document.command)
+  ...(['check', 'doctor', 'history'].includes(document.command)
     ? []
     : (document.mutation === null
       ? ['preview: nothing was written, nothing was repaired, and nothing was removed.']

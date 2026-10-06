@@ -4,6 +4,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 // Clients install a skill wherever they like, and some of them link: a project
 // that installs for both Claude and the shared agent layout ends up with
@@ -21,6 +22,31 @@ const installedCommands = [
   { skill: 'to-tickets', script: 'audit-ticket-contracts.mjs', argv: [] },
   { skill: 'verify-change', script: 'verification-plan.mjs', argv: [] },
 ];
+
+/** UI assets and operation imports must survive both installed and linked layouts. */
+const assertInstalledUi = async (agent, installedRoot, linkedClientRoot) => {
+  const roots = [path.join(temporaryRoot, installedRoot, 'framework-setup'), path.join(linkedClientRoot, 'framework-setup')];
+  for (const skillRoot of roots) {
+    const { startProjectUi } = await import(pathToFileURL(path.join(skillRoot, 'scripts/lib/ui/server.mjs')));
+    const ui = await startProjectUi({ projectRoot: temporaryRoot, environment: { ...process.env, PATH: pathWithoutGlobalGate } });
+    try {
+      if (ui.projectRoot !== await realpath(temporaryRoot)) throw new Error(`${agent}: UI did not bind the installed project root.`);
+      const denied = await fetch(`${ui.origin}/api/overview`);
+      if (denied.status !== 403) throw new Error(`${agent}: UI observation accepted no session token.`);
+      for (const asset of ['/', '/app.mjs', '/styles.css', '/dom.mjs', '/forms.mjs', '/renderers.mjs', '/download.mjs', '/favicon.svg']) {
+        const response = await fetch(`${ui.origin}${asset}`);
+        const contents = await response.text();
+        if (response.status !== 200 || contents.length === 0) throw new Error(`${agent}: installed UI asset ${asset} is unavailable.`);
+        if (contents.includes(new URL(ui.url).hash.slice(1))) throw new Error(`${agent}: UI asset included its session credential.`);
+      }
+      const overview = await fetch(`${ui.origin}/api/overview`, { headers: { Authorization: `Bearer ${new URL(ui.url).hash.slice(1)}` } });
+      const document = await overview.json();
+      if (overview.status !== 200 || document.projectRoot !== ui.projectRoot) throw new Error(`${agent}: UI overview failed through ${skillRoot}.`);
+    } finally {
+      await ui.close();
+    }
+  }
+};
 
 // A `change-evaluation-gate` a developer linked globally would be found on the
 // path before the installed skill, so the installed commands run without one.
@@ -782,6 +808,7 @@ try {
     }
 
     await assertInstalledGuardrail(agent, installedRoot, linkedClientRoot);
+    await assertInstalledUi(agent, installedRoot, linkedClientRoot);
   }
 
   // Running the installed commands changed nothing either (SG-GUIDE-001).

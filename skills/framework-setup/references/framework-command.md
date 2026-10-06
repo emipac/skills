@@ -6,6 +6,37 @@ refusals, and its exit status. The workflow that uses them is in
 `node <skill-directory>/scripts/agent-framework.mjs <subcommand>`, or as
 `agent-framework <subcommand>` where the package bin is on the path.
 
+## Local project dashboard: `agent-framework ui`
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs ui [--project <directory>] [--port <0..65535>]
+```
+
+Run this from the project you want to manage, then open the printed URL. The
+default port is selected automatically. The dependency-free server listens on
+`127.0.0.1` and stays bound to that project for its lifetime. The URL contains
+a session credential in its fragment; the browser removes it from the address
+bar after opening the session. Restarting the command creates a new session.
+
+The dashboard presents setup, configuration, health, checks, worktrees,
+activity, evidence, and maintenance. Actions use the existing owning commands.
+The static report can also be exported and downloaded as HTML; it retains the
+existing report's non-interactive format and creates no project file.
+Writes require a separately reviewed preview and explicit confirmation;
+configuration changes and activation re-pinning remain separate decisions.
+First-time Framework setup adds a reviewed list of its four destinations and
+refuses an existing configuration. No Gate adoption happens merely by opening
+the dashboard. The Framework dashboard still works when Gate is not installed.
+
+Activity distinguishes repository worktrees, temporary evaluation snapshot
+identities, durable clone-wide evidence, and jobs started in this UI session.
+Gate exposes no live per-check progress or snapshot file browser. Passing
+operator checks are not appended to durable evidence. Session job history is
+in memory and disappears when the server stops.
+
+Press Ctrl+C to stop. Queued jobs are cancelled; an operation already running
+is allowed to finish through its owner before shutdown completes.
+
 ## Adopting the Gate: `agent-framework setup`
 
 The recommended adoption path is the Framework command, which ships in this

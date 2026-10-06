@@ -6,6 +6,7 @@ import { operateCheck } from './commands/check.mjs';
 import { operateCleanup } from './commands/cleanup.mjs';
 import { operateDeactivate } from './commands/deactivate.mjs';
 import { operateDoctor } from './commands/doctor.mjs';
+import { operateHistory } from './history/command.mjs';
 import { operateLocks } from './commands/locks.mjs';
 import { operatePrune } from './commands/prune.mjs';
 import { operateRepair } from './commands/repair.mjs';
@@ -22,6 +23,7 @@ import { USAGE } from './usage.mjs';
 const OPERATIONS = Object.freeze({
   activate: operateActivate,
   status: operateStatus,
+  history: operateHistory,
   check: operateCheck,
   doctor: operateDoctor,
   locks: operateLocks,

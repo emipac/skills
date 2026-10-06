@@ -163,3 +163,52 @@ Verification: the 132-test analysis baseline passed; after extraction, 159
 affected tests passed. Activation, lifecycle, hook-conformance, and installation
 smoke checks passed, along with `npm run validate` and whitespace checks. PHP,
 Filament, and browser test layers do not apply to this Node CLI decomposition.
+
+## Added a local project dashboard
+
+- Added `agent-framework ui [--project <directory>] [--port <0..65535>]`,
+  a dependency-free loopback dashboard bound to one canonical project. Server,
+  jobs, operation contracts, validation, setup review, worktree discovery, and
+  report export live in focused modules under Framework's `scripts/lib/ui/`;
+  native browser assets live in `scripts/ui-assets/`.
+- Added overview, guided setup, checks and snapshot results, effective/pinned
+  configuration, activity and evidence, maintenance, and beginner guides.
+  Existing commands still own behavior; Framework reaches Gate only through
+  its executable/JSON boundary. Static report export keeps the existing
+  non-interactive format and downloads HTML without changing the project.
+- Kept mutations behind exact reviewed, expiring, one-use previews and separate
+  confirmations. Configuration revisions and re-pinning remain independent.
+  Initial setup refuses existing configuration and linked destination paths.
+  Added authentication, Host/Origin checks, a static asset allowlist, bounded
+  serial jobs, safe text rendering, and graceful owner-operation shutdown.
+- Added read-only `gate history` for verified, bounded clone-wide evidence and
+  coordination facts. It creates no store, authorizes log reads through their
+  selected envelope, and verifies retained bytes. The dashboard distinguishes
+  Git worktrees from temporary evaluation snapshots and does not infer live
+  per-check progress or invent durable records for passing operator checks.
+- Used staged subagent investigations, implementation, parent verification,
+  and independent reviews. Fixed an asynchronous startup import cycle, setup
+  symlink escapes, confirmation eviction at queue capacity, and hidden owner
+  refusals before completing browser verification.
+
+Verification: all 55 final affected tests passed. The full regression suite
+(894 passed, one existing skip),
+installation checks for all five clients through installed and linked paths,
+activation smoke (23 scenarios), lifecycle smoke (7 scenarios), repository
+validation, and whitespace checks passed. Real browser checks covered
+activation preview/cancel/confirm, focus restoration, check results, pinned
+values, session URL removal, report download, and responsive tables. The final
+browser run reported no console errors and no secret-canary output. Loopback
+tests required approved execution outside the sandbox; activation smoke used
+an isolated temporary directory to avoid cross-suite directory-list changes.
+
+Added a dashboard usage guide to `docs/framework-guide.html` as Section 16,
+with contents, installation, and quick-start links. It covers launch options,
+the seven screens, reviewed setup, checks and evidence, maintenance, session
+credentials, and static report downloads while preserving existing anchors
+and policy examples. Updated the displayed release to 0.12.0.
+
+Verification: all 23 guide and Gate configuration tests passed, along with
+repository validation and whitespace checks. Browser checks confirmed the
+new section, seven-screen table, desktop and mobile widths without horizontal
+page overflow, and no console errors or warnings.

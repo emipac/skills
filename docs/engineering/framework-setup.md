@@ -39,3 +39,9 @@ repositories that intentionally exclude an SRS.
 Local Markdown, GitHub Issues, Jira, and Linear are first-class adapters.
 Repeated configuration is byte-identical, and automated tests prove setup
 leaves every discovered `AGENTS.md` unchanged.
+
+`agent-framework ui` opens a lightweight local project dashboard through the
+URL it prints. It needs only the existing Node runtime, uses the same owning
+commands, and keeps preview and confirmation separate. See the
+[dashboard command guide](../../skills/framework-setup/references/framework-command.md#local-project-dashboard-agent-framework-ui)
+for launch options, session handling, and activity limitations.
