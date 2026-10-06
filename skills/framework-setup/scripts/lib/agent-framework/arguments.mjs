@@ -6,6 +6,7 @@ export const USAGE = [
   '       agent-framework config show [--json] [--project <directory>]',
   '       agent-framework config suggest [--json] [--project <directory>]',
   '       agent-framework report --html [--out <path>] [--project <directory>]',
+  '       agent-framework ui [--project <directory>] [--port <0..65535>]',
   ...Object.entries(gateRevisions).map(([name, { argument, options }]) => [
     `       agent-framework config ${name} <${argument}>`,
     ...options.map((option) => `[--${option} <${option}>]`),
@@ -20,12 +21,13 @@ export const parseArguments = (argv) => {
   const guardrail = first === 'guardrail' && guardrailOperations.includes(second) ? { operation: second, client: null } : null;
   const subcommand = first === 'config' && (['show', 'suggest'].includes(second) || revision !== null) ? `config ${second}` : first;
 
-  if (!['setup', 'config show', 'config suggest', 'report'].includes(subcommand) && revision === null && guardrail === null) {
+  if (!['setup', 'config show', 'config suggest', 'report', 'ui'].includes(subcommand) && revision === null && guardrail === null) {
     return null;
   }
 
   const report = subcommand === 'report';
-  const rest = argv.slice(['setup', 'report'].includes(subcommand) ? 1 : 2);
+  const ui = subcommand === 'ui';
+  const rest = argv.slice(['setup', 'report', 'ui'].includes(subcommand) ? 1 : 2);
   const options = {
     subcommand,
     json: false,
@@ -36,10 +38,12 @@ export const parseArguments = (argv) => {
     confirmation: null,
     acknowledgeWeakening: false,
     guardrail,
+    ...(ui ? { port: 0 } : {}),
   };
   const valued = new Set([
     '--project',
     ...(report ? ['--out'] : []),
+    ...(ui ? ['--port'] : []),
     ...(guardrail === null ? [] : ['--confirm']),
     ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)]),
   ]);
@@ -51,7 +55,7 @@ export const parseArguments = (argv) => {
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
 
-    if (argument === '--json' && !report) {
+    if (argument === '--json' && !report && !ui) {
       options.json = true;
     } else if (argument === '--html' && report) {
       options.html = true;
@@ -64,6 +68,9 @@ export const parseArguments = (argv) => {
         options.project = value;
       } else if (argument === '--out') {
         options.out = value;
+      } else if (argument === '--port') {
+        if (!/^\d+$/.test(value) || Number(value) > 65535) return null;
+        options.port = Number(value);
       } else if (argument === '--confirm') {
         options.confirmation = value;
       } else {

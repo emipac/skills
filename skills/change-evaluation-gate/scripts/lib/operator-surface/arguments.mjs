@@ -189,6 +189,12 @@ export const parseArguments = (argv) => {
       confirmation = value;
     }
 
+    if (['--evidence', '--blob', '--limit'].includes(argument)) {
+      const valid = argument === '--limit' ? /^[1-9][0-9]*$/.test(value) && Number(value) <= 100 : CONFIRMATION_TOKEN.test(value);
+      if (!valid) return { json, ...failure({ command, reasonCode: 'selector-invalid', detail: `${argument} has an invalid value.` }) };
+      selector[SELECTOR_FIELDS[argument]] = argument === '--limit' ? Number(value) : value;
+    }
+
     if (argument === '--evaluation') {
       selector.evaluationIds = [...(selector.evaluationIds ?? []), value];
     }
@@ -283,6 +289,10 @@ export const parseArguments = (argv) => {
 
       selector.reclaimBytes = bytes;
     }
+  }
+
+  if (command === 'history' && selector.blobId && !selector.evidenceId) {
+    return { json, ...failure({ command, reasonCode: 'selector-invalid', detail: '--blob requires --evidence.' }) };
   }
 
   if (previewRequested && confirmation !== null) {
