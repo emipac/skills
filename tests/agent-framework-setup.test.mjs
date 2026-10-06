@@ -369,6 +369,23 @@ const setupOnlyInstall = async (t) => {
 
 const commandsOf = (plan) => plan.steps.map((step) => step.id);
 
+test('the Framework command entry preserves its public exports', async () => {
+  const { runFrameworkCommand: run, ...constants } = await import(pathToFileURL(ENTRY).href);
+
+  assert.equal(run, runFrameworkCommand);
+  assert.deepEqual(constants, {
+    CONFIG_DOCUMENT_VERSION: 'agent-framework/config-show/1',
+    DOCUMENT_VERSION: 'agent-framework/setup/1',
+    EXIT_DONE: 0,
+    EXIT_STEPS_REMAIN: 1,
+    EXIT_UNRUNNABLE: 2,
+    GUARDRAIL_DOCUMENT_VERSION: 'agent-framework/guardrail/1',
+    GUIDED_DOCUMENT_VERSION: 'agent-framework/setup-guided/1',
+    REVISION_DOCUMENT_VERSION: 'agent-framework/config-revision/1',
+    SUGGEST_DOCUMENT_VERSION: 'agent-framework/config-suggest/1',
+  });
+});
+
 /**
  * THE FIRST RED TEST.
  *
@@ -640,7 +657,22 @@ test('TB-074 SG-OWNER-001: the Framework command holds no remedy-to-command mapp
 
   assert.ok(remedies.has('sync') && remedies.has('activation-transaction'));
 
-  for (const source of [ENTRY, path.join(SETUP_SKILL, 'scripts', 'lib', 'gate-command.mjs')]) {
+  const implementation = path.join(SETUP_SKILL, 'scripts', 'lib', 'agent-framework');
+  const implementationModules = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const modules = await Promise.all(entries.map((entry) => {
+      const file = path.join(directory, entry.name);
+
+      return entry.isDirectory()
+        ? implementationModules(file)
+        : (entry.isFile() && entry.name.endsWith('.mjs') ? [file] : []);
+    }));
+
+    return modules.flat();
+  };
+  const modules = await implementationModules(implementation);
+
+  for (const source of [ENTRY, ...modules, path.join(SETUP_SKILL, 'scripts', 'lib', 'gate-command.mjs')]) {
     const code = (await readFile(source, 'utf8'))
       .split('\n')
       .filter((line) => !/^\s*(\/\/|\/\*\*?|\*)/.test(line))
@@ -653,7 +685,11 @@ test('TB-074 SG-OWNER-001: the Framework command holds no remedy-to-command mapp
     assert.doesNotMatch(code, /\.remedy ===|REMEDY_SUBCOMMANDS/, `${path.basename(source)} decides by remedy.`);
   }
 
-  assert.match(await readFile(ENTRY, 'utf8'), /\.subcommands\b/, 'setup does not read the subcommands the Gate names.');
+  assert.match(
+    await readFile(path.join(implementation, 'setup', 'plan.mjs'), 'utf8'),
+    /\.subcommands\b/,
+    'setup does not read the subcommands the Gate names.',
+  );
 });
 
 /**

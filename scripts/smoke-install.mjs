@@ -527,7 +527,7 @@ try {
     }
 
     const installedAdapters = await readFile(
-      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters.mjs'),
+      path.join(temporaryRoot, installedRoot, 'change-evaluation-gate', 'scripts', 'lib', 'adapters', 'declarations', 'registry.mjs'),
       'utf8',
     );
 
@@ -566,8 +566,13 @@ try {
     // tokens, not a sentence, so a reflow of the skill's prose cannot read as
     // a failed install. The generated section itself is proved by the unit
     // suite that owns `draftGatePolicy`.
+    const installedGateDraft = await readFile(
+      path.join(path.dirname(setupScript), 'lib', 'configure', 'gate', 'draft.mjs'),
+      'utf8',
+    );
+
     if (
-      !installedSetupScript.includes('environment_files')
+      !installedGateDraft.includes('environment_files')
       || !(await readFile(setupDocument, 'utf8')).includes('environment_files')
     ) {
       throw new Error(`${agent}: installed framework-setup does not declare the Laravel evidence default`);

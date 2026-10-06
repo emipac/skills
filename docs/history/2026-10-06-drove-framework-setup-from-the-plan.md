@@ -31,3 +31,135 @@ section (recorded as FS-005).
 
 Verification: `npm run validate`, `npm run test:install`, and
 `npm run test:unit` (795 passing).
+
+## Decomposed the Framework command
+
+- Extracted `agent-framework.mjs` into 20 modules under
+  `scripts/lib/agent-framework/`, grouped into setup, configuration, guardrail,
+  and report responsibilities, with command dispatch and supporting helpers.
+- Kept the original executable path, all ten public exports, and the CLI block.
+  The entry point went from 2,550 to 44 lines. All 128 declarations are unchanged
+  apart from the entry-script path anchor required by its new module location.
+- Preserved the existing Gate locator, entry-point helper, and terminal module
+  in place. The extracted modules have no circular imports.
+- Extended the ownership test to inspect every extracted module and added a
+  regression test for the original public exports.
+
+Verification: setup, entry-point, Claude Code guardrail registration, and Cursor
+guardrail registration tests passed; `npm run validate`, `npm run test:install`,
+and `git diff --check` passed. The installation smoke needed network access to
+fetch the skills installer after the sandbox could not resolve npm's registry.
+PHP, Filament, and browser test layers do not apply to this Node CLI decomposition.
+
+## Decomposed configuration setup
+
+- Extracted `configure.mjs` into the planned 27 modules under
+  `scripts/lib/configure/`, grouping discovery, migration, Gate policy,
+  revisions, guardrail registration, and base setup separately.
+- Kept the original command path, CLI guard, and all 19 public exports. The
+  entry point went from 3,235 to 32 lines. All 120 declarations are unchanged
+  apart from six location-dependent path references required by extraction.
+- Preserved lazy Gate imports, preview and confirmation behavior, write
+  mechanisms, and the existing callers in `lib/agent-framework/`. The extracted
+  modules have no circular imports.
+- Extended the check-catalogue ownership test to scan every extracted module,
+  added public-export and standalone-install regression tests, and updated the
+  installation smoke to inspect the evidence default in the extracted drafter.
+
+Verification: 70 configuration/draft tests and 129 Framework command,
+entry-point, and guardrail registration tests passed. `npm run validate`,
+`npm run test:install`, and whitespace checks passed. PHP, Filament, and browser
+test layers do not apply to this Node CLI decomposition.
+
+## Decomposed Gate lifecycle
+
+- Extracted `scripts/lib/lifecycle.mjs` into the planned 11 modules under
+  `scripts/lib/lifecycle/`, separating release inspection, update, status,
+  deactivation, uninstall, configuration cleanup, repair, evidence pruning,
+  coordination inspection, constants, and receipt lineage.
+- Kept the original import path and all 19 public exports. The facade went
+  from 1,452 to 64 lines. All 27 declarations are byte-identical apart from
+  export keywords, including their complete transaction and observation bodies.
+- Preserved confirmation hashes, update and rollback order, ownership and
+  drift checks, read-only status, and existing write mechanisms. The extracted
+  modules have no internal circular imports.
+- Extended the remedy-literal guard to all nested Gate library modules and
+  the client-name guard to the lifecycle implementation. Updated the
+  status-finding coverage test to inspect its new source location and added
+  a regression test for all public exports.
+
+Verification: the 108-test baseline passed; after extraction, 298 affected
+tests passed. Lifecycle, activation, hook-conformance, and installation smoke
+checks passed, along with `npm run validate` and whitespace checks. PHP,
+Filament, and browser test layers do not apply to this Node library decomposition.
+
+## Decomposed Gate activation
+
+- Extracted `scripts/lib/activation.mjs` into 22 modules under
+  `scripts/lib/activation/`, grouping hook handling, adapter registration,
+  read-only inspection, activation, sync, receipt helpers, and transaction
+  bookkeeping.
+- Kept the original import path and all 37 public exports. The facade went
+  from 2,920 to 86 lines. All 73 declarations are byte-identical apart from
+  export keywords; the activation and sync pipeline bodies remain intact.
+- Preserved preview and receipt identities, consent checks, transaction order,
+  reverse rollback, hook ownership and drift checks, atomic publication, and
+  sync's retention of existing registrations. The extracted modules have no
+  internal circular imports.
+- Extended the client-ownership assertion to scan the extracted implementation
+  recursively and added a regression test for the public exports.
+
+Verification: 297 affected tests passed, along with the activation, lifecycle,
+and hook-conformance smoke checks. `npm run validate`, `npm run test:install`,
+and whitespace checks passed. Installation verification needed network access
+after the sandbox could not resolve npm's registry. PHP, Filament, and browser
+test layers do not apply to this Node library decomposition.
+
+## Decomposed Gate adapters
+
+- Extracted `scripts/lib/adapters.mjs` into 12 modules under
+  `scripts/lib/adapters/`, separating declaration contracts, the static client
+  registry, capability and registration validation, native identity and
+  repository normalization, decision and feedback presentation, evaluation,
+  compatibility baselines, support classification, and shared value checks.
+- Kept the original import path and all 27 public exports. The facade went
+  from 1,895 to 68 lines. All 52 declarations are byte-identical apart from
+  export keywords, including the complete frozen registry, invocation pipeline,
+  and compatibility baseline.
+- Preserved client roles, trust and feedback declarations, native field shapes,
+  timeout behavior, role-derived authorization, feedback limits, remedy lookup,
+  captured-payload evidence, and support classification. The extracted modules
+  have no internal circular imports.
+- Extended client-name coverage to every extracted module outside the registry,
+  pointed native-field ownership and installation checks at the moved registry,
+  and added a regression test for the public exports. The existing recursive
+  remedy guard covers the new implementation.
+
+Verification: the 84-test baseline passed; after extraction, 222 affected tests
+passed. Adapter conformance, runtime portability, and installation smoke checks
+passed, along with `npm run validate` and whitespace checks. PHP, Filament, and
+browser test layers do not apply to this Node library decomposition.
+
+## Decomposed the Gate operator surface
+
+- Extracted `scripts/lib/operator-surface.mjs` into the planned 32 modules
+  under `scripts/lib/operator-surface/`, separating argument parsing, command
+  contracts, clone resolution, runtime discovery, outcomes, document assembly,
+  command dispatch, 13 command handlers, and text rendering.
+- Kept the original import path and all 15 public exports, including the
+  `PACKAGED_COMMAND` re-export. The facade went from 3,639 to 91 lines.
+  All 101 declarations are unchanged apart from export keywords and the
+  `HERE` directory anchor required to preserve the original installed paths.
+- Preserved complete parser and handler bodies, confirmation and selector
+  behavior, preview hashes, consent metadata, exit codes, JSON and text output,
+  store-opening conditions, and the bounded installed-manifest search.
+  The extracted modules have no internal circular imports.
+- Extended the doctor platform-branch scan and control-surface ownership
+  assertion to inspect the extracted operator implementation. Added public
+  export and packaged-path regression coverage; the existing recursive remedy
+  guard continues to cover every new module.
+
+Verification: the 132-test analysis baseline passed; after extraction, 159
+affected tests passed. Activation, lifecycle, hook-conformance, and installation
+smoke checks passed, along with `npm run validate` and whitespace checks. PHP,
+Filament, and browser test layers do not apply to this Node CLI decomposition.
