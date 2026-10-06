@@ -14,5 +14,7 @@ exits 2, and none of the four managed files nor any `AGENTS.md` changes.
 In-process, `configureProject` rejects with an error carrying that
 `reasonCode`. The detail names `agent-framework config <revision>` for the Gate
 section; any other change to a schema v4 file stays the maintainer's own edit.
-A missing file and schema versions 2 and 3 behave exactly as before, including
+A schema version above 4, which this release cannot read, is refused the same
+way as `schema-unsupported` rather than replaced by an older one. A missing
+file and schema versions 2 and 3 behave exactly as before, including
 byte-identical repeat runs.

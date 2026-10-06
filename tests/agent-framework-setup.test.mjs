@@ -3494,6 +3494,35 @@ for (const [name, fixture, state] of SCHEMA_V4_FIXTURES) {
   });
 }
 
+test('FS-005: base setup refuses a schema version above 4 as unsupported, writing nothing', async (t) => {
+  const root = await noConfigurationClone(t);
+
+  for (const version of [5, 12]) {
+    await writeFile(
+      path.join(root, '.agent-framework.yaml'),
+      `schema_version: ${version}\nbackend: laravel\nfrontend: none\ntracker: local-markdown\n`,
+      'utf8',
+    );
+
+    const before = await cloneHash(root);
+    const result = await baseSetup(root);
+    const refusal = JSON.parse(result.stdout);
+
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(refusal.status, 'refused');
+    assert.equal(refusal.reasonCode, 'schema-unsupported');
+    assert.match(refusal.detail, new RegExp(`declares schema version ${version}`));
+    assert.match(refusal.detail, /Nothing was written\./);
+
+    await assert.rejects(
+      configureProject({ projectRoot: root, selections: { tracker: 'local-markdown' } }),
+      (error) => error.reasonCode === 'schema-unsupported' && error.message === refusal.detail,
+    );
+
+    assert.equal(await cloneHash(root), before, `a refused base setup on schema ${version} changed a byte.`);
+  }
+});
+
 test('FS-005 AC: setup --json on a schema v4 clone names no base setup step, with or without the Gate module', async (t) => {
   const { entry } = await setupOnlyInstall(t);
   const clones = [

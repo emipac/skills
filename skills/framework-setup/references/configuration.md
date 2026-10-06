@@ -61,8 +61,8 @@ Do not reinterpret schema v3 `unknown` as v4 `none`. Use the previewed
 `--migrate-v4 --mapping <mapping-json>` flow and confirm its exact hash.
 Migration does not configure or activate the Change Evaluation Gate.
 Base setup (`configure.mjs --tracker …`) writes schema v3 only: on a schema v4
-file it is refused with `schema-v4-configured`, exit status 2, and writes
-nothing. Revise a schema v4 Gate section with `agent-framework config
+file it is refused with `schema-v4-configured`, and on any higher version with
+`schema-unsupported`; either way it exits 2 and writes nothing. Revise a schema v4 Gate section with `agent-framework config
 <revision>`; any other schema v4 change is the maintainer's own edit.
 
 Use `--exclude-scripts` for discovered commands that are redundant, unsafe, or

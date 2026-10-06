@@ -32,8 +32,8 @@ from where the client installed the skill; do not assume a path.
   argument; a `NAME=value` argument is refused.
 - **Run base setup only while the plan says `no-configuration` or
   `schema-v3`.** `configure.mjs --tracker …` writes a schema v3 file from
-  scratch, so it refuses a schema v4 file (`schema-v4-configured`, exit 2) and
-  writes nothing.
+  scratch, so it refuses a schema v4 file (`schema-v4-configured`) and any
+  higher version (`schema-unsupported`), exit 2, and writes nothing.
 - **The Gate is opt-in.** Never configure or activate it unless the maintainer
   asked for it in this conversation; an installed Gate module is not consent.
 - Never write `AGENTS.md` or `CLAUDE.md`; preserve every discovered `AGENTS.md`

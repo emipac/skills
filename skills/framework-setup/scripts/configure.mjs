@@ -2531,10 +2531,21 @@ const normalizeSourceScopes = (sourceScopes) => Object.fromEntries(
  * Base setup writes a schema v3 file from discovery. A schema v4 file holds
  * decisions discovery cannot reproduce — Command descriptors, mapped profiles,
  * the Gate section — so it is refused before discovery and before any write,
- * rather than rewritten as v3 (`FS-005`).
+ * rather than rewritten as v3 (`FS-005`). A version above 4 is one this
+ * release cannot read at all, so it is refused as unsupported rather than
+ * replaced by an older one.
  */
 const refuseSchemaV4 = async (projectRoot) => {
   const { schemaVersion } = await readExistingConfiguration(path.resolve(projectRoot));
+
+  if (schemaVersion > 4) {
+    throw revisionRefusal(
+      'schema-unsupported',
+      `.agent-framework.yaml declares schema version ${schemaVersion}, which this release of framework-setup does not support, `
+        + 'and base setup writes schema version 3 from discovery: rewriting it would replace a newer contract with an older one. '
+        + 'Nothing was written. Update the framework-setup skill before configuring this repository.',
+    );
+  }
 
   if (schemaVersion === 4) {
     throw revisionRefusal(

@@ -38,7 +38,9 @@ installed and linked paths and requires the refusal, and fails without the fix.
 `npm run test:unit` (801 passing, 1 skipped, three runs) and `npm run validate`
 pass.
 
-Limits. Only schema version 4 is refused; a file declaring a version above 4 is
-still rewritten as v3 by base setup, as before. No schema v4-preserving rewrite
+A follow-up the same day extended the refusal to every schema version above 4,
+as `schema-unsupported`, so no newer contract is replaced by an older one.
+
+Limits. No schema v4-preserving rewrite
 exists: deciding which discovered values may override confirmed v4 ones is a
 product decision this ticket did not make.
