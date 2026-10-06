@@ -63,6 +63,80 @@ const runInstalledCommand = (scriptPath, argv, cwd) => {
 
 const sourceRoot = process.cwd();
 
+/** Run an installed script with `input` on standard input, as a client hook runs it. */
+const runWithInput = (program, argv, input) => {
+  try {
+    return { status: 0, stdout: execFileSync(program, argv, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }), stderr: '' };
+  } catch (error) {
+    if (typeof error.status !== 'number') {
+      throw error;
+    }
+
+    return { status: error.status, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+  }
+};
+
+const bashPayload = (command) => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } });
+
+/**
+ * The installed guardrail blocks a destructive payload and allows an ordinary
+ * one through the installed and the linked path, and registers with Claude
+ * Code through both: previewed, confirmed with the preview's own token, run as
+ * Claude Code's exec form runs it, then removed again (FS-006).
+ */
+const assertInstalledGuardrail = async (agent, installedRoot, linkedClientRoot) => {
+  const installedScripts = path.join(temporaryRoot, installedRoot, 'framework-setup', 'scripts');
+  const linkedScripts = path.join(linkedClientRoot, 'framework-setup', 'scripts');
+  const blockedLine = "BLOCKED: 'git push -f origin main' matches dangerous pattern 'git push --force'. The user has prevented you from doing this.\n";
+
+  for (const scripts of [installedScripts, linkedScripts]) {
+    const blocked = runWithInput(process.execPath, [path.join(scripts, 'guardrail.mjs')], bashPayload('git push -f origin main'));
+    const allowed = runWithInput(process.execPath, [path.join(scripts, 'guardrail.mjs')], bashPayload('git checkout .env.example'));
+
+    if (blocked.status !== 2 || blocked.stderr !== blockedLine || allowed.status !== 0 || `${allowed.stdout}${allowed.stderr}` !== '') {
+      throw new Error(`${agent}: the installed guardrail at ${scripts} did not block a forced push and allow a checkout: exit ${blocked.status} ${blocked.stderr}`);
+    }
+  }
+
+  const settingsFile = path.join(temporaryRoot, '.claude', 'settings.json');
+  const guardrailCommand = (scripts, operation, ...argv) => {
+    const result = runInstalledCommand(path.join(scripts, 'agent-framework.mjs'), ['guardrail', operation, 'claude-code', '--json', ...argv], temporaryRoot);
+
+    return { ...result, document: JSON.parse(result.stdout) };
+  };
+  const throughInstalledPath = guardrailCommand(installedScripts, 'add');
+  const throughLink = guardrailCommand(linkedScripts, 'add');
+  const expectedArgs = [`\${CLAUDE_PROJECT_DIR}/${installedRoot}/framework-setup/scripts/guardrail.mjs`];
+
+  if (
+    throughInstalledPath.status !== 1
+    || throughLink.stdout !== throughInstalledPath.stdout
+    || JSON.stringify(throughInstalledPath.document.entry.hooks[0].args) !== JSON.stringify(expectedArgs)
+    || (await access(settingsFile).then(() => true, () => false))
+  ) {
+    throw new Error(`${agent}: installed agent-framework guardrail add did not preview the installed script alike through both paths: ${throughInstalledPath.stdout}`);
+  }
+
+  const added = guardrailCommand(linkedScripts, 'add', '--confirm', throughInstalledPath.document.previewHash);
+  const [registered] = JSON.parse(await readFile(settingsFile, 'utf8')).hooks.PreToolUse;
+  const [hook] = registered.hooks;
+  const hookRun = runWithInput(hook.command === 'node' ? process.execPath : hook.command, hook.args.map((argument) => argument.replaceAll('${CLAUDE_PROJECT_DIR}', temporaryRoot)), bashPayload('git push -f origin main'));
+
+  if (added.status !== 0 || registered.matcher !== 'Bash' || hookRun.status !== 2 || hookRun.stderr !== blockedLine) {
+    throw new Error(`${agent}: the guardrail registered through the linked path did not block a forced push: ${added.stdout} exit ${hookRun.status} ${hookRun.stderr}`);
+  }
+
+  const removal = guardrailCommand(installedScripts, 'remove');
+  const removed = guardrailCommand(installedScripts, 'remove', '--confirm', removal.document.previewHash);
+
+  if (removed.status !== 0 || (await readFile(settingsFile, 'utf8')) !== '{}\n') {
+    throw new Error(`${agent}: installed agent-framework guardrail remove did not reverse the entry: ${removed.stdout}`);
+  }
+
+  // The file `add` created holds nothing now; the install root must hold no adoption state.
+  await rm(settingsFile);
+};
+
 const assertNoAdoptionState = async (actor) => {
   for (const dormantPath of [
     '.agent-framework.yaml',
@@ -73,6 +147,9 @@ const assertNoAdoptionState = async (actor) => {
     // an installed adapter is a dormant asset, not a registered integration
     // (SG-DIST-001, FR-ADAPT-002).
     '.git/change-evaluation-gate/evidence/activation/receipt.json',
+    // The destructive-command guardrail is registered only by a confirmed
+    // `agent-framework guardrail add` (FS-006); installing never does it.
+    '.claude/settings.json',
   ]) {
     try {
       await access(path.join(temporaryRoot, dormantPath));
@@ -649,6 +726,8 @@ try {
         }
       }
     }
+
+    await assertInstalledGuardrail(agent, installedRoot, linkedClientRoot);
   }
 
   // Running the installed commands changed nothing either (SG-GUIDE-001).

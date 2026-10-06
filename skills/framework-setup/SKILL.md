@@ -36,6 +36,8 @@ from where the client installed the skill; do not assume a path.
   higher version (`schema-unsupported`), exit 2, and writes nothing.
 - **The Gate is opt-in.** Never configure or activate it unless the maintainer
   asked for it in this conversation; an installed Gate module is not consent.
+- **So is the guardrail.** Never register it unless the maintainer said yes
+  to its preview in this conversation; setup never registers it.
 - Never write `AGENTS.md` or `CLAUDE.md`; preserve every discovered `AGENTS.md`
   byte for byte.
 
@@ -191,7 +193,28 @@ activating again; everything after activation belongs to the
 
 Completion criterion: the plan's `state` is `activated` with health `healthy`.
 
-### 7. Verify and report
+### 7. Offer the guardrail
+
+Ask the maintainer whether Claude Code should be stopped before it runs a
+command that destroys uncommitted or unpushed work (`git reset --hard`,
+`git clean -f`, `git push --force`, and the rest in
+[framework-command.md](./references/framework-command.md#stopping-commands-that-destroy-work-agent-framework-guardrail)).
+Say it is a guardrail against accidents, not a security boundary. If not, go to
+step 8.
+
+If yes, run the preview, show it, and confirm with its token on approval:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs guardrail add claude-code --json
+```
+
+It writes the shared `.claude/settings.json`, so run it from the copy of this
+skill installed inside the repository; it refuses one outside it or ignored by
+Git. `guardrail remove claude-code` reverses it the same way.
+
+Completion criterion: the maintainer declined, or the guardrail is registered.
+
+### 8. Verify and report
 
 Run `setup --json` once more. Report:
 
@@ -202,8 +225,9 @@ Run `setup --json` once more. Report:
 - the protected instruction files checked;
 - any value left `null` or empty.
 
-Recommend committing `.agent-framework.yaml`, and `.cursor/hooks.json` when
-Cursor was activated; until then the Gate reports the configuration as
+Recommend committing `.agent-framework.yaml`, `.cursor/hooks.json` when
+Cursor was activated, and `.claude/settings.json` with the installed skill when
+the guardrail was registered; until then the Gate reports the configuration as
 unversioned. `agent-framework report --html` writes a one-page summary the
 maintainer can read or share.
 
@@ -214,7 +238,8 @@ is byte-for-byte unchanged.
 
 - [framework-command.md](./references/framework-command.md): every
   `agent-framework` subcommand — `setup`, `config show`, the named `config`
-  revisions, `config suggest`, `report --html` — with refusals and exit status.
+  revisions, `config suggest`, `report --html`, `guardrail` — with refusals and
+  exit status.
 - [schema-and-gate-transactions.md](./references/schema-and-gate-transactions.md):
   the direct migration and Gate-configuration transactions.
 - [configuration.md](./references/configuration.md): interpreting the generated

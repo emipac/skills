@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -1132,27 +1133,29 @@ export const configureGate = async ({
   };
 };
 
-/** Replace `.agent-framework.yaml` in one rename, keeping its mode. */
-const replaceConfiguration = async (resolvedProjectRoot, contents) => {
-  const configurationPath = path.join(resolvedProjectRoot, '.agent-framework.yaml');
-  const temporaryPath = path.join(
-    resolvedProjectRoot,
-    `.agent-framework.yaml.${randomUUID()}.tmp`,
-  );
-  const configurationStats = await stat(configurationPath);
+/** Replace a file in one rename, keeping its mode; a missing file is created. */
+const replaceFile = async (filePath, contents) => {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  const mode = await stat(filePath).then((entry) => entry.mode, () => undefined);
 
   try {
     await writeFile(temporaryPath, contents, {
       encoding: 'utf8',
       flag: 'wx',
-      mode: configurationStats.mode,
+      ...(mode === undefined ? {} : { mode }),
     });
-    await rename(temporaryPath, configurationPath);
+    await rename(temporaryPath, filePath);
   } catch (error) {
     await rm(temporaryPath, { force: true });
     throw error;
   }
 };
+
+/** Replace `.agent-framework.yaml` in one rename, keeping its mode. */
+const replaceConfiguration = (resolvedProjectRoot, contents) => replaceFile(
+  path.join(resolvedProjectRoot, '.agent-framework.yaml'),
+  contents,
+);
 
 /**
  * A revision that is refused, carrying the reason code a caller reports it by.
@@ -1871,6 +1874,284 @@ export const discoverGateConfigurationFacts = async ({ projectRoot, environment 
   }
 
   return { dependencyRoots, sensitiveInputs, unassigned, environmentFiles };
+};
+
+/**
+ * Where each client reads the destructive-command guardrail from (FS-006):
+ * the shared, committed settings file, the hook event, and the matcher for
+ * its shell tool. Cursor and Codex follow, each after its hook is observed.
+ */
+const GUARDRAIL_CLIENTS = Object.freeze({
+  'claude-code': Object.freeze({ file: '.claude/settings.json', event: 'PreToolUse', matcher: 'Bash' }),
+});
+
+export const guardrailOperations = Object.freeze(['add', 'remove']);
+
+const GUARDRAIL_SCRIPT = fileURLToPath(new URL('./guardrail.mjs', import.meta.url));
+
+/**
+ * The hook that runs the guardrail, in Claude Code's exec form: `node` spawned
+ * directly with the script as its one argument, `${CLAUDE_PROJECT_DIR}`
+ * substituted by Claude Code, so a path with spaces needs no quoting and no
+ * shell is involved on any platform.
+ */
+const guardrailHook = (script) => ({ type: 'command', command: 'node', args: [`\${CLAUDE_PROJECT_DIR}/${script}`] });
+
+/** A value as JSON with every object's keys sorted, so two spellings of one value compare equal. */
+const canonicalJson = (value) => JSON.stringify(value, (key, entry) => (
+  isPlainObject(entry) ? Object.fromEntries(Object.entries(entry).sort(([left], [right]) => (left < right ? -1 : Number(left > right)))) : entry
+));
+
+/**
+ * The guardrail script's path relative to the repository, in the form every
+ * teammate's clone holds it. The script that registers is the script
+ * registered, so a skill installed outside the repository — or one Git
+ * ignores — is refused: a clone would not have it. A linked client directory
+ * resolves to the path the repository actually holds.
+ */
+const guardrailScript = async (resolvedProjectRoot, environment) => {
+  const [script, project] = await Promise.all([realpath(GUARDRAIL_SCRIPT), realpath(resolvedProjectRoot)]);
+  const relative = path.relative(project, script);
+
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw revisionRefusal(
+      'guardrail-outside-project',
+      `The framework-setup skill running this command is installed at ${path.dirname(path.dirname(script))}, not inside the repository ${project}, so a teammate who clones the repository would not have the guardrail it registers. Install the skill inside the repository and run its agent-framework from there. Nothing was written.`,
+    );
+  }
+
+  const posix = relative.split(path.sep).join('/');
+
+  if (await isGitIgnored(project, posix, environment)) {
+    throw revisionRefusal(
+      'guardrail-ignored',
+      `Git ignores ${posix}, so a teammate who clones the repository would not have the guardrail it registers. Commit the framework-setup skill, then register again. Nothing was written.`,
+    );
+  }
+
+  return posix;
+};
+
+/** Settings as Claude Code writes them: two-space JSON, with or without a final newline. */
+const renderSettings = (settings, finalNewline) => `${JSON.stringify(settings, null, 2)}${finalNewline ? '\n' : ''}`;
+
+/**
+ * Read a client settings file the guardrail can be merged into or removed
+ * from without changing anything else. A missing file reads as `{}`. A file
+ * that is not JSON, whose hooks are not where the client reads them, or that
+ * does not round-trip — re-rendered as two-space JSON it is not the same bytes,
+ * as with other indentation, a key declared twice, or CRLF line ends — is
+ * refused: rewriting it would change bytes outside the guardrail entry.
+ */
+const readClientSettings = async (settingsPath, file, event) => {
+  let contents;
+
+  try {
+    contents = await readFile(settingsPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { contents: null, settings: {}, finalNewline: true };
+    }
+
+    throw error;
+  }
+
+  let settings;
+
+  try {
+    settings = JSON.parse(contents);
+  } catch (error) {
+    throw revisionRefusal('settings-unparseable', `${file} is not JSON (${error.message}). Nothing was written; fix it by hand, then run this again.`);
+  }
+
+  const unrevisable = (reason) => revisionRefusal('settings-unrevisable', `${file} ${reason}, so it cannot be rewritten with only the guardrail entry changed. Nothing was written; edit it by hand.`);
+
+  if (!isPlainObject(settings)) {
+    throw unrevisable('is not a JSON object');
+  }
+
+  if (settings.hooks !== undefined && !isPlainObject(settings.hooks)) {
+    throw unrevisable('declares "hooks" as something other than an object');
+  }
+
+  if (settings.hooks?.[event] !== undefined && !Array.isArray(settings.hooks[event])) {
+    throw unrevisable(`declares "hooks.${event}" as something other than a list`);
+  }
+
+  const finalNewline = contents.endsWith('\n');
+
+  if (renderSettings(settings, finalNewline) !== contents) {
+    throw unrevisable('is not written the way Claude Code writes settings — two-space JSON, each key once');
+  }
+
+  return { contents, settings, finalNewline };
+};
+
+/**
+ * The lines that differ between two texts: the first changed line, what is
+ * removed and added there, and the unchanged line on each side (`null` at
+ * either end of the file).
+ */
+const changedLines = (before, after) => {
+  const old = before === '' ? [] : before.split('\n');
+  const proposed = after.split('\n');
+  let start = 0;
+  let end = 0;
+
+  while (start < old.length && start < proposed.length && old[start] === proposed[start]) {
+    start += 1;
+  }
+
+  while (
+    end < old.length - start
+    && end < proposed.length - start
+    && old[old.length - 1 - end] === proposed[proposed.length - 1 - end]
+  ) {
+    end += 1;
+  }
+
+  return {
+    line: start + 1,
+    before: proposed[start - 1] ?? null,
+    removed: old.slice(start, old.length - end),
+    added: proposed.slice(start, proposed.length - end),
+    after: end === 0 ? null : proposed[proposed.length - end],
+  };
+};
+
+/** The settings with the guardrail's matcher group appended, or a refusal when its hook is already there. */
+const withGuardrail = (settings, event, entry) => {
+  const groups = settings.hooks?.[event] ?? [];
+  const [hook] = entry.hooks;
+
+  if (groups.some((group) => Array.isArray(group?.hooks) && group.hooks.some((registered) => canonicalJson(registered) === canonicalJson(hook)))) {
+    throw revisionRefusal('guardrail-registered', `The guardrail is already registered under hooks.${event}. Nothing was written.`);
+  }
+
+  const candidate = structuredClone(settings);
+
+  candidate.hooks = candidate.hooks ?? {};
+  candidate.hooks[event] = [...groups, entry];
+
+  return candidate;
+};
+
+/**
+ * The settings without the one matcher group the guardrail's add wrote. A list
+ * or `hooks` object that only it filled is removed with it.
+ */
+const withoutGuardrail = (settings, event, entry) => {
+  const groups = settings.hooks?.[event] ?? [];
+  const matching = groups.flatMap((group, index) => (canonicalJson(group) === canonicalJson(entry) ? [index] : []));
+
+  if (matching.length === 0) {
+    throw revisionRefusal(
+      'guardrail-not-registered',
+      `No hooks.${event} matcher group is the one guardrail add writes for this script, so there is nothing to remove. A hand-written entry that runs it is left for you to remove by hand. Nothing was written.`,
+    );
+  }
+
+  if (matching.length > 1) {
+    throw revisionRefusal('guardrail-ambiguous', `hooks.${event} holds the guardrail's matcher group ${matching.length} times; remove the extra copies by hand. Nothing was written.`);
+  }
+
+  const candidate = structuredClone(settings);
+  const remaining = groups.filter((group, index) => index !== matching[0]);
+
+  if (remaining.length === 0) {
+    delete candidate.hooks[event];
+  } else {
+    candidate.hooks[event] = remaining;
+  }
+
+  if (Object.keys(candidate.hooks).length === 0) {
+    delete candidate.hooks;
+  }
+
+  return candidate;
+};
+
+/**
+ * Preview registering (`add`) or unregistering (`remove`) the destructive-command
+ * guardrail with one client.
+ *
+ * For Claude Code it merges one `PreToolUse` matcher group, matcher `Bash`,
+ * whose one hook runs the guardrail script by its path inside the repository
+ * under `${CLAUDE_PROJECT_DIR}`, into the shared `.claude/settings.json` —
+ * created only when missing — or removes exactly that group. Every other key
+ * and hook is kept. `previewHash` binds the file as it is now (empty when
+ * missing) to the file the operation would write. Nothing is written.
+ */
+export const previewGuardrail = async ({ projectRoot, operation, client, environment = process.env }) => {
+  if (!guardrailOperations.includes(operation)) {
+    throw revisionRefusal('operation-unknown', `The guardrail operation is add or remove, not ${operation}. Nothing was written.`);
+  }
+
+  const target = Object.hasOwn(GUARDRAIL_CLIENTS, client ?? '') ? GUARDRAIL_CLIENTS[client] : null;
+
+  if (target === null) {
+    throw revisionRefusal(
+      'client-unsupported',
+      `The guardrail registers with ${Object.keys(GUARDRAIL_CLIENTS).join(', ')} only, not ${client}; Cursor and Codex follow once their hooks are observed. Nothing was written.`,
+    );
+  }
+
+  const resolvedProjectRoot = path.resolve(projectRoot);
+
+  if (!(await isDirectory(resolvedProjectRoot))) {
+    throw revisionRefusal('project-missing', `${resolvedProjectRoot} is not a directory. Nothing was written.`);
+  }
+
+  const script = await guardrailScript(resolvedProjectRoot, environment);
+  const { contents, settings, finalNewline } = await readClientSettings(path.join(resolvedProjectRoot, target.file), target.file, target.event);
+  const entry = { matcher: target.matcher, hooks: [guardrailHook(script)] };
+  const candidate = operation === 'add'
+    ? withGuardrail(settings, target.event, entry)
+    : withoutGuardrail(settings, target.event, entry);
+  const proposedSettings = renderSettings(candidate, finalNewline);
+  const previewHash = createHash('sha256')
+    .update(contents ?? '')
+    .update('\0')
+    .update(proposedSettings)
+    .digest('hex');
+
+  return {
+    status: 'ready',
+    operation,
+    client,
+    file: target.file,
+    created: contents === null,
+    script,
+    event: target.event,
+    entry,
+    changes: changedLines(contents ?? '', proposedSettings),
+    previewHash,
+    proposedSettings,
+  };
+};
+
+/**
+ * Write exactly the previewed guardrail change, or nothing. The preview is
+ * taken again from the file as it is now, so a token from any other preview,
+ * or from before the file changed, matches nothing and writes nothing.
+ */
+export const applyGuardrail = async ({ projectRoot, operation, client, confirmation, environment = process.env }) => {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const { proposedSettings, ...preview } = await previewGuardrail({ projectRoot: resolvedProjectRoot, operation, client, environment });
+
+  if (confirmation !== preview.previewHash) {
+    throw revisionRefusal(
+      'preview-mismatch',
+      `Guardrail confirmation does not match the current preview: ${preview.file} or the operation changed since that preview. Nothing was written; preview again.`,
+    );
+  }
+
+  const settingsPath = path.join(resolvedProjectRoot, preview.file);
+
+  await mkdir(path.dirname(settingsPath), { recursive: true });
+  await replaceFile(settingsPath, proposedSettings);
+
+  return { ...preview, status: operation === 'add' ? 'registered' : 'removed' };
 };
 
 const readGitRemotes = async (projectRoot) => {
@@ -2793,6 +3074,31 @@ const runCli = async () => {
 
       // A refusal is the revision's own answer, stated as one, and never the
       // thrown error's inspection, which would print what it carries.
+      console.log(JSON.stringify({ status: 'refused', reasonCode: error.reasonCode, detail: error.message }, null, 2));
+      process.exitCode = 2;
+      return;
+    }
+
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  // Registering or removing the destructive-command guardrail, previewed, then
+  // confirmed with that preview's token: the direct path the Framework
+  // command's `guardrail` subcommand drives (FS-006).
+  if (options.guardrail) {
+    const guardrailOptions = { projectRoot, operation: options.guardrail, client: options.client };
+    let result;
+
+    try {
+      result = options.confirm
+        ? await applyGuardrail({ ...guardrailOptions, confirmation: options.confirm })
+        : await previewGuardrail(guardrailOptions);
+    } catch (error) {
+      if (error.reasonCode === undefined) {
+        throw error;
+      }
+
       console.log(JSON.stringify({ status: 'refused', reasonCode: error.reasonCode, detail: error.message }, null, 2));
       process.exitCode = 2;
       return;

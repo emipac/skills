@@ -96,20 +96,29 @@
  * is inside the clone, or that already exists, is refused with nothing written
  * (`SG-GUIDE-002`). A Sensitive runtime input appears by name and source only.
  *
+ * `guardrail add claude-code` and `guardrail remove claude-code` register and
+ * unregister the destructive-command guardrail (FS-006) through
+ * `framework-setup`'s own previewed operation: without `--confirm` they show
+ * the exact `.claude/settings.json` change and its token; with `--confirm
+ * <token>` that operation writes exactly that change. `setup` never registers
+ * it and never names it as a step.
+ *
  * Usage:
  *   agent-framework setup [--json] [--project <directory>]       (guided in an interactive terminal)
  *   agent-framework config show [--json] [--project <directory>]
  *   agent-framework config suggest [--json] [--project <directory>]
  *   agent-framework report --html [--out <path>] [--project <directory>]
  *   agent-framework config <revision> <value> [--<option> <value>] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
+ *   agent-framework guardrail add|remove claude-code [--confirm <token>] [--json] [--project <directory>]
  *
  * Exit status follows the Gate's: `0` nothing further to do, `1` steps remain
  * (for `config show`: no Gate section, a section that does not resolve, or a
  * value that differs from the pinned one; for `config suggest`: no Gate
  * section, or proposals; for a revision: its confirmation, or the re-pin it
  * continued into; for `report`: the page is written and setup or config show
- * names something further), `2` the command could not run, the revision was
- * refused, or no report was written.
+ * names something further; for `guardrail`: its confirmation), `2` the command
+ * could not run, the revision or guardrail change was refused, or no report
+ * was written.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -126,6 +135,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  applyGuardrail,
   configureGate,
   discoverGateConfigurationFacts,
   discoverProject,
@@ -133,10 +143,12 @@ import {
   draftMigrationMapping,
   gatePolicyKeys,
   gateRevisions,
+  guardrailOperations,
   migrateConfiguration,
   previewConfigurationMigration,
   previewGateConfiguration,
   previewGateRevision,
+  previewGuardrail,
   reviseGate,
   withheldRevision,
 } from './configure.mjs';
@@ -156,6 +168,9 @@ export const SUGGEST_DOCUMENT_VERSION = 'agent-framework/config-suggest/1';
 /** The `config <revision>` document, versioned the same way. */
 export const REVISION_DOCUMENT_VERSION = 'agent-framework/config-revision/1';
 
+/** The `guardrail` document, versioned the same way. */
+export const GUARDRAIL_DOCUMENT_VERSION = 'agent-framework/guardrail/1';
+
 export const EXIT_DONE = 0;
 
 export const EXIT_STEPS_REMAIN = 1;
@@ -172,6 +187,7 @@ const USAGE = [
     ...options.map((option) => `[--${option} <${option}>]`),
     '[--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]',
   ].join(' ')),
+  `       agent-framework guardrail ${guardrailOperations.join('|')} claude-code [--confirm <token>] [--json] [--project <directory>]`,
 ].join('\n');
 
 const ENTRY_SCRIPT = fileURLToPath(import.meta.url);
@@ -196,6 +212,8 @@ const PROPOSAL_REVISIONS = Object.freeze({
   'sensitive-input': Object.freeze({ operation: 'add-sensitive-input', fact: 'sensitiveInputs', value: 'name' }),
   'environment-file': Object.freeze({ operation: 'add-environment-file', fact: 'environmentFiles', value: 'file' }),
 });
+
+const GUARDRAIL_LIMIT = 'guardrail writes only the client settings file it names, only with the token of the preview that showed the change, and changes only the guardrail\'s one hook entry; setup never registers it. It guards against accidents and is not a security boundary.';
 
 const REVISION_LIMIT = 'a config revision writes only the Gate configuration section of .agent-framework.yaml, only with the token of the preview that showed the change, and keeps every other byte; it confirms no re-pin — the Gate confirms its own preview with its own token.';
 
@@ -537,9 +555,10 @@ const planSetup = async ({ projectRoot, environment, status = null }) => {
 const parseArguments = (argv) => {
   const [first, second] = argv;
   const revision = first === 'config' && Object.hasOwn(gateRevisions, second ?? '') ? gateRevisions[second] : null;
+  const guardrail = first === 'guardrail' && guardrailOperations.includes(second) ? { operation: second, client: null } : null;
   const subcommand = first === 'config' && (['show', 'suggest'].includes(second) || revision !== null) ? `config ${second}` : first;
 
-  if (!['setup', 'config show', 'config suggest', 'report'].includes(subcommand) && revision === null) {
+  if (!['setup', 'config show', 'config suggest', 'report'].includes(subcommand) && revision === null && guardrail === null) {
     return null;
   }
 
@@ -554,10 +573,12 @@ const parseArguments = (argv) => {
     revision: null,
     confirmation: null,
     acknowledgeWeakening: false,
+    guardrail,
   };
   const valued = new Set([
     '--project',
     ...(report ? ['--out'] : []),
+    ...(guardrail === null ? [] : ['--confirm']),
     ...(revision === null ? [] : ['--confirm', ...revision.options.map((option) => `--${option}`)]),
   ]);
 
@@ -590,12 +611,16 @@ const parseArguments = (argv) => {
       index += 1;
     } else if (revision !== null && !argument.startsWith('--') && options.revision[revision.argument] === undefined) {
       options.revision[revision.argument] = argument;
+    } else if (guardrail !== null && !argument.startsWith('--') && guardrail.client === null) {
+      guardrail.client = argument;
     } else {
       return null;
     }
   }
 
-  const incomplete = (revision !== null && options.revision[revision.argument] === undefined) || (report && !options.html);
+  const incomplete = (revision !== null && options.revision[revision.argument] === undefined)
+    || (report && !options.html)
+    || (guardrail !== null && guardrail.client === null);
 
   return incomplete ? null : options;
 };
@@ -1369,6 +1394,110 @@ const renderRevision = (document) => {
     REVISION_LIMIT,
     '',
   );
+
+  return lines.join('\n');
+};
+
+/**
+ * The Framework command that previews or confirms one guardrail change, as a
+ * maintainer types it.
+ */
+const guardrailCommandLine = (projectRoot, guardrail, confirmation = null) => command(
+  confirmation === null ? 'preview' : 'confirm',
+  [
+    'node',
+    ENTRY_SCRIPT,
+    'guardrail',
+    guardrail.operation,
+    guardrail.client,
+    '--project',
+    projectRoot,
+    ...(confirmation === null ? [] : ['--confirm', confirmation]),
+  ],
+);
+
+/**
+ * Preview or confirm registering or removing the destructive-command
+ * guardrail through `framework-setup`'s own operation (FS-006). The
+ * operation's refusal is reported as it gives it.
+ */
+const runGuardrail = async ({ projectRoot, environment, guardrail, confirmation }) => {
+  let outcome;
+
+  try {
+    outcome = {
+      changed: confirmation === null
+        ? await previewGuardrail({ projectRoot, ...guardrail, environment })
+        : await applyGuardrail({ projectRoot, ...guardrail, confirmation, environment }),
+    };
+  } catch (error) {
+    outcome = failure(error.reasonCode ?? 'guardrail-refused', error.message);
+  }
+
+  const changed = outcome.changed ?? null;
+  const applied = changed !== null && confirmation !== null;
+  const exitStatus = outcome.failure ? EXIT_UNRUNNABLE : (applied ? EXIT_DONE : EXIT_STEPS_REMAIN);
+
+  return {
+    document: {
+      document: GUARDRAIL_DOCUMENT_VERSION,
+      command: `guardrail ${guardrail.operation} ${guardrail.client}`,
+      ok: !outcome.failure,
+      exitStatus,
+      project: projectRoot,
+      owner: 'framework-setup',
+      operation: guardrail.operation,
+      client: guardrail.client,
+      applied,
+      file: changed?.file ?? null,
+      created: changed?.created ?? null,
+      script: changed?.script ?? null,
+      event: changed?.event ?? null,
+      entry: changed?.entry ?? null,
+      changes: changed?.changes ?? null,
+      previewHash: changed?.previewHash ?? null,
+      proposedSettings: changed?.proposedSettings ?? null,
+      next: changed === null || applied
+        ? null
+        : {
+          step: 'confirm-guardrail',
+          command: guardrailCommandLine(projectRoot, guardrail, changed.previewHash).run,
+          instruction: 'confirm exactly this preview with its token, once the maintainer approves it.',
+        },
+      failure: outcome.failure ?? null,
+      limit: GUARDRAIL_LIMIT,
+    },
+    render: renderGuardrail,
+  };
+};
+
+const renderGuardrail = (document) => {
+  const lines = [`agent-framework ${document.command}`, `project: ${document.project}`];
+
+  if (document.failure !== null) {
+    lines.push(`failed: ${document.failure.reasonCode} — ${document.failure.detail}`, GUARDRAIL_LIMIT, '');
+
+    return lines.join('\n');
+  }
+
+  const adding = document.operation === 'add';
+  const { changes } = document;
+
+  lines.push(
+    `guardrail: ${document.script} — blocks a shell command that destroys uncommitted or unpushed work before the client runs it (owned by ${document.owner})`,
+    `${document.applied ? 'applied' : 'preview'}: ${document.file}${document.created ? ' (created)' : ''} — ${document.applied ? '' : 'would '}${adding ? (document.applied ? 'added' : 'add') : (document.applied ? 'removed' : 'remove')} one ${document.event} matcher group (${document.entry.matcher}); every other key and hook is kept:`,
+    `  line ${changes.line}:`,
+    ...(changes.before === null ? [] : [`  ${changes.before}`]),
+    ...changes.removed.map((line) => `- ${line}`),
+    ...changes.added.map((line) => `+ ${line}`),
+    ...(changes.after === null ? [] : [`  ${changes.after}`]),
+  );
+
+  if (!document.applied) {
+    lines.push(`token: ${document.previewHash}`);
+  }
+
+  lines.push(`next: ${nextText(document.next)}`, GUARDRAIL_LIMIT, '');
 
   return lines.join('\n');
 };
@@ -2377,6 +2506,7 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
     'config show': runConfigShow,
     'config suggest': runConfigSuggest,
     report: runReport,
+    guardrail: runGuardrail,
   }[options.subcommand] ?? runConfigRevision;
   const { document, render: rendered } = await run({
     cwd,
@@ -2386,6 +2516,7 @@ export const runFrameworkCommand = async ({ cwd, argv, environment = process.env
     revision: options.revision,
     confirmation: options.confirmation,
     acknowledgeWeakening: options.acknowledgeWeakening,
+    guardrail: options.guardrail,
   });
 
   return {

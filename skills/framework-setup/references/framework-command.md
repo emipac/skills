@@ -257,3 +257,108 @@ exist are each refused with nothing written; it never overwrites a file. Nothing
 under the clone or `.git` changes. Exit status is `0` when the page is written
 and neither setup nor config show names anything further, `1` when it is written
 and something remains, and `2` when nothing was written.
+
+## Stopping commands that destroy work: `agent-framework guardrail`
+
+To have Claude Code stop before it runs a shell command that silently destroys
+uncommitted or unpushed work, register this skill's guardrail:
+
+```bash
+node <skill-directory>/scripts/agent-framework.mjs guardrail add claude-code [--confirm <token>] [--json] [--project <directory>]
+node <skill-directory>/scripts/agent-framework.mjs guardrail remove claude-code [--confirm <token>] [--json] [--project <directory>]
+```
+
+The guardrail is `scripts/guardrail.mjs`, a Claude Code `PreToolUse` hook for
+the `Bash` tool with no dependency beyond Node. It reads the hook's JSON on
+standard input and the command from `tool_input.command`, and blocks it — exit
+`2`, with
+`BLOCKED: '<command>' matches dangerous pattern '<rule>'. The user has prevented you from doing this.`
+on standard error, which Claude Code hands to the model — when it runs:
+
+| Rule | Blocked | Allowed |
+| --- | --- | --- |
+| `git reset --hard` | `git reset --hard`, `git -C app reset --hard HEAD~1` | `git reset --soft HEAD~1`, `git reset -- --hard` |
+| `git clean --force` | `git clean -f`, `-fd`, `-xdf`, `--force` | `git clean -n` |
+| `git branch -D` | `git branch -D x`, `--delete --force`, `-d -f` | `git branch -d x`, `git branch -f main HEAD~1` |
+| `git checkout .` | `git checkout .`, `git checkout -- .`, `git checkout HEAD -- .` | `git checkout .env.example`, `git checkout -- src/a.php` |
+| `git restore .` | `git restore .`, `--worktree .`, `--staged --worktree .` | `git restore --staged .`, `git restore ./src/a.php` |
+| `git push --force` | `git push -f origin main`, `git push --force`, `-uf` | `git push --force-with-lease`, `--force-if-includes` |
+| `git stash clear` | `git stash clear` | `git stash list` |
+| `git stash drop` | `git stash drop`, `git stash drop stash@{1}` | `git stash pop` |
+
+Anything else exits `0` with no output. It reads arguments, not text: the
+command is split on `&&`, `||`, `;`, `|`, `&`, parentheses, backticks, and
+newlines; each part is split into words as a POSIX shell would; `sh -c` and
+`bash -c` strings are read the same way; leading assignments, `sudo`, `env`,
+`command`, and `exec` are looked past; Git's global options (`-C`, `-c`,
+`--git-dir`, `--work-tree`, …) are skipped; and a rule matches the subcommand
+and its flags. So `echo "git reset --hard"` is allowed. Only a command it
+cannot split into words, such as one with an unbalanced quote, is matched as
+plain text, and blocked only when that text spells a rule out. A payload that
+is not JSON or carries no `tool_input.command` string is allowed, with one line
+on standard error: a broken guardrail must not stop every tool call.
+
+It guards against accidents and is not a security boundary: a script the agent
+writes and runs, a Git alias, a command substitution inside double quotes, and
+a tool the hook does not see are not stopped. It never runs, rewrites, or logs a
+command.
+
+Without `--confirm` the command writes nothing: it shows the exact
+`.claude/settings.json` change — the first changed line, the lines removed and
+added with one unchanged line on each side, whether the file would be created —
+its `previewHash`, and the exact confirming command. `--confirm <previewHash>`
+writes exactly that change, and only while the file is still the one previewed;
+the hash binds the file as it is (empty when missing) to the file it would
+write. `add` appends one `PreToolUse` matcher group and creates the file only
+when it is missing; `remove` takes away exactly that group, and the
+`PreToolUse` list and `hooks` object when nothing else is left in them. Every
+other key and hook is kept. The group, in Claude Code's exec form:
+
+```json
+{
+  "matcher": "Bash",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "node",
+      "args": [
+        "${CLAUDE_PROJECT_DIR}/.claude/skills/framework-setup/scripts/guardrail.mjs"
+      ]
+    }
+  ]
+}
+```
+
+Claude Code substitutes `${CLAUDE_PROJECT_DIR}` into each `args` element as one
+argument, with no shell, so a path with spaces needs no quoting on any
+platform. The script path is this skill's own, relative to the repository and
+resolved through any linked client directory, so every teammate's clone runs
+the same file. Run the command from the copy of the skill installed inside the
+repository and commit it with `.claude/settings.json`.
+
+Each refusal writes nothing and states its reason: `guardrail-registered` (the
+same hook is already there), `guardrail-not-registered` (no group to remove;
+a hand-written one is left for you), `guardrail-ambiguous` (the group appears
+more than once), `settings-unparseable` (not JSON), `settings-unrevisable`
+(not an object, `hooks` or `hooks.PreToolUse` of the wrong type, or a file that
+does not round-trip: re-rendered as two-space JSON, the way Claude Code writes
+settings, with its final newline kept or left out as it was, it is not the same
+bytes — other indentation, a key declared twice, CRLF line ends),
+`guardrail-outside-project` (this skill is installed outside the repository, so
+a clone would not have it), `guardrail-ignored` (Git ignores the script),
+`client-unsupported` (only `claude-code` today; Cursor and Codex follow), and
+`preview-mismatch` (a stale or foreign token).
+
+`setup`, `setup --json`, and base setup never register the guardrail, and an
+installed skill is not a registration. The same operation runs without the
+Framework command:
+
+```bash
+node <skill-directory>/scripts/configure.mjs --project "$PWD" --guardrail add --client claude-code [--confirm <preview-hash>]
+```
+
+It prints the preview (`status: "ready"`) or the written result (`status:
+"registered"` or `"removed"`) and exits `0`; a refusal prints
+`{ "status": "refused", "reasonCode", "detail" }` and exits `2`. Both write the
+same file. The Framework command exits `0` when the change is written, `1` when
+its confirmation remains, and `2` when it was refused.

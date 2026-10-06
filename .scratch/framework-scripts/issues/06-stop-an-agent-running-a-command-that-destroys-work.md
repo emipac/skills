@@ -1,12 +1,12 @@
 # FS-006 — Stop an agent running a command that destroys work
 
-Status: ready-for-agent
-Labels: ready-for-agent, enhancement
+Status: done
+Labels: done, enhancement
 Blocked by:
 Tracker ID: 06-stop-an-agent-running-a-command-that-destroys-work
 Draft key: FS-006
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Parent feature contract:** none. `framework-setup` owns repository-local
 agent conventions, and this adds one opt-in guardrail it can register. The
@@ -135,21 +135,21 @@ First red test: the payload for `git push -f origin main` exits 2 with the
 
 ## Acceptance Criteria
 
-- [ ] A table-driven test covers every rule, with at least one blocked and one
+- [x] A table-driven test covers every rule, with at least one blocked and one
   allowed variant per rule. It includes all eight probe commands above with
   their intended results, extra whitespace, `git -C dir …`, chained commands,
   and an `sh -c` wrapper.
-- [ ] A Claude Code `PreToolUse` payload for a blocked command exits 2 with the
+- [x] A Claude Code `PreToolUse` payload for a blocked command exits 2 with the
   maintainer's message on stderr. An allowed one exits 0 with no output. A
   malformed payload is handled as the ticket states.
-- [ ] `agent-framework guardrail add claude-code` previews the exact
+- [x] `agent-framework guardrail add claude-code` previews the exact
   `.claude/settings.json` change and writes only with its token. It keeps
   every other key and hook, creates the file only if it is missing, and refuses
   a duplicate or an unparseable file with nothing written. `remove` reverses
   exactly that entry.
-- [ ] Without the maintainer's confirmed token nothing is written, and base
+- [x] Without the maintainer's confirmed token nothing is written, and base
   setup and `agent-framework setup` never register the guardrail.
-- [ ] The `framework-setup` skill offers the guardrail as an opt-in step with
+- [x] The `framework-setup` skill offers the guardrail as an opt-in step with
   its preview, and the guide documents it for maintainers.
 
 ## Verification Matrix
