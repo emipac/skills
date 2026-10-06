@@ -638,6 +638,34 @@
         Re-run the same install command. Versions are synchronised from <code>package.json</code>,
         so the CLI, the Claude plugin, and the Codex plugin always report the same release.
       </p>
+
+      <h3>Running the <code>agent-framework</code> command</h3>
+      <p>
+        Most of this guide's setup work goes through one command, <code>agent-framework</code>.
+        The installer copies its script into your project but does not put it on your
+        <code>PATH</code>, so pick one of these:
+      </p>
+
+      <p class="cmd-label">Run the installed copy directly (always works)</p>
+      <pre><code>node .agents/skills/framework-setup/scripts/agent-framework.mjs setup</code></pre>
+
+      <p class="cmd-label">Or give it a short name in your shell (put this in ~/.zshrc or ~/.bashrc)</p>
+      <pre><code>alias agent-framework='node .agents/skills/framework-setup/scripts/agent-framework.mjs'</code></pre>
+
+      <p class="cmd-label">Or, if you have a checkout of the framework repository, link it once</p>
+      <pre><code>cd path/to/ai-skills-framework &amp;&amp; npm link</code></pre>
+      <p>
+        <code>npm link</code> puts both <code>agent-framework</code> and
+        <code>change-evaluation-gate</code> on your <code>PATH</code>, pointing at that checkout.
+        Undo it with <code>npm unlink -g ai-skills-framework</code>. Whichever you choose, run
+        the command from your project's root folder. The rest of this guide writes it as
+        <code>agent-framework …</code>.
+      </p>
+
+      <p>
+        New to all this? Section 04 starts with a
+        <a href="#quick-start">start-to-finish checklist for a new project</a>.
+      </p>
     </section>
 
     <section id="configure">
@@ -653,8 +681,144 @@
         root, <code>.agent-framework.yaml</code>.
       </p>
 
+      <div class="note" id="agent-shortcut">
+        <span class="note-tag">Shortcut: let your agent set it up with you</span>
+        <p>
+          After installing the skills, open your coding agent in the project and ask it to use
+          the <strong>framework-setup</strong> skill. In Claude Code, type
+          <code>/framework-setup</code>; in other agents, ask in plain words:
+        </p>
+        <pre><code>Use the framework-setup skill to configure this project.</code></pre>
+        <p>The agent then does the groundwork and asks you only what it cannot work out:</p>
+        <ol>
+          <li>It inspects the repository and shows you what it found: backend, frontend,
+          source folders, test commands, tracker.</li>
+          <li>It asks you to confirm or correct those values, then writes
+          <code>.agent-framework.yaml</code>.</li>
+          <li>It asks whether you want the Change Evaluation Gate. If you do, it moves the file
+          to schema version 4 and drafts the Gate policy, asking you about every value it could
+          not prove, and adds what your project implies (your <code>vendor</code> folder, secret
+          names, your <code>.env</code> file).</li>
+          <li>It asks which tool gets the Gate's hook (Git only, or Git and Cursor) and
+          activates it.</li>
+        </ol>
+        <p>
+          Every change is shown to you first, and the agent applies it only after you say yes in
+          the chat. It always works from what <code>agent-framework setup --json</code> says
+          comes next, so it runs the same commands as the checklist below and does not invent
+          steps of its own. If you prefer to answer the Gate questions yourself, tell it so: it
+          stops after creating the file, you run <code>agent-framework setup</code> in your
+          terminal, and it can pick up again afterwards.
+        </p>
+      </div>
+
+      <h3 id="quick-start">Quick start: a new project, start to finish</h3>
       <p>
-        The intended way to create it is to ask your agent to run <code>framework-setup</code>.
+        If you just want a working setup with the Gate switched on, follow these seven steps in
+        order. Run every command from your project's root folder, which must be a Git
+        repository. Each step links to the part of this guide that explains it in depth.
+      </p>
+
+      <ol>
+        <li>
+          <p><strong>Install the skills</strong> (<a href="#install">Section 03</a>). Make sure
+          <strong>framework-setup</strong> and <strong>change-evaluation-gate</strong> are
+          selected.</p>
+          <pre><code>npx skills@latest add emipac/skills</code></pre>
+        </li>
+        <li>
+          <p><strong>Create the configuration file — you run this one step yourself.</strong>
+          Ask the guided setup what it found:</p>
+          <pre><code>agent-framework setup</code></pre>
+          <p>
+            In a project with no <code>.agent-framework.yaml</code> yet, its first step is
+            <code>configure-project</code>. It prints a ready-made command with the values it
+            discovered, but it <strong>does not run it for you</strong>: this step has no preview
+            to confirm, and the guided setup only performs steps that do. Copy that command,
+            change any value you disagree with, and run it. For example:
+          </p>
+          <pre><code>node .agents/skills/framework-setup/scripts/configure.mjs --project . --tracker local-markdown --backend laravel --frontend livewire</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Option</th><th>What it means</th><th>Allowed values</th></tr></thead>
+              <tbody>
+                <tr><td><code>--tracker</code></td><td>Where your tickets live</td><td><code>local-markdown</code>, <code>github</code>, <code>jira</code>, <code>linear</code></td></tr>
+                <tr><td><code>--backend</code></td><td>Your server-side stack</td><td><code>laravel</code>, <code>express-typescript</code>, <code>unknown</code></td></tr>
+                <tr><td><code>--frontend</code></td><td>Your browser-side stack</td><td><code>livewire</code>, <code>react-typescript</code>, <code>svelte-typescript</code>, <code>none</code>, <code>unknown</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Optional: <code>--srs</code>, <code>--glossary</code>, <code>--adrs</code>, and
+            <code>--history</code> name where those documents live. Not sure about a value? Use the
+            <a href="#agent-shortcut">agent shortcut</a> above instead; it talks the choices
+            through with you.
+          </p>
+        </li>
+        <li>
+          <p><strong>Let the guided setup do the rest</strong>
+          (<a href="#gate-setup">Section 09</a>). Run it again, in a normal terminal window:</p>
+          <pre><code>agent-framework setup</code></pre>
+          <p>
+            It moves the file to schema version 4, writes the Gate policy, checks this machine
+            with <code>doctor</code>, and activates the Gate. Before each step it shows exactly what
+            will change and waits. Type <code>yes</code> to go ahead; anything else stops safely.
+            When a question shows a default in square brackets, pressing Enter accepts it.
+          </p>
+          <div class="note note-caution">
+            <span class="note-tag">Watch for the client question</span>
+            <p>
+              Near the end it asks <code>decide client (the adapter to activate) [git]</code>.
+              This is <strong>not</strong> about your tracker. It asks which tool should get the
+              Gate's hook. Press Enter for Git only. If you use <strong>Cursor</strong>, type
+              <code>cursor</code>: that activates Git and Cursor together. Cursor needs
+              <code>.cursor/hooks.json</code> to exist first; see the
+              <a href="#desktop-client">desktop-client note in Section 09</a>. If you pressed Enter by
+              mistake, see <a href="#adding-cursor">"Adding Cursor later"</a> in the same section.
+            </p>
+          </div>
+        </li>
+        <li>
+          <p><strong>Fill in what your project needs</strong> (<a href="#gate-policy-change">Section
+          12</a>). Ask what the repository implies but the Gate section does not declare yet, such
+          as your <code>vendor</code> folder, secret names from <code>.env.example</code>, or your
+          <code>.env</code> file:</p>
+          <pre><code>agent-framework config suggest</code></pre>
+          <p>
+            Each suggestion prints a command. Running it shows a preview and a token; running it
+            again with <code>--confirm &lt;token&gt;</code> writes the change. Because the Gate is
+            already active, it then shows one more preview, the re-pin, which you confirm with the
+            <code>git gate sync … --confirm</code> line it prints.
+          </p>
+        </li>
+        <li>
+          <p><strong>Commit the configuration.</strong> Commit <code>.agent-framework.yaml</code>,
+          and <code>.cursor/hooks.json</code> if you activated Cursor. Until you do, the Gate keeps
+          telling you the configuration is unversioned.</p>
+        </li>
+        <li>
+          <p><strong>Check that everything is healthy</strong> (<a href="#gate-commands">Section
+          11</a>):</p>
+          <pre><code>git gate status</code></pre>
+          <p>It should say <code>healthy</code> and end with <code>next: nothing</code>. Then ask
+          whether your current work would pass, without committing:</p>
+          <pre><code>git gate check</code></pre>
+        </li>
+        <li>
+          <p><strong>Optional: one page to read or share.</strong></p>
+          <pre><code>agent-framework report --html</code></pre>
+          <p>It prints the path of a page in your temporary folder summarising the clone's state,
+          its settings, and anything left to do.</p>
+        </li>
+      </ol>
+
+      <p>
+        The rest of this section and Section 05 explain the configuration file in detail. You
+        only need them when something does not fit the defaults.
+      </p>
+
+      <p>
+        The intended way to create <code>.agent-framework.yaml</code> is to ask your agent to run <code>framework-setup</code>.
         It inspects the repository, proposes a configuration, and asks you to confirm anything
         it could not prove. Underneath, it uses a script you can also run directly:
       </p>
@@ -1173,7 +1337,11 @@ protected_files:
           your own terminal. It performs Steps 2 to 4 for you, one step at a time: each step shows
           the owning command's complete preview, asks only what nothing can derive — the
           migration's open <code>null</code>s, offering the draft as the default, and the client
-          to activate — and confirms that exact preview only when you type <code>yes</code>.
+          to activate (press Enter for Git only, or type <code>cursor</code> for Git and Cursor;
+          it is not asking about your tracker) — and confirms that exact preview only when you
+          type <code>yes</code>. On a project with no <code>.agent-framework.yaml</code> yet, it
+          stops at the first step and prints the base-setup command for you to run yourself; the
+          <a href="#quick-start">quick start</a> walks through it.
           Anything else stops, with the clone left at the last finished step. A policy weaker
           than the one already trusted also needs the weakening typed back, word for word. It
           repeats until <code>gate status</code> names nothing further, writes no draft file,
@@ -1824,14 +1992,16 @@ Diagnostics:
         later command in this guide is <code>git gate …</code> from anywhere in the repository.
       </p>
 
-      <div class="note note-caution">
+      <div class="note note-caution" id="desktop-client">
         <span class="note-tag">Activating a desktop client? Its hooks file must already exist</span>
         <p>
-          Plain <code>git</code> is the default and needs nothing. A desktop client is a separate,
-          later invocation — <code>gate activate --client cursor</code> — and it registers the Gate
-          by merging <em>one entry</em> into a file that client owns. <strong>The Gate never creates
-          that file.</strong> It cannot know a format it has not read, including whether the format
-          carries its own version, so a missing file is reported rather than invented:
+          Plain <code>git</code> is the default and needs nothing. A desktop client is chosen
+          when you activate — <code>gate activate --client cursor</code>, or typing
+          <code>cursor</code> at the guided setup's client question — and that activates Git and
+          the client together. It registers the Gate by merging <em>one entry</em> into a file
+          that client owns. <strong>The Gate never creates that file.</strong> It cannot know a
+          format it has not read, including whether the format carries its own version, so a
+          missing file is reported rather than invented:
         </p>
         <pre><code>adapter-registration-unverified
 The declared registration file .cursor/hooks.json is not on disk.</code></pre>
@@ -1867,6 +2037,27 @@ printf '{\n  "version": 1,\n  "hooks": {}\n}\n' &gt; .cursor/hooks.json</code></
           other than the expected container already sits where the entry belongs, the Gate reports
           <code>surface-shape-incompatible</code> and leaves the file untouched rather than
           repairing it.
+        </p>
+      </div>
+
+      <div class="note" id="adding-cursor">
+        <span class="note-tag">Adding Cursor later, to a clone already activated for Git</span>
+        <p>
+          Running <code>git gate activate --client cursor</code> on a clone that is already
+          activated is refused: an activation never adds to an existing one, and
+          <code>agent-framework setup</code> reports nothing left to do. To add (or remove) a
+          client, withdraw the activation and activate again with the client you want. Your
+          <code>.agent-framework.yaml</code>, your evidence, and the <code>git gate</code>
+          shortcut all stay. Each first command prints a preview and a token; the second confirms
+          it:
+        </p>
+        <pre><code>git gate deactivate
+git gate deactivate --confirm &lt;token&gt;
+git gate activate --client cursor
+git gate activate --client cursor --confirm &lt;token&gt;</code></pre>
+        <p>
+          <code>git gate status</code> should then say <code>healthy</code>, and
+          <code>.cursor/hooks.json</code> holds the Gate's entry.
         </p>
       </div>
 

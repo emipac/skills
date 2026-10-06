@@ -1,382 +1,90 @@
 ---
 name: framework-setup
-description: Discover and configure a Laravel or Express/TypeScript repository for AI Skills Framework without modifying AGENTS.md. Use before the first lifecycle run, when migrating the configuration schema, explicitly configuring optional Gate policy, switching tracker adapters, or changing project conventions, source scopes, or verification commands.
+description: Discover and configure a Laravel or Express/TypeScript repository for AI Skills Framework without modifying AGENTS.md, then, only when the maintainer opts in, take it through schema v4, Gate policy, and activation with the agent-framework command. Use before the first lifecycle run, when migrating the configuration schema, configuring or revising the optional Gate policy, switching tracker adapters, or changing project conventions, source scopes, or verification commands.
 ---
 
 # Framework Setup
 
 Create or update `.agent-framework.yaml`, the repository-local contract consumed
 by the lifecycle skills. Discovery is deterministic; decisions remain human.
+Every write goes through a command that previews first. This skill never
+authors the configuration by hand.
 
-## Adopting the Gate: `agent-framework setup`
+`<skill-directory>` below is the directory holding this `SKILL.md`. Resolve it
+from where the client installed the skill; do not assume a path.
 
-The recommended adoption path is the Framework command, which ships in this
-skill and as the `agent-framework` package bin:
+## Rules that keep setup on its rails
 
-```bash
-node <skill-directory>/scripts/agent-framework.mjs setup [--json] [--project <directory>]
-```
-
-**In an interactive terminal** (standard input and output both terminals, no
-`--json`) it walks the maintainer from the clone's adoption state to a healthy
-activated clone, one step at a time, re-deriving each step from the clone as
-the last one left it. For each step it shows the owning operation's complete
-preview — the migrated `.agent-framework.yaml`, the drafted Gate policy and the
-file it would write, or the Gate's own `--json` preview — and asks only what
-that operation cannot derive: the migration report's open decisions (a profile
-left `unknown`, a command's runner, arguments, or timeout), offering the owning
-draft's value as the default; the client to activate (`git` by default); and,
-for a candidate weaker than the trusted policy, the weakening the Gate names,
-typed back exactly. Only the answer `yes` confirms, and it confirms exactly that
-preview with its own token through the operation that owns it — this skill's
-migration and Gate configuration in-process, the Gate as its own command. Gate
-confirmations declare `--consent-channel interactive-guided-setup`, so the
-Lifecycle event the Gate appends records, as self-declared, that consent came
-through a guided prompt. Any other answer, end of input, or a refusal by the
-owning operation (a preview that changed before the answer, doctor predicting
-activation would stop) stops the run in the owning operation's words, with the
-clone at the last completed step; nothing is retried and no answer is carried
-to the next step or run. It repeats until Gate status names nothing further,
-then prints where the clone stands. It writes no draft file and prints no token
-to copy. Base setup has no preview, so a clone with no configuration is told the
-command to run and nothing is performed.
-
-The prompts are the maintainer's consent. An agent must not answer them; an
-agent runs `setup --json`, or without a terminal, and hands the confirmation to
-the maintainer.
-
-**Without a terminal, or with `--json`,** it confirms nothing and prints the
-plan: the adoption state — `no-configuration`, `schema-v3`,
-`gate-unconfigured`, `configured`, or `activated` with the Gate's health — every
-remaining step in order with the command that owns it, and the exact next
-command, including the draft path to use. It writes, confirms, and registers
-nothing, and it never prompts. Each boundary is the owning command's own
-answer: this skill's schema reading, migration preview, and policy preview;
-`gate status --json` for the Gate state, its named remedies, and the Gate
-subcommands that perform each one; `gate doctor --json` for whether activation
-would stop. A step the owning command would refuse carries that refusal
-verbatim. A Gate whose document names a remedy without its subcommands predates
-them: setup stops with `gate-remedy-subcommands-missing`, naming the installed
-Gate, rather than guess a command — update the Gate module.
-
-It reaches the Gate only by running `change-evaluation-gate` on the path, else
-the installed `change-evaluation-gate` skill beside this one. When neither
-exists it performs or names only this skill's steps and says the Gate steps are
-unavailable. Exit status is `0` with nothing further to do, `1` when steps
-remain (or a guided run stopped), and `2` when it could not run.
-
-The direct commands each step names remain documented below and in the Gate's
-lifecycle contract; a guided step and the same command typed directly write the
-same configuration, receipt, and Lifecycle events, apart from the recorded
-consent channel.
-
-Completion criterion: Gate status names nothing further, or the next step and
-its owning command are known. Perform it through the section below that owns it.
-
-## What the Gate runs: `agent-framework config show`
-
-To read the Gate configuration section without reading flow-JSON lines, run:
-
-```bash
-node <skill-directory>/scripts/agent-framework.mjs config show [--json] [--project <directory>]
-```
-
-It lists the five subcontracts — `checks`, `budget`, `bypass`, `execution`,
-`evidence` — by name, one line per key. On an activated clone each value is
-marked `matches` or `differs` against the section the Activation receipt
-pinned, and a differing list of names says which were added and removed. The
-receipt pins the section's identity, not its values, so the pinned values are
-those `gate status --json` recovers (`observation.configuration`) by the rule
-`gate sync` judges against: the receipt when a sync wrote it, else the file
-when its identity never moved, else the committed file at `HEAD`. When no
-document reproduces the pinned identity each value is `unrecoverable` and only
-the section as a whole is compared. A clone never activated compares nothing.
-Sensitive runtime inputs appear by name and the source `gate doctor --json`
-resolves each from — never a value. A clone with no Gate section says so and
-names setup's next step.
-
-It is read-only: nothing under the clone or `.git` changes. Without the Gate
-module a schema v4 clone is refused with `gate-unavailable`, and a Gate whose
-status lacks the section is refused with `gate-configuration-unobserved` — update
-the Gate module. Exit status is `0` when nothing differs, `1` when there is no
-Gate section, it does not resolve, or a value differs, and `2` when it could not
-run.
-
-## Revising the Gate section by name: `agent-framework config <revision>`
-
-To add or remove a dependency root, set how roots are provided, change the
-budget-skippable checks, declare a Sensitive runtime input or an environment
-file, move a check between required and advisory, set the budget, or turn bypass
-on or off, never edit the YAML keys: name the revision.
-
-```bash
-node <skill-directory>/scripts/agent-framework.mjs config add-dependency-root <root> [--provisioning link|copy] [--confirm <token>] [--acknowledge-weakening] [--json] [--project <directory>]
-node <skill-directory>/scripts/agent-framework.mjs config remove-dependency-root <root> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config set-dependency-provisioning <link|copy> [--root <root>] [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config add-budget-skippable <check> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config remove-budget-skippable <check> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config add-sensitive-input <NAME> [--environment-file <file>] [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config remove-sensitive-input <NAME> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config add-environment-file <file> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config remove-environment-file <file> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config promote-check <check> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config demote-check <check> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config remove-check <check> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config set-budget <seconds> [--confirm <token>] ...
-node <skill-directory>/scripts/agent-framework.mjs config set-bypass <true|false> [--marker <marker>] [--require-reference true|false] [--confirm <token>] ...
-```
-
-A Sensitive runtime input is declared by name only (`evidence.sensitive_inputs`);
-`--environment-file .env` also declares the git-ignored file it may be resolved
-from besides the environment (`evidence.environment_files`), when that file is
-not declared yet. Nothing reads, asks for, or prints the value: any argument
-typed as `NAME=value` is refused as `value-supplied`, naming only `NAME`, and
-the value is repeated nowhere — not in the refusal, the document, or an echoed
-command. A check moves
-between required and advisory, or is removed, only when the policy already binds
-it; an identity bound as neither is refused (`check-unbound`), because binding a
-check or editing a Verification profile command is not a revision.
-`set-bypass true` keeps a marker already declared or takes `--marker`; an
-enabled bypass without one is refused with the Gate policy validator's own
-reason. Disabling keeps the marker and the reference rule as they are.
-
-Without `--confirm` it writes nothing: it shows each line of the Gate section
-the revision changes, before and after, its `previewHash`, and the exact
-confirming command. `--confirm <previewHash>` writes exactly that change, and
-only while the file is still the one previewed. The candidate is judged by the
-same Gate policy validator `--configure-gate` loads and refused with its own
-reason. Provisioning is set as a single strategy or, with `--root`, per root:
-a single strategy that differs becomes a map in which every other root keeps
-the strategy it had, and removing a root removes its map entry. A revision
-that would change nothing is refused (`nothing-to-revise`).
-
-Every byte outside the section — comments and formatting included — is kept.
-The section itself is rewritten only when it round-trips: it is exactly what
-`--configure-gate` writes (`evaluation_gate:` and then one flow-JSON line per
-subcontract, `checks`, `budget`, `bypass`, `execution`, `evidence`, nothing
-between them), so re-rendering the candidate the same way changes only the
-revised line. A hand-written block section, a comment or blank line inside the
-section, differently spelled JSON, or a section declared twice is refused by
-line with nothing written (`section-unrevisable`, `section-ambiguous`); edit
-that one by hand.
-
-On an activated clone a confirmed revision continues into the Gate's own
-preview of the re-pin `gate status` names for the changed configuration
-(`gate sync --json`), checks it is for exactly the candidate written, and
-prints its trusted and candidate identities, any weakening, any refusal, and
-its own `--confirm` line. It never confirms that re-pin. A configured clone
-that is not activated has nothing to re-pin. `allowed_environment` and
-Verification profile commands are never revisable here.
-
-Whether a revision weakens the trusted policy is `gate sync`'s judgement, not
-this command's: the revision preview names no weakening, and the re-pin preview
-reports the weakenings and refusal exactly as the Gate states them. A demoted or
-removed required check is refused there as `weakening-unacknowledged` with no
-token, and the next command is the Gate's own acknowledged preview
-(`git gate sync --acknowledge-weakening`), which offers the token. Pass
-`--acknowledge-weakening` to the revision to have it passed through to the
-chained preview instead; the confirming line then carries the acknowledgement
-the Gate's token binds. A looser budget or an enabled bypass is not counted as
-weaker by the Gate today.
-
-The same operation runs without the Framework command:
-
-```bash
-node <skill-directory>/scripts/configure.mjs --project "$PWD" \
-  --revise-gate add-dependency-root --root vendor --provisioning copy [--confirm <preview-hash>]
-```
-
-Each revision's value is passed as its own option: `--root`, `--provisioning`,
-`--check`, `--name`, `--environment-file`, `--file`, `--seconds`, `--enabled`,
-`--marker`, `--require-reference`. Both write the same file. A refused revision
-prints `{ "status": "refused", "reasonCode", "detail" }` and exits `2`.
-Exit status is `0` when the revision is written and nothing follows, `1` when a
-confirmation or a re-pin remains, and `2` when it was refused.
-
-## What the repository already implies: `agent-framework config suggest`
-
-To find what the Gate section should declare and does not, ask:
-
-```bash
-node <skill-directory>/scripts/agent-framework.mjs config suggest [--json] [--project <directory>]
-```
-
-It proposes, each with its evidence and the exact revision command above that
-previews it:
-
-- a dependency root (`add-dependency-root`) for each installed directory present
-  together with its manifest or a lock file — `vendor/` with `composer.json` or
-  `composer.lock`, `node_modules/` with `package.json` or a Node lock file. This
-  skill's own table records which directory each one installs into;
-- a Sensitive runtime input name (`add-sensitive-input`) for each key
-  `.env.example` assigns, with its line. Only the text before `=` is kept; a
-  value is never read into any output. A line that assigns nothing, or whose
-  key the Gate policy validator refuses as a name, is counted and never shown;
-- an environment file (`add-environment-file`) for `.env` when it is present
-  and `git check-ignore` says Git ignores it. Its contents are never read.
-
-Anything already declared — the revision would change nothing — is not
-proposed, and every proposal is proved by previewing its revision, whose token
-is discarded. It applies nothing, offers no "apply all", and never proposes a
-check or a Verification profile command: run a proposal's command to see its
-preview and token, then confirm that preview. It writes nothing under the clone
-or `.git`. A clone with no Gate section proposes nothing and names setup's next
-step; without the Gate module a configured clone is refused with
-`gate-unavailable`, and a section no revision can rewrite with that revision's
-own refusal (`section-unrevisable`). Exit status is `0` with nothing to propose,
-`1` when proposals remain or there is no Gate section, and `2` when it could not
-run.
-
-## One page to read or share: `agent-framework report --html`
-
-To hand someone the clone's Gate state without asking them to run commands:
-
-```bash
-node <skill-directory>/scripts/agent-framework.mjs report --html [--out <path>] [--project <directory>]
-```
-
-It writes one self-contained static HTML file and prints its path on a
-`report:` line. The page shows the Gate state and health, every remaining step
-with its command and the next command, the doctor's findings, and the effective
-Gate configuration section. The state, health, steps, and configuration are
-rendered from the documents `setup --json` and `config show --json` print, so
-the page cannot disagree with them; the doctor's findings are copied from
-`gate doctor --json`, which is asked only on a configured or activated clone.
-A schema v3 or unconfigured clone, or a clone without the Gate module, gets a
-page that says so in those commands' own words.
-
-The page holds no script, stylesheet, font, image, link, or control, escapes
-every string it shows, and carries its generation time and the command that
-regenerates it: it is a snapshot and goes stale when the clone changes. Two
-pages of an unchanged clone differ only in that time. A Sensitive runtime input
-appears by name and source only, never a value.
-
-By default it goes to a fresh name in the temporary directory; `--out` names
-another file. A path whose real location — after symbolic links and `..` — is
-inside the clone, a path that already exists, and a directory that does not
-exist are each refused with nothing written; it never overwrites a file. Nothing
-under the clone or `.git` changes. Exit status is `0` when the page is written
-and neither setup nor config show names anything further, `1` when it is written
-and something remains, and `2` when nothing was written.
+- **Ask the state; never infer it.** Before and after every step run
+  `node <skill-directory>/scripts/agent-framework.mjs setup --json` and read its
+  `state`, `steps`, and `next`. That plan is the only source of what comes
+  next.
+- **Run what the plan names, verbatim.** Use each step's own commands,
+  including its draft paths. Never invent a path, flag, step, or order.
+- **Previews are free; confirmations are the maintainer's.** Run any preview.
+  Show it to the maintainer, then run its `--confirm <token>` only after they
+  approve that exact preview in this conversation. A preview run again has a new
+  token; show it again.
+- **Never answer `agent-framework setup`'s interactive prompts** and never pass
+  `--consent-channel`: both say a person consented at a terminal.
+- **Never hand-edit the `evaluation_gate` section.** Revise it by name with
+  `agent-framework config <revision>`. Never put a secret value in any
+  argument; a `NAME=value` argument is refused.
+- **Run base setup only while the plan says `no-configuration` or
+  `schema-v3`.** `configure.mjs --tracker …` writes a schema v3 file from
+  scratch: on a schema v4 file it would rewrite it as v3 and drop
+  `evaluation_gate`.
+- **The Gate is opt-in.** Never configure or activate it unless the maintainer
+  asked for it in this conversation; an installed Gate module is not consent.
+- Never write `AGENTS.md` or `CLAUDE.md`; preserve every discovered `AGENTS.md`
+  byte for byte.
 
 ## Process
 
 ### 1. Discover
 
-Run:
-
 ```bash
 node <skill-directory>/scripts/configure.mjs --project "$PWD" --discover
+node <skill-directory>/scripts/agent-framework.mjs setup --json
 ```
 
-Read every path reported under `guidelinePaths` before proposing configuration.
-Treat existing repository instructions as authoritative. `AGENTS.md` is a
-protected input: read it, record it, and preserve its exact bytes.
+Read every path reported under `guidelinePaths` before proposing anything;
+existing repository instructions are authoritative. `verification.unclassifiedScripts`
+names every package script discovery declined, with the reason: read it to
+confirm no real check was left out, and do not turn any of it into a command.
 
-Completion criterion: backend, frontend, source-scope candidates, existing
-schema version, SRS candidates, guideline paths, protected files, and the
-detected verification profile, capabilities, and exact scoped commands are
-visible.
+Completion criterion: profiles, source-scope candidates, schema version, SRS
+candidates, guideline paths, protected files, verification commands, and the
+plan's `state` are known.
 
-`verification.unclassifiedScripts` names every package script discovery
-declined, with the reason. It is a report, not a question: nothing blocks on it
-and none of it is inferred to be a verification command. Read it to confirm no
-real check was left out.
+### 2. Base configuration
 
-### 2. Confirm the branches
+Only when the plan's `state` is `no-configuration`, or the maintainer wants to
+change a schema v3 contract. Present the detected values and ask only about
+unresolved or consequential choices:
 
-Present detected values and ask only about unresolved or consequential choices:
+1. **Tracker:** recommend the detected GitHub remote when present, otherwise
+   `local-markdown`. Offer `local-markdown`, `github`, `jira`, `linear`.
+2. **SRS:** recommend the strongest discovered candidate, or reserve
+   `docs/specifications/srs.md` for `/srs-modeling`. Use `null` only when the
+   maintainer explicitly excludes an SRS.
+3. **Profiles:** backend `laravel`, `express-typescript`, or `unknown`; one
+   compatible frontend `livewire`, `react-typescript`, `svelte-typescript`,
+   `none`, or `unknown`. `none` means proved absent; `unknown` stays active and
+   conservative. Both may be `none` only for a tooling-only repository.
+4. **Source scopes:** backend, frontend, and shared roots. Prefer an existing
+   contract, then detected entry points and conventional roots. Never classify
+   TypeScript by extension alone.
+5. **Command scopes:** each discovered command as backend, frontend, or both. A
+   package-manager command is not inherently frontend. The type-check spellings
+   `typecheck`, `type-check`, and `types` are treated alike. Watch, fix,
+   development, coverage, and write variants stay excluded unless explicitly
+   selected; prefer `format:check` over `format`. Record intentional exclusions
+   and keep them on later runs.
+6. **History:** keep an existing convention, otherwise recommend `docs/history`
+   without creating it.
 
-1. **Tracker:** recommend the detected GitHub remote when present; otherwise
-   local Markdown. Offer `local-markdown`, `github`, `jira`, and `linear`.
-2. **SRS:** recommend the strongest discovered SRS candidate, or reserve
-   `docs/specifications/srs.md` for `/srs-modeling` when none exists. Use `null`
-   only when the user explicitly excludes an SRS.
-3. **Profiles:** confirm `laravel`, `express-typescript`, or `unknown` and one
-   compatible frontend profile: `livewire`, `react-typescript`,
-   `svelte-typescript`, `none`, or `unknown`. In schema v4, `none` means the
-   profile is proved absent while `unknown` remains active and conservative;
-   both backend and frontend may be `none` only for a tooling-only repository.
-4. **Source scopes:** confirm backend, frontend, and shared roots. Prefer an
-   existing schema version 3 contract, then detected entry-point and
-   conventional roots. Express projects commonly use `server`, `backend`,
-   `api`, `database`, or `src/server`; React and Svelte commonly use `src`,
-   `client`, or `frontend`. Never classify TypeScript by extension alone.
-   Shared, tied, and unmatched files affect every configured active profile.
-5. **Command scopes:** confirm every discovered command as backend, frontend,
-   or both. A package-manager command is not inherently a frontend command.
-   Discovery accepts safe qualified checks such as `test:unit`,
-   `test:integration`, `format:check`, and `smoke:<name>`, treats the type-check
-   spellings `typecheck`, `type-check`, and `types` alike (so `typecheck:check`,
-   `type-check:check`, and `types:check` are all accepted), uses referenced
-   source roots as scope evidence, and excludes watch, fix, development,
-   coverage, and write variants unless explicitly selected. Prefer a
-   non-mutating `format:check` when both it and `format` exist. Record any
-   intentionally excluded scripts and preserve the same exclusion list on
-   later setup runs.
-6. **History:** retain an existing history convention; otherwise recommend
-   `docs/history` without creating it.
-
-Show the proposed configuration before writing. Defaults yield to applicable
-project instructions. A schema version 2 configuration must be confirmed before
-rewriting it as schema version 3.
-
-Completion criterion: the user has confirmed every value that changes the
-generated contract.
-
-### 3. Preview and migrate schema v3 to v4 when requested
-
-Keep schema v3 readable. Migration is a separate, explicit transaction and is
-not part of ordinary configuration. Prepare a JSON mapping for every schema v3
-`unknown` profile and every command timeout; ambiguous raw commands also need
-an explicit logical `runner` and `args` array.
-
-Do not hand-author that mapping from the migration report — the report names
-the field that is missing, the mapping supplies it, and pasting the report back
-fails on its own envelope keys. Ask for a correctly keyed draft instead:
-
-```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --draft-mapping
-```
-
-The draft is read-only and prints to stdout unless `--out <path>` is given, in
-which case it refuses to overwrite an existing file. Its `commands` keys are
-exactly the reported ambiguity paths and every value the framework has not
-proved is `null`. Replace each `null` with a proved fact; a draft that still
-carries one is refused by `--mapping` rather than accepted with a guess.
-
-Preview without `--confirm`:
-
-```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --migrate-v4 \
-  --mapping <mapping-json>
-```
-
-Review `proposedConfiguration` and its `previewHash`. Install exactly that
-preview with:
-
-```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --migrate-v4 \
-  --mapping <mapping-json> \
-  --confirm <preview-hash>
-```
-
-Migration refuses stale confirmation, unresolved ambiguity, behavior-changing
-profile mappings, or backend/frontend data assigned to a `none` profile. It
-writes atomically and never adds `evaluation_gate`, a receipt, or a hook.
-
-Completion criterion: the preview is reviewed, the confirmation matches the
-current source and proposed bytes, and the result reports `migrated`.
-
-### 4. Configure
-
-Run the same script with the confirmed values:
+Show the proposed configuration, then run, with the confirmed values:
 
 ```bash
 node <skill-directory>/scripts/configure.mjs \
@@ -395,104 +103,124 @@ node <skill-directory>/scripts/configure.mjs \
   --history <path-or-null>
 ```
 
-This writes only:
+It writes only `.agent-framework.yaml`, `docs/agents/issue-tracker.md`,
+`docs/agents/domain.md`, and `docs/agents/triage-labels.md`, and verifies every
+discovered `AGENTS.md` is unchanged. Running it again with the same values must
+produce byte-identical files. A schema version 2 file must be confirmed before
+it is rewritten as schema version 3.
 
-- `.agent-framework.yaml`
-- `docs/agents/issue-tracker.md`
-- `docs/agents/domain.md`
-- `docs/agents/triage-labels.md`
+Completion criterion: the four managed files are written and the plan's `state`
+is `schema-v3`.
 
-It never writes `AGENTS.md` or `CLAUDE.md`. The script refuses an unknown
-tracker or profile and verifies every discovered `AGENTS.md` remains unchanged.
+### 3. Decide about the Gate
 
-Completion criterion: the command succeeds and reports the four managed files.
+Ask the maintainer whether to adopt the Change Evaluation Gate: a clone-local
+Git `pre-commit` gate that blocks a commit whose required checks fail, opt-in
+and reversible. If not, go to step 7.
 
-### 5. Configure the optional Gate only when selected
+If yes, offer two ways and let them choose:
 
-Leave Gate configuration unselected during ordinary setup. Installed Gate assets
-never imply consent. Only schema v4 may add the policy, and it must contain
-exactly `checks`, `budget`, `bypass`, `execution`, and `evidence`. Check entries
-are required/advisory identities; Verification remains the sole command owner.
+- **They run `agent-framework setup` in their own terminal (recommended).** It
+  shows each remaining step's complete preview, asks only what nothing can
+  derive, and confirms on their `yes`. Wait for them, then continue at step 5
+  for anything the plan still names.
+- **You continue with steps 4 to 6,** showing every preview and confirming each
+  only after they approve it.
 
-Check identities are owned by the provider that matches the project and are not
-the ladder stage or command category names. Ask for a derived draft rather than
-transcribing them:
+### 4. Schema v4 and the Gate policy
 
-```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --draft-policy
-```
+Follow the plan's steps in order, with their exact commands.
 
-The draft is read-only, prints to stdout unless `--out <path>` is given, and
-refuses to overwrite an existing file. It emits all five subcontracts with
-`checks.required` and `checks.advisory` taken from the matching provider's own
-declared per-check default binding. Review both lists against the project — the
-draft proposes the provider's defaults, not a decision. `budget.total_seconds`
-is the total of the timeouts the configuration proved, or `null` when none are
-proved; a `null` budget is refused by `--policy` rather than defaulted.
+- **`migrate-schema-v4`:** run the step's draft command. Open the draft at the
+  path it names and ask the maintainer for every value left `null`; never fill
+  one with a guess. Write their answers into that draft — the only file you edit
+  — then run the preview, show `proposedConfiguration`, and confirm on approval.
+- **`configure-gate`:** run the step's draft command. Review
+  `checks.required` and `checks.advisory` with the maintainer — the draft is the
+  provider's defaults, not a decision — and have them decide a `null` budget.
+  For a Laravel profile the draft's `evidence` declares
+  `sensitive_inputs: ["APP_KEY"]` and `environment_files: [".env"]`, because the
+  test suite needs the key from the git-ignored `.env`; ask whether the project
+  keeps its key elsewhere before keeping them. Then preview, show, and confirm
+  on approval.
 
-For a Laravel profile the draft's `evidence` subcontract declares
-`sensitive_inputs: ["APP_KEY"]` and `environment_files: [".env"]`, because a
-stock Laravel suite reads its encryption key from a git-ignored `.env` the
-Gate's snapshot cannot contain. The Gate resolves that one approved name from
-the file at evaluation time, hands it to the check, and scrubs it from
-Evidence; names and paths only, never a value. Remove the two entries if the
-project keeps its key elsewhere. Every other profile drafts `evidence: {}`.
+The rules, refusals, and Laravel `APP_KEY` default of both transactions are in
+[schema-and-gate-transactions.md](./references/schema-and-gate-transactions.md).
 
-Prepare the five-subcontract policy as JSON, then preview without `--confirm`:
+Completion criterion: the plan's `state` is `configured`.
 
-```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --configure-gate \
-  --policy <gate-policy-json>
-```
+### 5. Fill in what the project implies
 
-Review `proposedConfiguration` and `previewHash`, then install only that preview:
+On a configured clone, before activating:
 
 ```bash
-node <skill-directory>/scripts/configure.mjs \
-  --project "$PWD" \
-  --configure-gate \
-  --policy <gate-policy-json> \
-  --confirm <preview-hash>
+node <skill-directory>/scripts/agent-framework.mjs config suggest --json
 ```
 
-The transaction rejects schema v3, stale confirmation, missing or extra
-subcontracts, command ownership, and activation state. It writes only
-`.agent-framework.yaml`, atomically, and reports `activated: false`. It never
-creates a hook, receipt, trust decision, or evidence runtime. It configures
-once: a clone already configured is refused, and its entries are revised by
-name instead (`agent-framework config <revision>`, above).
+Present each proposal with its evidence. For each one the maintainer accepts,
+run its `command` (a preview), show it, and run it again with `--confirm
+<token>` on approval. Any other change to the Gate section — a root's
+provisioning, a check moved between required and advisory, the budget, bypass —
+is a named `config` revision too; see
+[framework-command.md](./references/framework-command.md). Before activation
+nothing needs re-pinning. On an activated clone each confirmed revision prints
+a `gate sync` preview; that is a separate confirmation with its own token.
 
-Completion criterion: the result reports `configured`, the exact preview was
-installed, and commit behavior remains unchanged.
+Completion criterion: `config suggest` proposes nothing the maintainer wants.
 
-### 6. Verify
+### 6. Doctor and activation
 
-Run discovery again, inspect the generated files, then rerun the identical
-configure command. The second run must produce byte-identical schema version 3
-files.
+Run the plan's `doctor` command and report what it says. If it predicts that
+activation would stop, resolve that first.
 
-Report:
+Then ask which client gets the Gate: `git` (Git only) or `cursor` (Git and
+Cursor together). Say plainly that this is about the editor hook, not the
+tracker. Cursor needs `.cursor/hooks.json` carrying `"version": 1`; the Gate
+never creates it. If it is missing, ask before creating the minimal file:
 
-- selected profiles and tracker;
-- confirmed backend, frontend, and shared source roots;
-- recorded SRS, glossary, ADR, guideline, convention, and history paths;
-- exact verification commands and their backend/frontend/both scopes;
-- protected instruction files checked;
-- any unresolved values left as `null` or empty lists.
+```bash
+mkdir -p .cursor
+printf '{\n  "version": 1,\n  "hooks": {}\n}\n' > .cursor/hooks.json
+```
 
-Completion criterion: repeat configuration is idempotent and every discovered
-`AGENTS.md` is byte-for-byte unchanged.
+Run the plan's activation preview, adding `--client cursor` when chosen, with
+`--json`. Show it, and confirm it with its `confirmationToken` on approval. An
+already activated clone gains or loses a client only by deactivating and
+activating again; everything after activation belongs to the
+`change-evaluation-gate` skill.
+
+Completion criterion: the plan's `state` is `activated` with health `healthy`.
+
+### 7. Verify and report
+
+Run `setup --json` once more. Report:
+
+- the plan's `state` and `next`;
+- the tracker and profiles, and the backend, frontend, and shared source roots;
+- the recorded SRS, glossary, ADR, guideline, convention, and history paths;
+- the exact verification commands and their scopes;
+- the protected instruction files checked;
+- any value left `null` or empty.
+
+Recommend committing `.agent-framework.yaml`, and `.cursor/hooks.json` when
+Cursor was activated; until then the Gate reports the configuration as
+unversioned. `agent-framework report --html` writes a one-page summary the
+maintainer can read or share.
+
+Completion criterion: the report is delivered and every discovered `AGENTS.md`
+is byte-for-byte unchanged.
 
 ## References
 
-Read [configuration.md](./references/configuration.md) when interpreting the
-generated contract. Read only the selected tracker reference:
-
-- [tracker-local-markdown.md](./references/tracker-local-markdown.md)
-- [tracker-github.md](./references/tracker-github.md)
-- [tracker-jira.md](./references/tracker-jira.md)
-- [tracker-linear.md](./references/tracker-linear.md)
+- [framework-command.md](./references/framework-command.md): every
+  `agent-framework` subcommand — `setup`, `config show`, the named `config`
+  revisions, `config suggest`, `report --html` — with refusals and exit status.
+- [schema-and-gate-transactions.md](./references/schema-and-gate-transactions.md):
+  the direct migration and Gate-configuration transactions.
+- [configuration.md](./references/configuration.md): interpreting the generated
+  contract.
+- Only the selected tracker's reference:
+  [local Markdown](./references/tracker-local-markdown.md),
+  [GitHub](./references/tracker-github.md),
+  [Jira](./references/tracker-jira.md),
+  [Linear](./references/tracker-linear.md).
