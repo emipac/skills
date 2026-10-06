@@ -2527,7 +2527,28 @@ const normalizeSourceScopes = (sourceScopes) => Object.fromEntries(
   }),
 );
 
+/**
+ * Base setup writes a schema v3 file from discovery. A schema v4 file holds
+ * decisions discovery cannot reproduce — Command descriptors, mapped profiles,
+ * the Gate section — so it is refused before discovery and before any write,
+ * rather than rewritten as v3 (`FS-005`).
+ */
+const refuseSchemaV4 = async (projectRoot) => {
+  const { schemaVersion } = await readExistingConfiguration(path.resolve(projectRoot));
+
+  if (schemaVersion === 4) {
+    throw revisionRefusal(
+      'schema-v4-configured',
+      '.agent-framework.yaml declares schema version 4, and base setup writes schema version 3 from discovery: '
+        + 'rewriting it would lose its Command descriptors, its mapped profiles, and any evaluation_gate section. Nothing was written. '
+        + 'Revise the Gate section by name with `agent-framework config <revision>`; any other change to a schema v4 file is the maintainer\'s own edit.',
+    );
+  }
+};
+
 export const configureProject = async ({ projectRoot, selections }) => {
+  await refuseSchemaV4(projectRoot);
+
   const discovery = await discoverProject(projectRoot);
   const tracker = selections.tracker;
   const backend = selections.backend ?? discovery.backend;
@@ -2789,21 +2810,34 @@ const runCli = async () => {
     throw new Error('--tracker is required when configuring a project');
   }
 
-  const result = await configureProject({
-    projectRoot,
-    selections: {
-      tracker: options.tracker,
-      srsPath: nullableArgument(options.srs),
-      glossaryPath: nullableArgument(options.glossary),
-      adrPath: nullableArgument(options.adrs),
-      historyPath: nullableArgument(options.history),
-      backend: options.backend,
-      frontend: options.frontend,
-      sourceScopes: sourceScopeArguments(options),
-      scriptScopes: scriptScopeArguments(options),
-      excludedScripts: listArgument(options['exclude-scripts']),
-    },
-  });
+  let result;
+
+  try {
+    result = await configureProject({
+      projectRoot,
+      selections: {
+        tracker: options.tracker,
+        srsPath: nullableArgument(options.srs),
+        glossaryPath: nullableArgument(options.glossary),
+        adrPath: nullableArgument(options.adrs),
+        historyPath: nullableArgument(options.history),
+        backend: options.backend,
+        frontend: options.frontend,
+        sourceScopes: sourceScopeArguments(options),
+        scriptScopes: scriptScopeArguments(options),
+        excludedScripts: listArgument(options['exclude-scripts']),
+      },
+    });
+  } catch (error) {
+    if (error.reasonCode === undefined) {
+      throw error;
+    }
+
+    // Stated as `--revise-gate` states its refusals: a document, exit 2.
+    console.log(JSON.stringify({ status: 'refused', reasonCode: error.reasonCode, detail: error.message }, null, 2));
+    process.exitCode = 2;
+    return;
+  }
 
   console.log(JSON.stringify(result, null, 2));
 };

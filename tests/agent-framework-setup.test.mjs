@@ -27,6 +27,7 @@ import { runFrameworkCommand } from '../skills/framework-setup/scripts/agent-fra
 import {
   configureGate,
   configureProject,
+  discoverProject,
   previewGateConfiguration,
 } from '../skills/framework-setup/scripts/configure.mjs';
 import { processTerminal } from '../skills/framework-setup/scripts/lib/terminal.mjs';
@@ -3403,4 +3404,142 @@ test('TB-073: report takes --html, --out, and --project only, and is in the usag
 
   assert.equal(await cloneHash(root), before);
   assert.deepEqual(await readdir(temporary), []);
+});
+
+/* -------------------------------------------------------------------------
+ * FS-005: base setup never rewrites a schema v4 configuration as v3.
+ *
+ * `configure.mjs --tracker …` writes a schema v3 file from discovery. On a
+ * schema v4 file that silently dropped the Command descriptors, the mapped
+ * profiles, and the Gate section; it is now refused with its own reason and
+ * nothing is written.
+ * ---------------------------------------------------------------------- */
+
+const MANAGED_FILES = [
+  '.agent-framework.yaml',
+  'docs/agents/issue-tracker.md',
+  'docs/agents/domain.md',
+  'docs/agents/triage-labels.md',
+];
+
+const baseSetup = (root) => run(process.execPath, [CONFIGURE, '--project', root, '--tracker', 'local-markdown'], { cwd: root });
+
+/** Each managed file's bytes, `null` when absent. */
+const managedBytes = (root) => Promise.all(MANAGED_FILES.map((file) => readFile(path.join(root, file)).catch(() => null)));
+
+/** Every AGENTS.md discovery reports, with its bytes. */
+const discoveredAgents = async (root) => {
+  const { protectedFiles } = await discoverProject(root);
+
+  return Promise.all(protectedFiles.map(async (file) => [file, await readFile(path.join(root, file))]));
+};
+
+/** THE FIRST RED TEST: a schema v4 file with a Gate section is refused and kept byte for byte. */
+test('FS-005: base setup on a schema v4 file with a Gate section exits non-zero and leaves its bytes unchanged', async (t) => {
+  const root = await configuredClone(t);
+  const before = await readFile(path.join(root, '.agent-framework.yaml'));
+  const result = await baseSetup(root);
+
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.deepEqual(await readFile(path.join(root, '.agent-framework.yaml')), before);
+});
+
+const SCHEMA_V4_FIXTURES = Object.freeze([
+  ['a clone with no Gate section', (t) => schemaV4Clone(t, { gate: false }), 'gate-unconfigured'],
+  ['a clone with a configured Gate section', (t) => configuredClone(t), 'configured'],
+  ['an activated clone', (t) => activatedClone(t, { policy: CONFIGURED_POLICY }), 'activated'],
+]);
+
+for (const [name, fixture, state] of SCHEMA_V4_FIXTURES) {
+  test(`FS-005: base setup refuses the schema v4 file of ${name}, writing no managed file and no AGENTS.md`, async (t) => {
+    const root = await fixture(t);
+
+    // A nested instruction file, and tracker documents a maintainer already
+    // edited, so a write to any of them would show.
+    await mkdir(path.join(root, 'packages', 'module'), { recursive: true });
+    await writeFile(path.join(root, 'packages', 'module', 'AGENTS.md'), 'module-owned instructions\n', 'utf8');
+    await mkdir(path.join(root, 'docs', 'agents'), { recursive: true });
+
+    for (const file of MANAGED_FILES.slice(1)) {
+      await writeFile(path.join(root, file), `maintainer-edited ${file}\n`, 'utf8');
+    }
+
+    const agents = await discoveredAgents(root);
+    const managed = await managedBytes(root);
+    const before = await cloneHash(root);
+
+    assert.deepEqual(agents.map(([file]) => file), ['AGENTS.md', 'packages/module/AGENTS.md']);
+
+    const result = await baseSetup(root);
+    const refusal = JSON.parse(result.stdout);
+
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(Object.keys(refusal), ['status', 'reasonCode', 'detail']);
+    assert.equal(refusal.status, 'refused');
+    assert.equal(refusal.reasonCode, 'schema-v4-configured');
+    assert.match(refusal.detail, /declares schema version 4, and base setup writes schema version 3/);
+    assert.match(refusal.detail, /Nothing was written\./);
+    assert.match(refusal.detail, /agent-framework config <revision>/);
+
+    await assert.rejects(
+      configureProject({ projectRoot: root, selections: { tracker: 'local-markdown' } }),
+      (error) => error.reasonCode === 'schema-v4-configured' && error.message === refusal.detail,
+    );
+
+    assert.equal(await cloneHash(root), before, 'a refused base setup changed a byte under the clone or .git.');
+    assert.deepEqual(await managedBytes(root), managed);
+    assert.deepEqual(await discoveredAgents(root), agents);
+    assert.equal((await agentFramework(root, ['setup', '--json'])).document.state, state);
+  });
+}
+
+test('FS-005 AC: setup --json on a schema v4 clone names no base setup step, with or without the Gate module', async (t) => {
+  const { entry } = await setupOnlyInstall(t);
+  const clones = [
+    ...await Promise.all(SCHEMA_V4_FIXTURES.map(([, fixture]) => fixture(t))).then((roots) => roots.map((root) => [root, {}])),
+    [await schemaV4Clone(t, { gate: false }), { entry }],
+    [await configuredClone(t), { entry }],
+  ];
+
+  for (const [root, options] of clones) {
+    const { plan } = await observeSetup(root, options);
+
+    assert.equal(plan.failure ?? null, null);
+    assert.equal(commandsOf(plan).includes('configure-project'), false, `${plan.state} names base setup.`);
+    assert.equal(
+      plan.steps.some((step) => step.commands.some((command) => command.argv.includes('--tracker'))),
+      false,
+      `${plan.state} names a --tracker command.`,
+    );
+  }
+});
+
+test('FS-005: base setup on no configuration, then on its own schema v3 file, writes as before and repeats byte for byte', async (t) => {
+  const root = await noConfigurationClone(t);
+  const agents = await discoveredAgents(root);
+  const first = await baseSetup(root);
+
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(await configurationOf(root), /^schema_version: 3$/m);
+
+  const written = await managedBytes(root);
+
+  assert.equal(written.includes(null), false);
+
+  const repeated = await baseSetup(root);
+
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal(repeated.stdout, first.stdout);
+  assert.deepEqual(await managedBytes(root), written);
+  assert.deepEqual(await discoveredAgents(root), agents);
+
+  // Schema v2 is still rewritten as v3 by base setup; its confirmation is the
+  // maintainer's, asked by the skill before the command runs.
+  await writeFile(path.join(root, '.agent-framework.yaml'), 'schema_version: 2\nbackend: unknown\nfrontend: none\n', 'utf8');
+
+  const fromV2 = await baseSetup(root);
+
+  assert.equal(fromV2.status, 0, fromV2.stderr);
+  assert.deepEqual(await managedBytes(root), written);
 });

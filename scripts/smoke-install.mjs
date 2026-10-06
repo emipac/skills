@@ -577,6 +577,34 @@ try {
         );
       }
 
+      // Base setup refuses a schema v4 file rather than rewriting it as v3
+      // (FS-005): through either path it states the refusal, exits 2, and the
+      // configured clone keeps every byte and gains no tracker document.
+      if (script === 'configure.mjs') {
+        const configuration = path.join(configuredRoot, '.agent-framework.yaml');
+        const before = await readFile(configuration, 'utf8');
+        const baseSetupArgv = ['--project', configuredRoot, '--tracker', 'local-markdown'];
+
+        for (const scriptPath of [installedScript, linkedScript]) {
+          const refused = runInstalledCommand(scriptPath, baseSetupArgv, configuredRoot);
+          const refusal = refused.status === 2 ? JSON.parse(refused.stdout) : null;
+          const trackerDocumentWritten = await access(path.join(configuredRoot, 'docs', 'agents'))
+            .then(() => true, () => false);
+
+          if (
+            refusal?.status !== 'refused'
+            || refusal.reasonCode !== 'schema-v4-configured'
+            || (await readFile(configuration, 'utf8')) !== before
+            || trackerDocumentWritten
+          ) {
+            throw new Error(
+              `${agent}: installed ${skill}/${script} did not refuse base setup on a schema v4 file: `
+              + `exit ${refused.status} ${refused.stdout}${refused.stderr}`,
+            );
+          }
+        }
+      }
+
       // The Framework command names base setup for this unconfigured project
       // and reaches the Gate installed beside it, never the source checkout.
       if (script === 'agent-framework.mjs') {
