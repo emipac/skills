@@ -1,14 +1,16 @@
 # TB-017 — Preserve schema v4 on a repeated setup run
 
-Status: ready-for-agent
+Status: done
 Parent: change-evaluation-gate-feature-spec
 Assignee:
-Labels: ready-for-agent, defect
+Labels: done, defect
 Blocked by:
 Tracker ID: 17-preserve-schema-v4-on-repeat-setup
 Draft key: TB-017
 
-**Status:** ready-for-agent
+**Status:** done
+
+**Delivered by:** FS-005 (`568439c`), `.scratch/framework-scripts/issues/05-never-rewrite-a-schema-v4-configuration-as-v3.md`. Base setup now refuses a schema v4 file with `schema-v4-configured` and writes nothing; schema v3, migration, and Gate configuration are unchanged.
 
 **Parent feature contract:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
 **Parent feature spec:** `.scratch/change-evaluation-gate/issues/change-evaluation-gate-feature-spec.md`
@@ -104,12 +106,12 @@ their current behaviour unchanged.
 
 ## Acceptance Criteria
 
-- [ ] `AC-CFG-005`: a repeat default configuration run against a schema v4
+- [x] `AC-CFG-005`: a repeat default configuration run against a schema v4
   repository leaves `.agent-framework.yaml` byte-identical, including its
   `schema_version`, its Command descriptors, and any `evaluation_gate` policy;
   where the run cannot preserve the contract it refuses with an exact reason and
   writes nothing.
-- [ ] `AC-CFG-005`: a schema v3 repository keeps its existing repeat-run
+- [x] `AC-CFG-005`: a schema v3 repository keeps its existing repeat-run
   behaviour, and the migration and Gate configuration paths continue to require
   their previewed hash confirmation.
 
