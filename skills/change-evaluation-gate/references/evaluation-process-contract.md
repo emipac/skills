@@ -85,6 +85,14 @@ the checks run, the execution-root identity is re-derived; any difference is
 Materialization writes no Git object, no index, and no commit. This is
 isolation from accidental interference, not a sandbox against hostile code.
 
+Each execution root also gives its checks a scratch directory of its own, beside
+the root rather than inside the graded tree: `TMPDIR`, `TMP`, and `TEMP` name it
+for every check, and it is removed with the root, including when a run is
+interrupted. A tool that caches under the temporary directory therefore never
+reads a cache written for an earlier root, whose absolute paths no longer exist.
+A descriptor that lists one of those names in `allowed_environment` receives its
+declared value instead. The cost is a cold tool cache on every evaluation.
+
 ## What each snapshot kind contains
 
 | Kind | Content set |

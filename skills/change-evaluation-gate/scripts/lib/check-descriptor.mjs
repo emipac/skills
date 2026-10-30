@@ -74,6 +74,16 @@ const REQUIRED_DESCRIPTOR_FIELDS = Object.freeze([
   'selection',
 ]);
 
+/**
+ * Fields a descriptor may carry without being required to. `label` is display
+ * text only: a person-readable name for what the check runs. It is never an
+ * identity, never part of a policy binding, and never read by a decision.
+ */
+const OPTIONAL_DESCRIPTOR_FIELDS = Object.freeze(['label']);
+
+/** Short, single-line, printable text: it is rendered into feedback. */
+export const LABEL_PATTERN = /^[^\p{Cc}]{1,40}$/u;
+
 const SCOPES = Object.freeze(['backend', 'frontend', 'both']);
 
 const IDENTIFIER = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
@@ -172,13 +182,22 @@ export const validateCheckDescriptor = (descriptor) => {
   }
 
   for (const field of Object.keys(descriptor)) {
-    if (!REQUIRED_DESCRIPTOR_FIELDS.includes(field)) {
+    if (!REQUIRED_DESCRIPTOR_FIELDS.includes(field) && !OPTIONAL_DESCRIPTOR_FIELDS.includes(field)) {
       errors.push({
         code: 'descriptor-field-unknown',
         path: `${path}.${field}`,
         message: `Check descriptor does not accept ${field}; extend the contract version instead.`,
       });
     }
+  }
+
+  if ('label' in descriptor
+    && (typeof descriptor.label !== 'string' || !LABEL_PATTERN.test(descriptor.label.trim()))) {
+    errors.push({
+      code: 'descriptor-label-invalid',
+      path: `${path}.label`,
+      message: 'Check label must be a single line of 1 to 40 printable characters.',
+    });
   }
 
   if (typeof descriptor.id !== 'string' || !IDENTIFIER.test(descriptor.id)) {

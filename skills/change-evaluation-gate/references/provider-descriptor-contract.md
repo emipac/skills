@@ -55,6 +55,7 @@ validate. It never repairs, guesses, or partially accepts one provider's output.
 | `evidence` | `claims`, `success_exit_codes`, and an optional machine-readable `report`. |
 | `order` | Stable ordering within a stage. |
 | `selection` | Deterministic test selection; required for `focused` and `affected-tests`, `null` elsewhere. |
+| `label` | Optional display text, 1 to 40 printable characters on one line, naming the tool a check runs (`pint`, `phpstan`). Never an identity: policy binds `id`, and a label changes no identity, configuration, or evaluation id. Rendered in a check's summary as `label (id)`. |
 
 ## Prerequisites
 

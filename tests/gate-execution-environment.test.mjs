@@ -20,7 +20,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createBoundedExecutor } from '../skills/change-evaluation-gate/scripts/lib/bounded-execution.mjs';
+import {
+  createBoundedExecutor,
+  scratchDirectoryFor,
+} from '../skills/change-evaluation-gate/scripts/lib/bounded-execution.mjs';
+import {
+  createExecutionRoot,
+  releaseExecutionRoot,
+} from '../skills/change-evaluation-gate/scripts/lib/hook-runner.mjs';
 import {
   createRunnerResolver,
   resolveExecutables,
@@ -215,6 +222,59 @@ test('TB-028 SG-CMD-001: the child sees the runtime search path and its declared
     /\/a\/leaked\/shell\/path/,
     "the runtime search path is derived from the pins, never inherited from the maintainer's shell.",
   );
+});
+
+const environmentOf = async (t, { allowed = [], ambient = {} } = {}) => {
+  const { root, toolchain } = await clone(t);
+  const command = stored('composer-bin', ['grade', 'subject.txt'], { allowed_environment: allowed });
+  const resolution = createRunnerResolver({
+    repositoryRoot: root, environment: { PATH: toolchain },
+  })('composer-bin', command);
+
+  await writeExecutable(
+    path.join(root, 'vendor/bin/grade'),
+    '#!/usr/bin/env gradelang\nenv | sort\nexit 0\n',
+  );
+  t.after(() => rm(scratchDirectoryFor(root), { recursive: true, force: true }));
+
+  const attempt = await createBoundedExecutor({
+    resolveExecutable: () => resolution,
+    runtimePath: runtimeSearchPath([resolution]),
+    captureOutput: true,
+    environment: ambient,
+  }).execute({ command, executionRoot: root, timeoutSeconds: 60 });
+
+  return { root, variables: new Map(attempt.output.split('\n').map((line) => line.split(/=(.*)/s))) };
+};
+
+test('a check gets a temporary directory of its own execution root, never the shared one', async (t) => {
+  const { root, variables } = await environmentOf(t, { ambient: { TMPDIR: '/shared/tmp' } });
+  const scratch = scratchDirectoryFor(root);
+
+  for (const name of ['TMPDIR', 'TMP', 'TEMP']) {
+    assert.equal(variables.get(name), scratch, `${name} must name this root's scratch directory.`);
+  }
+
+  assert.notEqual(path.dirname(scratch) === root, true, 'the scratch sits beside the root, not inside the graded tree.');
+});
+
+test('a temporary directory the descriptor declares by name is the one the check gets', async (t) => {
+  const { variables } = await environmentOf(t, {
+    allowed: ['TMPDIR'],
+    ambient: { TMPDIR: '/declared/tmp' },
+  });
+
+  assert.equal(variables.get('TMPDIR'), '/declared/tmp');
+});
+
+test('releasing an execution root removes its scratch directory too', async () => {
+  const root = await createExecutionRoot('gate-preflight-exec-');
+  const scratch = scratchDirectoryFor(root);
+
+  await mkdir(scratch, { recursive: true });
+  await releaseExecutionRoot(root);
+
+  await assert.rejects(() => import('node:fs/promises').then(({ stat }) => stat(scratch)), { code: 'ENOENT' });
 });
 
 test('TB-028 NFR-REL-001: the runtime search path is the pins first, then the platform, and nothing of the invoking shell', async (t) => {

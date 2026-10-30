@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 import { composeArguments } from './command-descriptor.mjs';
@@ -46,6 +46,18 @@ export const TERMINATION_GRACE_MS = 100;
  * the per-blob ceiling, never more (FR-EVID-003).
  */
 export const DEFAULT_CAPTURE_LIMIT_BYTES = 4 * 1024 * 1024;
+
+/** The names tools read a temporary directory from, on any platform. */
+const TEMPORARY_DIRECTORY_VARIABLES = Object.freeze(['TMPDIR', 'TMP', 'TEMP']);
+
+/**
+ * The scratch directory one execution root gives its checks.
+ *
+ * It sits beside the root rather than inside it, so a tool that scans the tree
+ * it was given never finds its own cache there, and it shares the root's name so
+ * the orphan sweep that reclaims an abandoned root reclaims it too.
+ */
+export const scratchDirectoryFor = (executionRoot) => `${executionRoot}.tmp`;
 
 const signalTree = (child, signal) => {
   try {
@@ -96,7 +108,13 @@ const terminateTree = async (child) => {
  * own environment first and hands over that same value (`FR-CFG-006`,
  * `AC-CFG-004`, `TB-059`).
  */
-export const environmentFor = (allowedEnvironment, source, runtimePath = '', approvedInputs = {}) => {
+export const environmentFor = (
+  allowedEnvironment,
+  source,
+  runtimePath = '',
+  approvedInputs = {},
+  scratch = null,
+) => {
   const environment = {};
 
   for (const name of allowedEnvironment ?? []) {
@@ -108,6 +126,18 @@ export const environmentFor = (allowedEnvironment, source, runtimePath = '', app
   for (const [name, value] of Object.entries(approvedInputs ?? {})) {
     if (typeof value === 'string') {
       environment[name] = value;
+    }
+  }
+
+  // A tool that is given no temporary directory writes its caches into the
+  // machine's shared one, with absolute paths into a tree that is deleted when
+  // this evaluation ends; the next evaluation then trusts a cache that points at
+  // nothing. The scratch directory belongs to one execution root and goes with
+  // it. A project that declares one of these names asked for it by name, so a
+  // declared value is never overwritten.
+  if (typeof scratch === 'string') {
+    for (const name of TEMPORARY_DIRECTORY_VARIABLES) {
+      environment[name] ??= scratch;
     }
   }
 
@@ -282,9 +312,13 @@ export const createBoundedExecutor = ({
       runtimePath, repositoryRoot, executionRoot, roots: providedRoots(dependencies),
     });
 
+    const scratch = scratchDirectoryFor(executionRoot);
+
+    await mkdir(scratch, { recursive: true, mode: 0o700 });
+
     const child = spawn(launch.executable, composition.args, {
       cwd: path.join(executionRoot, command.working_directory ?? '.'),
-      env: environmentFor(command.allowed_environment, environment, searchPath, runtimeInputs),
+      env: environmentFor(command.allowed_environment, environment, searchPath, runtimeInputs, scratch),
       stdio: captureOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       // The check leads its own process group so the whole tree can be
       // terminated on timeout or budget exhaustion.

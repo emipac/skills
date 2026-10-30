@@ -350,7 +350,9 @@ const interruptRunnerMidEvaluation = async (t, { signal, program }) => {
     { label: 'the evaluation to reach the check it is grading with' },
   );
 
-  const live = await rootsUnder(temporaryRoot);
+  // The root and the scratch directory its checks were given beside it. The
+  // scratch is part of the root's lifecycle, so it must also be gone afterwards.
+  const live = (await rootsUnder(temporaryRoot)).filter((entry) => !entry.endsWith('.tmp'));
 
   assert.equal(
     live.length,

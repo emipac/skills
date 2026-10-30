@@ -559,6 +559,57 @@ test('a configured command the descriptor contract rejects is reported, never dr
   assert.equal(errors[0].code, 'runner-unresolved');
 });
 
+test('a configured label is carried as display text and never changes identity or policy binding', () => {
+  const labelled = gateChecksFromConfiguration(configured({
+    static_analysis: {
+      backend: [
+        commandDescriptor({ label: 'phpstan' }),
+        commandDescriptor({ label: 'rector', args: ['tools/other.mjs'] }),
+      ],
+      frontend: [],
+      both: [],
+    },
+  }));
+  const plain = gateChecksFromConfiguration(configured({
+    static_analysis: {
+      backend: [commandDescriptor(), commandDescriptor({ args: ['tools/other.mjs'] })],
+      frontend: [],
+      both: [],
+    },
+  }));
+
+  assert.deepEqual(labelled.errors, []);
+  assert.deepEqual(
+    labelled.checks.map((check) => check.id),
+    plain.checks.map((check) => check.id),
+    'a label must not move a check identity, because policy binds identities.',
+  );
+  assert.deepEqual(labelled.checks.map((check) => check.label), ['phpstan', 'rector']);
+  assert.equal('label' in plain.checks[0], false, 'an unlabelled command gains no label field.');
+  assert.equal('label' in labelled.checks[0].evaluate, false, 'the closed Command shape is not widened.');
+  labelled.checks.forEach((check) => assert.deepEqual(validateCheckDescriptor(check), []));
+});
+
+test('a label that is not single-line printable text of at most 40 characters is refused', () => {
+  const descriptorWith = (label) => {
+    const [check] = gateChecksFromConfiguration(configured({
+      test: { backend: [], frontend: [], both: [commandDescriptor()] },
+    })).checks;
+
+    return { ...check, label };
+  };
+
+  for (const label of ['', '   ', 'two\nlines', 'x'.repeat(41), 7, null]) {
+    assert.deepEqual(
+      validateCheckDescriptor(descriptorWith(label)).map((issue) => issue.code),
+      ['descriptor-label-invalid'],
+      JSON.stringify(label),
+    );
+  }
+
+  assert.deepEqual(validateCheckDescriptor(descriptorWith('phpstan')), []);
+});
+
 test('a stage the Evidence ladder does not define is reported rather than mapped by guess', () => {
   const { checks, errors } = gateChecksFromConfiguration(configured({
     invented_stage: { backend: [], frontend: [], both: [commandDescriptor()] },

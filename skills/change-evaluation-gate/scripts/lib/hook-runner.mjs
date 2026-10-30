@@ -40,7 +40,7 @@ import {
 } from './activation.mjs';
 import { cloneShortcut } from './activation-seams.mjs';
 import { describeAdapter } from './adapters.mjs';
-import { createBoundedExecutor } from './bounded-execution.mjs';
+import { createBoundedExecutor, scratchDirectoryFor } from './bounded-execution.mjs';
 import { commandPreview, composeArguments, runtimeSearchPath } from './command-descriptor.mjs';
 import {
   CONFIGURATION_FILE,
@@ -181,6 +181,7 @@ const removeLiveExecutionRootsSync = () => {
   for (const root of liveExecutionRoots) {
     try {
       rmSync(root, { recursive: true, force: true });
+      rmSync(scratchDirectoryFor(root), { recursive: true, force: true });
     } catch {
       // Failing to reclaim disk is never a reason to interfere with a signal.
     }
@@ -281,6 +282,7 @@ export const releaseExecutionRoot = async (root) => {
   }
 
   await rm(root, { recursive: true, force: true });
+  await rm(scratchDirectoryFor(root), { recursive: true, force: true });
 };
 
 /**
