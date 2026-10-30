@@ -40,6 +40,7 @@ import {
 } from './hook-runner.mjs';
 import { createPrerequisiteResolver } from './prerequisites.mjs';
 import { listPathChanges } from './snapshot.mjs';
+import { unchangedSincePassed } from './unchanged-evaluation.mjs';
 
 const adapterIdFromArgv = (argv) => {
   const index = argv.indexOf('--adapter');
@@ -203,6 +204,9 @@ const unversionedStatedBefore = async (store, decision) => {
  * - `client`: the identity the Evidence store records beside what it appends.
  * - `recordPassing`: `false` asks `evaluate` not to append a passing decision
  *   (`RISK-010`); the preflight leaves it `true`, as it always recorded.
+ * - `reuseUnchangedPass`: `true` lets a tree identical to one this clone already
+ *   passed, under the same configuration, be answered without repeating the
+ *   checks. Only the end-of-turn preflight asks; `gate check` exists to run them.
  * - `environment`, `compose`, `evaluate`, `openEvidenceStore`: the seams
  *   `runPreflight` has always accepted, passed through unchanged.
  *
@@ -222,6 +226,7 @@ export const evaluateActivatedTree = async (request, {
   openEvidenceStore: openStoreSeam = openEvidenceStore,
   client,
   recordPassing = true,
+  reuseUnchangedPass = false,
 } = {}) => {
   const refused = ({ reasonCode, detail }) => ({ ok: false, reasonCode, detail });
   const configuration = await resolveConfiguration(request.repository.root);
@@ -312,6 +317,23 @@ export const evaluateActivatedTree = async (request, {
     return judged(await evaluateWithoutSubject(request, {
       ...gateInputs,
       untrackedPaths: pathChanges.untracked,
+    }));
+  }
+
+  // The same tree, passed before under the same configuration: repeating the
+  // checks would prove nothing new. Nothing is materialized and nothing is
+  // appended, and the decision still reports everything that does not need a
+  // tree — drift, an unavailable dependency root — exactly as an idle turn does.
+  // Asked fresh every turn, from the record alone.
+  const alreadyPassed = reuseUnchangedPass && request.change.kind === 'worktree'
+    ? await unchangedSincePassed(request, { ...gateInputs, store: store.store })
+    : null;
+
+  if (alreadyPassed !== null) {
+    return judged(await evaluateWithoutSubject(request, {
+      ...gateInputs,
+      untrackedPaths: pathChanges.untracked,
+      unchangedSincePassed: true,
     }));
   }
 
@@ -470,6 +492,7 @@ export const runPreflight = async ({
         surface: adapter.surface,
         version: adapter.version,
       },
+      reuseUnchangedPass: true,
     });
 
     if (!evaluated.ok) {

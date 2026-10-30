@@ -84,6 +84,22 @@ const canonical = (value) => {
 
 const identity = (value) => `sha256:${createHash('sha256').update(canonical(value)).digest('hex')}`;
 
+/**
+ * The identity of the configuration a decision was graded under.
+ *
+ * One definition, used by the decision and by anything that must predict it
+ * before an evaluation runs, so the two cannot come to disagree.
+ */
+export const configurationIdentityFor = ({
+  profile, policy, runnerVersion, providerVersions, checks,
+}) => identity({
+  profile,
+  policy: policy ?? null,
+  runnerVersion,
+  providerVersions,
+  checks: checks.map((check) => ({ id: check.id, stage: check.stage, policy: check.policy })),
+});
+
 const summarize = (checkId, outcome, reasonCode, detail = null, label = null) => [
   `${label === null ? checkId : `${label} (${checkId})`}: ${outcome} (${reasonCode})`,
   ...(typeof detail === 'string' && detail.length > 0 ? [detail] : []),
@@ -165,12 +181,8 @@ const buildDecision = ({
 }) => {
   const purpose = scope.scope;
   const contractId = scope.contractId;
-  const configurationId = identity({
-    profile,
-    policy: policy ?? null,
-    runnerVersion,
-    providerVersions,
-    checks: checks.map((check) => ({ id: check.id, stage: check.stage, policy: check.policy })),
+  const configurationId = configurationIdentityFor({
+    profile, policy, runnerVersion, providerVersions, checks,
   });
   const snapshotId = snapshot?.id ?? null;
   const environmentId = identity({
@@ -814,6 +826,12 @@ const NOT_RECORDED_NO_CHANGE = 'no-change-to-record';
 const NOT_RECORDED_PASSING = 'passing-not-recorded';
 
 /**
+ * What it says when the tree is byte-identical to one the same configuration
+ * already passed: the evaluation was not repeated, and nothing is appended.
+ */
+const NOT_RECORDED_UNCHANGED = 'unchanged-since-passed';
+
+/**
  * A decision that deliberately appended nothing, and says why in its evidence
  * reference, so a reader can tell a decision that was never recorded from one
  * whose record was lost: an append that failed names the reason it failed and
@@ -858,7 +876,9 @@ const notRecorded = (decision, store, why) => ({
  * record is what bounds repeating it.
  *
  * @param {object} request versioned evaluation request
- * @param {object} dependencies resolved gate inputs; no executor is used
+ * @param {object} dependencies resolved gate inputs; no executor is used.
+ *   `unchangedSincePassed: true` says the caller proved the tree identical to one
+ *   already passed, so the passing record names that instead of an empty change.
  */
 export const evaluateWithoutSubject = async (request, dependencies = {}) => {
   const profile = dependencies.profile ?? null;
@@ -1005,7 +1025,11 @@ export const evaluateWithoutSubject = async (request, dependencies = {}) => {
     });
   }
 
-  return notRecorded(decision, store, NOT_RECORDED_NO_CHANGE);
+  return notRecorded(
+    decision,
+    store,
+    dependencies.unchangedSincePassed === true ? NOT_RECORDED_UNCHANGED : NOT_RECORDED_NO_CHANGE,
+  );
 };
 
 /**
