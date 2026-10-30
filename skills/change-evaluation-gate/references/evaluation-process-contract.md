@@ -6,6 +6,7 @@
 - [Request](#request)
 - [Decision](#decision)
 - [Snapshot isolation](#snapshot-isolation)
+- [Unchanged since a passed evaluation](#unchanged-since-a-passed-evaluation)
 - [What each snapshot kind contains](#what-each-snapshot-kind-contains)
   - [Known limitations](#known-limitations)
 - [Delegation](#delegation)
@@ -92,6 +93,26 @@ interrupted. A tool that caches under the temporary directory therefore never
 reads a cache written for an earlier root, whose absolute paths no longer exist.
 A descriptor that lists one of those names in `allowed_environment` receives its
 declared value instead. The cost is a cold tool cache on every evaluation.
+
+## Unchanged since a passed evaluation
+
+The end-of-turn preflight, and only it, does not repeat checks for a tree the
+clone already passed. It derives the identity a worktree snapshot of the live
+files would be given (the same function, without the copy) and the configuration
+identity the evaluation would have, then looks at the newest 25 recorded
+evaluations. If one is `passed`, has the same snapshot identity, configuration
+identity, and purpose, and carries no diagnostic, no changed Grader surface, and
+no unversioned one (a decision states those on every evaluation that observes them),
+the turn is answered like an idle one: nothing is materialized or appended, the
+decision says `unchanged-since-passed`, and drift or an unavailable dependency
+root is still reported.
+
+A failed, `unverified`, or `bypassed` decision is never reused, and anything the
+preflight cannot establish (an unreadable file or log, a pruned envelope) runs
+the evaluation. `gate check` and the authoritative commit path always run
+theirs. What the identity does not cover is not covered by the reuse either: an
+ignored `.env`, an installed dependency changed without its lock file, a
+database, the clock.
 
 ## What each snapshot kind contains
 

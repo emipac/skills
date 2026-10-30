@@ -14,6 +14,10 @@ const renderEvidence = (evidence) => {
     return 'not appended — nothing changed, so there is nothing to record';
   }
 
+  if (evidence.notRecorded === 'unchanged-since-passed') {
+    return 'not appended — this tree already passed under this configuration, so nothing was repeated';
+  }
+
   return `not appended (${evidence.reasonCode ?? 'unknown'}) — the store at ${evidence.storeRoot ?? 'an unresolved path'} did not record this decision`;
 };
 

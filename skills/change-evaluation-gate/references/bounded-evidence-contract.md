@@ -163,7 +163,7 @@ cannot be proved never produces a pass (`SG-SECRET-001`, `RISK-006`).
 
 Every runner appends every decision it grades against a materialized snapshot:
 the commit runner because its authorization rests on the record, the preflight
-because the record is what bounds its client's loop. Two decisions are
+because the record is what bounds its client's loop. Three decisions are
 deliberately not appended, and each says why in `evidence.reference.notRecorded`
 with `persisted: false` and no `reasonCode`, so a reader can tell a decision
 never recorded from one whose append failed:
@@ -171,6 +171,7 @@ never recorded from one whose append failed:
 | `notRecorded` | When |
 | --- | --- |
 | `no-change-to-record` | an empty change set that passed; nothing was materialized and nothing would be repeated (`TB-039`) |
+| `unchanged-since-passed` | the end-of-turn preflight found the worktree byte-identical to one a recorded `passed` decision already covers, under the same configuration; nothing was materialized and the checks were not repeated |
 | `passing-not-recorded` | a passing decision whose caller passed `recordPassing: false` to `evaluate` — only `gate check`, which authorizes nothing and answers no client loop (`TB-061`, `RISK-010`) |
 
 A decision that did not pass is always appended.
