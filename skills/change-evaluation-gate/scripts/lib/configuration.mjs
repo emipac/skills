@@ -518,7 +518,7 @@ export const gateChecksFromConfiguration = (configuration) => {
     // onto the descriptor that carries them; leaving them on the command would
     // be refused as an unknown field, and dropping them is what left every
     // configured check unable to say it needed anything at all (`TB-044`).
-    const { prerequisites, ...command } = proposal.command ?? {};
+    const { prerequisites, label, ...command } = proposal.command ?? {};
     const scope = command?.source_scope;
     const descriptor = {
       id: proposal.id,
@@ -531,6 +531,10 @@ export const gateChecksFromConfiguration = (configuration) => {
       // reported by the descriptor contract like any other, so nothing is
       // repaired into a requirement the project did not write.
       prerequisites: prerequisites === undefined ? [] : prerequisites,
+      // Display text the clone wrote beside its command, naming the tool the
+      // generic identity does not. It is carried only when written, and the
+      // identity, stage, and policy binding never read it.
+      ...(label === undefined ? {} : { label }),
       // Policy binds which identities are required; the reader proposes none.
       policy: 'advisory',
       evaluate: command,

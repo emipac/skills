@@ -84,8 +84,8 @@ const canonical = (value) => {
 
 const identity = (value) => `sha256:${createHash('sha256').update(canonical(value)).digest('hex')}`;
 
-const summarize = (checkId, outcome, reasonCode, detail = null) => [
-  `${checkId}: ${outcome} (${reasonCode})`,
+const summarize = (checkId, outcome, reasonCode, detail = null, label = null) => [
+  `${label === null ? checkId : `${label} (${checkId})`}: ${outcome} (${reasonCode})`,
   ...(typeof detail === 'string' && detail.length > 0 ? [detail] : []),
 ].join(' — ');
 
@@ -404,7 +404,8 @@ const resultFor = (
   { override = null, acceptanceIds = new Set(), detail = null } = {},
 ) => {
   const { outcome, reasonCode } = override ?? reconcileAttempts(attempts);
-  const summary = summarize(descriptor.id, outcome, reasonCode, detail);
+  const label = typeof descriptor.label === 'string' ? descriptor.label.trim() : null;
+  const summary = summarize(descriptor.id, outcome, reasonCode, detail, label);
 
   return {
     id: descriptor.id,

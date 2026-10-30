@@ -206,6 +206,28 @@ test('AC-EVAL-002: the versioned request carries exactly the identities the proc
   assert.deepEqual(codes((r) => { r.invocation.nativeEvent = { hook: 'pre-commit' }; }), ['request-field-unknown']);
 });
 
+test('a check label names the tool in the summary without changing identities', async () => {
+  const root = await createRepository({ 'src/order.txt': 'original\n' });
+  const decisionFor = async (checks) => evaluate(request({ root }), {
+    checks,
+    executionRoot: await temporaryDirectory('gate-eval-exec-'),
+    profile: 'node-package',
+    providerVersions: { 'node-package': '1.0.0' },
+    runnerVersion: 'gate-runner/1.0.0',
+    execute: async () => ({ ...passingAttempt(), exitCode: 1 }),
+  });
+
+  const plain = await decisionFor([descriptor()]);
+  const labelled = await decisionFor([descriptor({ label: 'pint' })]);
+
+  assert.match(plain.checks[0].summary, /^node-package\.broad-tests\.test: failed/);
+  assert.match(labelled.checks[0].summary, /^pint \(node-package\.broad-tests\.test\): failed/);
+  assert.equal(labelled.checks[0].id, plain.checks[0].id);
+  assert.equal(labelled.configurationId, plain.configurationId);
+  assert.equal(labelled.evaluationId, plain.evaluationId);
+  assert.deepEqual(validateDecision(labelled), []);
+});
+
 test('AC-EVAL-002 / NFR-AUD-002 / NFR-OPER-001: every decision outcome carries identity, authorization, diagnostics, coverage, integrity, and evidence', async () => {
   const root = await createRepository({ 'src/order.txt': 'original\n' });
 

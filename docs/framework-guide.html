@@ -1110,7 +1110,7 @@ protected_files:
         <code>e2e</code>), then by <strong>scope</strong> (<code>backend</code>,
         <code>frontend</code>, <code>both</code> — all three keys always present, empty lists
         allowed). In v4 each entry is an OS-independent descriptor with exactly these seven fields,
-        all required:
+        all required, plus one optional display field, <code>label</code>:
       </p>
 
       <div class="table-wrap">
@@ -1124,6 +1124,7 @@ protected_files:
             <tr><td><code>allowed_environment</code></td><td>Unique environment variable <em>names</em></td><td>The only variables this command receives. Your shell is not inherited. Gate-approved sensitive inputs are handed over regardless of this list.</td></tr>
             <tr><td><code>evidence_category</code></td><td>Lowercase slug</td><td>Which ladder rung the evidence files under.</td></tr>
             <tr><td><code>source_scope</code></td><td><code>backend</code>, <code>frontend</code>, <code>both</code></td><td>Must match the list the descriptor sits in; the schema enforces it.</td></tr>
+            <tr><td><code>label</code> <em>(optional)</em></td><td>One line, 1–40 printable characters</td><td>Names the tool the command runs, for example <code>pint</code> or <code>phpstan</code>. Display text only — see below.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1132,6 +1133,27 @@ protected_files:
         Adding a flag to a tool — a memory limit, an extra path — is an edit to <code>args</code>
         here, and nowhere else. There is exactly one place a command is defined, which is why Gate
         policy names check identities rather than commands.
+      </p>
+
+      <p>
+        Check identities are generic and positional:
+        <code>configuration.static-analysis.static-analysis.1</code> and <code>.2</code> only say
+        <em>which entry</em> in the list, not which tool. Add a <code>label</code> to say it in
+        reports:
+      </p>
+
+<pre><code>{"runner":"composer-bin","args":["phpstan","analyse"], … ,"label":"phpstan"}</code></pre>
+
+      <p>
+        A failing check is then reported as
+        <code>phpstan (configuration.static-analysis.static-analysis.1): failed …</code>. The label
+        is display text and nothing else: it never changes a check identity, the policy binding, or
+        the configuration and evaluation identities, so adding, changing, or removing one leaves
+        your <code>checks.required</code> list and recorded Evidence valid. Nothing generates labels
+        or infers them from <code>args</code>; you write the ones you want. A label that is empty,
+        spans lines, or is over 40 characters is refused with
+        <code>descriptor-label-invalid</code>. Because identities are positions, reordering two
+        commands still swaps their identities — the label only makes that visible.
       </p>
 
       <h3><code>evaluation_gate</code> — the five subcontracts</h3>
