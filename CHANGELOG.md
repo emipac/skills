@@ -1,5 +1,28 @@
 # ai-skills-framework
 
+## 0.14.0
+
+### Minor Changes
+
+- [#57](https://github.com/emipac/skills/pull/57) [`883d39d`](https://github.com/emipac/skills/commit/883d39d9c9cba318bf6fa2b147277a4704a63adb) Thanks [@emipac](https://github.com/emipac)! - Give every Change Evaluation Gate execution root a scratch directory of its own
+  and hand it to each check as `TMPDIR`, `TMP`, and `TEMP`. Checks used to share
+  the machine's temporary directory, so a tool that cached there (PHPStan, Rector)
+  kept absolute paths into an earlier root that had since been deleted, and the
+  next evaluation crashed on a file that no longer existed. The scratch directory
+  sits beside the root, is removed with it (also on SIGINT/SIGTERM), and is
+  reclaimed by the orphan sweep. A descriptor that declares one of those names in
+  `allowed_environment` keeps its declared value. Tool caches are now cold on
+  every evaluation.
+
+- [#57](https://github.com/emipac/skills/pull/57) [`883d39d`](https://github.com/emipac/skills/commit/883d39d9c9cba318bf6fa2b147277a4704a63adb) Thanks [@emipac](https://github.com/emipac)! - Let a configured verification command carry an optional `label` that names the
+  tool it runs. The Change Evaluation Gate keeps its generic check identities
+  (`configuration.static-analysis.static-analysis.1`), which policy binds, and now
+  renders a labelled check's summary as `phpstan (configuration.static-analysis.static-analysis.1): failed …`
+  so feedback and Evidence say which tool failed. A label is display text of 1 to
+  40 printable characters on one line. It changes no check identity, configuration
+  identity, or evaluation identity, so an existing policy and recorded Evidence
+  stay valid.
+
 ## 0.13.0
 
 ### Minor Changes
